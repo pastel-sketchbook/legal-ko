@@ -4,6 +4,7 @@ use serde_json::json;
 
 use legal_ko_core::bookmarks::Bookmarks;
 use legal_ko_core::models::LawEntry;
+use legal_ko_core::tts;
 use legal_ko_core::{cache, client, parser};
 
 #[derive(Parser)]
@@ -77,6 +78,23 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Read a law aloud using TTS (VibeVoice)
+    Speak {
+        /// Law ID (법령MST number)
+        id: String,
+
+        /// Read only a specific article (0-indexed)
+        #[arg(long)]
+        article: Option<usize>,
+
+        /// Voice preset name
+        #[arg(long, default_value = "kr-spk0_woman")]
+        voice: String,
+
+        /// Output synthesis stats as JSON (no playback)
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[tokio::main]
@@ -95,6 +113,12 @@ async fn main() -> Result<()> {
         Command::Show { id, json } => cmd_show(&id, json).await,
         Command::Articles { id, json } => cmd_articles(&id, json).await,
         Command::Bookmarks { json } => cmd_bookmarks(json).await,
+        Command::Speak {
+            id,
+            article,
+            voice,
+            json,
+        } => cmd_speak(&id, article, &voice, json).await,
     }
 }
 
@@ -287,5 +311,59 @@ async fn cmd_bookmarks(as_json: bool) -> Result<()> {
     let entries = load_entries().await?;
     let results: Vec<&LawEntry> = entries.iter().filter(|e| bm.is_bookmarked(&e.id)).collect();
     print_entries(&results, as_json);
+    Ok(())
+}
+
+async fn cmd_speak(id: &str, article: Option<usize>, voice: &str, as_json: bool) -> Result<()> {
+    let entries = load_entries().await?;
+    let entry = entries
+        .iter()
+        .find(|e| e.id == id)
+        .ok_or_else(|| anyhow::anyhow!("Law not found: {id}"))?;
+
+    let content = match cache::read_cache(&entry.path)? {
+        Some(c) => c,
+        None => {
+            let c = client::fetch_law_content(&entry.path).await?;
+            let _ = cache::write_cache(&entry.path, &c);
+            c
+        }
+    };
+
+    let text = if let Some(idx) = article {
+        parser::extract_article_text(&content, idx)
+            .ok_or_else(|| anyhow::anyhow!("Article index {idx} not found"))?
+    } else {
+        parser::extract_full_text(&content)
+    };
+
+    if text.is_empty() {
+        anyhow::bail!("No text content to speak");
+    }
+
+    let voice = voice.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        let project_root = std::env::current_dir().unwrap_or_else(|_| "/tmp".into());
+        tts::synthesize_and_play(&project_root, &text, &voice, tts::DEFAULT_CFG_SCALE)
+    })
+    .await??;
+
+    if as_json {
+        let obj = json!({
+            "id": entry.id,
+            "title": entry.title,
+            "article_index": article,
+            "duration_secs": result.duration_secs,
+            "generation_time_secs": result.generation_time_secs,
+            "rtf": result.rtf,
+        });
+        println!("{}", serde_json::to_string_pretty(&obj).unwrap());
+    } else {
+        eprintln!(
+            "Spoke {:.1}s of audio in {:.1}s (RTF: {:.2})",
+            result.duration_secs, result.generation_time_secs, result.rtf
+        );
+    }
+
     Ok(())
 }

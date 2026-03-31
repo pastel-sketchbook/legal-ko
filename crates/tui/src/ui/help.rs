@@ -1,8 +1,8 @@
-use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::Frame;
 
 use crate::theme::Theme;
 
@@ -31,6 +31,11 @@ pub fn render_help(f: &mut Frame, theme: &Theme, area: Rect) {
         key_line(theme, "n", "Next article (\u{c81c}X\u{c870})"),
         key_line(theme, "p", "Previous article"),
         key_line(theme, "a", "Article list popup"),
+        Line::from(""),
+        header_line(theme, "Text-to-Speech"),
+        key_line(theme, "r", "Read current article aloud"),
+        key_line(theme, "R", "Read full law aloud"),
+        key_line(theme, "s", "Stop TTS playback"),
         Line::from(""),
         header_line(theme, "Bookmarks"),
         key_line(theme, "B", "Toggle bookmark"),

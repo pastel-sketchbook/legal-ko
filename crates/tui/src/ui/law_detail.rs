@@ -1,8 +1,10 @@
-use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::Frame;
+
+use legal_ko_core::tts::TtsState;
 
 use crate::app::App;
 use crate::parser;
@@ -86,7 +88,23 @@ fn render_detail_content(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         return;
     };
 
-    let (lines, _) = parser::parse_law_markdown(&detail.raw_markdown, theme);
+    let (mut lines, _) = parser::parse_law_markdown(&detail.raw_markdown, theme);
+
+    // Apply TTS highlight to lines of the currently-playing article
+    if let Some((hl_start, hl_end)) = app.tts_highlight_lines() {
+        let hl_bg = theme.highlight_bg;
+        for (i, line) in lines.iter_mut().enumerate() {
+            if i >= hl_start && i < hl_end {
+                // Re-style each span to add the highlight background
+                let new_spans: Vec<Span<'static>> = line
+                    .spans
+                    .iter()
+                    .map(|span| Span::styled(span.content.to_string(), span.style.bg(hl_bg)))
+                    .collect();
+                *line = Line::from(new_spans);
+            }
+        }
+    }
 
     let paragraph = Paragraph::new(lines)
         .scroll((app.detail_scroll as u16, 0))
@@ -111,12 +129,29 @@ fn render_detail_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             String::new()
         };
 
-        let prefix = format!("{scroll_info}{article_count}");
+        let tts_indicator = match app.tts_state {
+            TtsState::Loading => "\u{23f3} ",
+            TtsState::Synthesizing => "\u{1f50a}\u{2026} ",
+            TtsState::Playing => "\u{25b6}\u{fe0f} ",
+            _ => "",
+        };
+
+        let prefix = format!("{tts_indicator}{scroll_info}{article_count}");
 
         let mut pairs: Vec<(&str, &str)> = Vec::new();
         if !app.detail_articles.is_empty() {
             pairs.push(("n/p", "article"));
             pairs.push(("a", "article list"));
+        }
+        // TTS key hints
+        match app.tts_state {
+            TtsState::Playing | TtsState::Synthesizing => {
+                pairs.push(("s", "stop"));
+            }
+            _ => {
+                pairs.push(("r", "read article"));
+                pairs.push(("R", "read all"));
+            }
         }
         pairs.push(("B", "bookmark"));
         pairs.push(("t", "theme"));

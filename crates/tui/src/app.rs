@@ -1,12 +1,14 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 use legal_ko_core::bookmarks::Bookmarks;
 use legal_ko_core::models::{ArticleRef, LawDetail, LawEntry, MetadataIndex};
 use legal_ko_core::preferences::Preferences;
-use legal_ko_core::{cache, client};
+use legal_ko_core::tts::{self, TtsEngineHandle, TtsState};
+use legal_ko_core::{cache, client, parser};
 
 use crate::theme::{self, Theme};
 
+use rodio::{OutputStream, Sink};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
@@ -36,11 +38,18 @@ pub enum Popup {
 
 // ── Messages (background → main) ─────────────────────────────
 
+#[allow(dead_code)]
 pub enum Message {
     MetadataLoaded(MetadataIndex),
     MetadataError(String),
     LawContentLoaded { id: String, content: String },
     LawContentError { id: String, error: String },
+    TtsEngineLoaded,
+    TtsEngineError(String),
+    TtsSynthesized { audio: Vec<f32> },
+    TtsSynthesisError(String),
+    TtsPlaybackDone,
+    TtsPlaybackError(String),
 }
 
 // ── App state ─────────────────────────────────────────────────
@@ -89,6 +98,18 @@ pub struct App {
 
     // Theme
     pub theme_index: usize,
+
+    // TTS
+    pub tts_state: TtsState,
+    pub tts_engine: TtsEngineHandle,
+    /// Index of the article currently being spoken (into `detail_articles`).
+    pub tts_current_article: Option<usize>,
+    /// Queue of article indices remaining to be spoken (for `R` read-all mode).
+    tts_article_queue: VecDeque<usize>,
+    /// Keeps the audio OutputStream alive for the duration of playback.
+    tts_stream: Option<OutputStream>,
+    /// Sink handle for controlling playback (stop/pause).
+    tts_sink: Option<Sink>,
 }
 
 impl App {
@@ -124,6 +145,12 @@ impl App {
             msg_tx,
             msg_rx,
             theme_index,
+            tts_state: TtsState::Unloaded,
+            tts_engine: tts::new_engine_handle(),
+            tts_current_article: None,
+            tts_article_queue: VecDeque::new(),
+            tts_stream: None,
+            tts_sink: None,
         }
     }
 
@@ -177,6 +204,37 @@ impl App {
                 self.detail_loading = false;
                 self.status_message = Some(format!("Error loading {id}: {error}"));
                 error!("Failed to load law {id}: {error}");
+            }
+            Message::TtsEngineLoaded => {
+                self.tts_state = TtsState::Ready;
+                self.status_message = Some("TTS engine loaded".to_string());
+                info!("TTS engine loaded successfully");
+            }
+            Message::TtsEngineError(err) => {
+                self.tts_state = TtsState::Error;
+                self.status_message = Some(format!("TTS error: {err}"));
+                error!("TTS engine load failed: {err}");
+            }
+            Message::TtsSynthesized { audio } => {
+                self.start_playback(&audio);
+            }
+            Message::TtsSynthesisError(err) => {
+                self.tts_state = TtsState::Ready;
+                self.status_message = Some(format!("TTS error: {err}"));
+                error!("TTS synthesis failed: {err}");
+            }
+            Message::TtsPlaybackDone => {
+                self.tts_state = TtsState::Ready;
+                self.tts_stream = None;
+                self.tts_sink = None;
+                self.status_message = Some("Playback finished".to_string());
+            }
+            Message::TtsPlaybackError(err) => {
+                self.tts_state = TtsState::Ready;
+                self.tts_stream = None;
+                self.tts_sink = None;
+                self.status_message = Some(format!("Playback error: {err}"));
+                error!("TTS playback failed: {err}");
             }
         }
     }
@@ -558,6 +616,7 @@ impl App {
     pub fn go_back(&mut self) {
         match self.view {
             View::Detail => {
+                self.stop_tts();
                 self.view = View::List;
                 self.detail = None;
                 self.detail_scroll = 0;
@@ -569,5 +628,266 @@ impl App {
                 self.should_quit = true;
             }
         }
+    }
+
+    // ── TTS ───────────────────────────────────────────────────
+
+    /// Ensure the TTS engine is loaded (starts background load if needed).
+    fn ensure_tts_loaded(&mut self) {
+        match self.tts_state {
+            TtsState::Unloaded | TtsState::Error => {
+                self.tts_state = TtsState::Loading;
+                self.status_message = Some("Loading TTS engine...".to_string());
+
+                let handle = self.tts_engine.clone();
+                let tx = self.msg_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let project_root =
+                        std::env::current_dir().unwrap_or_else(|_| "/tmp".into());
+                    match tts::load_engine(&handle, &project_root) {
+                        Ok(()) => {
+                            let _ = tx.send(Message::TtsEngineLoaded);
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Message::TtsEngineError(format!("{e:#}")));
+                        }
+                    }
+                });
+            }
+            _ => {} // Loading, Ready, Synthesizing, Playing — don't restart
+        }
+    }
+
+    /// Speak the current article (제X조 + its paragraphs).
+    /// Auto-scrolls to the article and highlights it.
+    pub fn speak_article(&mut self) {
+        self.stop_tts();
+
+        if self.tts_state == TtsState::Unloaded || self.tts_state == TtsState::Error {
+            self.ensure_tts_loaded();
+            self.status_message =
+                Some("Loading TTS engine... press r again when ready".to_string());
+            return;
+        }
+
+        if self.tts_state == TtsState::Loading {
+            self.status_message =
+                Some("TTS engine still loading... please wait".to_string());
+            return;
+        }
+
+        let Some(ref detail) = self.detail else {
+            return;
+        };
+
+        if self.detail_articles.is_empty() {
+            self.status_message = Some("No articles found in this law".to_string());
+            return;
+        }
+
+        // Find which article is at the current scroll position
+        let article_idx = self
+            .detail_articles
+            .iter()
+            .rposition(|a| a.line_index <= self.detail_scroll)
+            .unwrap_or(0);
+
+        let text = match parser::extract_article_text(&detail.raw_markdown, article_idx) {
+            Some(t) => t,
+            None => {
+                self.status_message = Some("Could not extract article text".to_string());
+                return;
+            }
+        };
+
+        // Single article — no queue
+        self.tts_article_queue.clear();
+        self.tts_current_article = Some(article_idx);
+        self.detail_scroll = self.detail_articles[article_idx].line_index;
+
+        let label = self.detail_articles[article_idx].label.clone();
+        self.start_synthesis(text, label);
+    }
+
+    /// Speak all articles starting from the current scroll position.
+    /// Reads article-by-article, auto-scrolling and highlighting each one.
+    pub fn speak_full(&mut self) {
+        self.stop_tts();
+
+        if self.tts_state == TtsState::Unloaded || self.tts_state == TtsState::Error {
+            self.ensure_tts_loaded();
+            self.status_message =
+                Some("Loading TTS engine... press R again when ready".to_string());
+            return;
+        }
+
+        if self.tts_state == TtsState::Loading {
+            self.status_message =
+                Some("TTS engine still loading... please wait".to_string());
+            return;
+        }
+
+        let Some(ref detail) = self.detail else {
+            return;
+        };
+
+        if self.detail_articles.is_empty() {
+            // No articles — try reading the full text as a single block
+            let text = parser::extract_full_text(&detail.raw_markdown);
+            if text.is_empty() {
+                self.status_message = Some("No text content to read".to_string());
+                return;
+            }
+            self.tts_article_queue.clear();
+            self.tts_current_article = None;
+            let title = detail.entry.title.clone();
+            self.start_synthesis(text, title);
+            return;
+        }
+
+        // Find the first article at or after the current scroll position
+        let start_idx = self
+            .detail_articles
+            .iter()
+            .position(|a| a.line_index >= self.detail_scroll)
+            .unwrap_or(0);
+
+        // Queue all articles from start_idx onward
+        self.tts_article_queue = (start_idx..self.detail_articles.len())
+            .collect::<VecDeque<_>>();
+
+        // Start with the first queued article
+        self.advance_tts_queue();
+    }
+
+    /// Pop the next article from the queue and start synthesizing it.
+    /// Auto-scrolls to that article.
+    fn advance_tts_queue(&mut self) {
+        let Some(article_idx) = self.tts_article_queue.pop_front() else {
+            // Queue exhausted
+            self.tts_current_article = None;
+            self.tts_state = TtsState::Ready;
+            self.status_message = Some("Read-all finished".to_string());
+            return;
+        };
+
+        let Some(ref detail) = self.detail else {
+            return;
+        };
+
+        let text = match parser::extract_article_text(&detail.raw_markdown, article_idx) {
+            Some(t) => t,
+            None => {
+                // Skip this article, try next
+                self.advance_tts_queue();
+                return;
+            }
+        };
+
+        self.tts_current_article = Some(article_idx);
+        self.detail_scroll = self.detail_articles[article_idx].line_index;
+
+        let remaining = self.tts_article_queue.len();
+        let label = format!(
+            "{} ({}/{})",
+            self.detail_articles[article_idx].label,
+            self.detail_articles.len() - remaining,
+            self.detail_articles.len(),
+        );
+        self.start_synthesis(text, label);
+    }
+
+    /// Start synthesis in a background thread.
+    fn start_synthesis(&mut self, text: String, label: String) {
+        self.tts_state = TtsState::Synthesizing;
+        self.status_message = Some(format!("Synthesizing: {label}..."));
+
+        let handle = self.tts_engine.clone();
+        let tx = self.msg_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            match tts::synthesize(
+                &handle,
+                &text,
+                tts::DEFAULT_KOREAN_VOICE,
+                tts::DEFAULT_CFG_SCALE,
+            ) {
+                Ok(result) => {
+                    let _ = tx.send(Message::TtsSynthesized {
+                        audio: result.audio,
+                    });
+                }
+                Err(e) => {
+                    let _ = tx.send(Message::TtsSynthesisError(format!("{e:#}")));
+                }
+            }
+        });
+    }
+
+    /// Start audio playback from synthesized samples.
+    fn start_playback(&mut self, audio: &[f32]) {
+        match tts::play_audio_async(audio) {
+            Ok((stream, sink)) => {
+                self.tts_state = TtsState::Playing;
+                self.tts_stream = Some(stream);
+                self.tts_sink = Some(sink);
+                self.status_message = Some("Playing...".to_string());
+            }
+            Err(e) => {
+                self.tts_state = TtsState::Ready;
+                self.tts_current_article = None;
+                self.tts_article_queue.clear();
+                self.status_message = Some(format!("Playback error: {e:#}"));
+                error!("Failed to start playback: {e:#}");
+            }
+        }
+    }
+
+    /// Stop any ongoing TTS synthesis or playback.
+    pub fn stop_tts(&mut self) {
+        if let Some(sink) = self.tts_sink.take() {
+            sink.stop();
+        }
+        self.tts_stream = None;
+        self.tts_article_queue.clear();
+        self.tts_current_article = None;
+
+        if self.tts_state == TtsState::Playing || self.tts_state == TtsState::Synthesizing {
+            self.tts_state = TtsState::Ready;
+            self.status_message = Some("Stopped".to_string());
+        }
+    }
+
+    /// Check if TTS playback finished; if there are queued articles, advance.
+    pub fn check_tts_playback(&mut self) {
+        if self.tts_state == TtsState::Playing
+            && let Some(ref sink) = self.tts_sink
+            && sink.empty()
+        {
+            self.tts_sink = None;
+            self.tts_stream = None;
+
+            if self.tts_article_queue.is_empty() {
+                // All done
+                self.tts_state = TtsState::Ready;
+                self.tts_current_article = None;
+                self.status_message = Some("Playback finished".to_string());
+            } else {
+                // Advance to next article
+                self.advance_tts_queue();
+            }
+        }
+    }
+
+    /// Return the line range (start..end) of the currently-playing article,
+    /// for the renderer to apply highlight styling.
+    pub fn tts_highlight_lines(&self) -> Option<(usize, usize)> {
+        let article_idx = self.tts_current_article?;
+        let start = self.detail_articles.get(article_idx)?.line_index;
+        let end = self
+            .detail_articles
+            .get(article_idx + 1)
+            .map(|a| a.line_index)
+            .unwrap_or(self.detail_lines_count);
+        Some((start, end))
     }
 }

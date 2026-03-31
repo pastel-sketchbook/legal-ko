@@ -75,6 +75,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
             app.handle_message(msg);
         }
 
+        // Check if TTS playback finished
+        app.check_tts_playback();
+
         // Poll for input events with timeout
         if event::poll(Duration::from_millis(50))?
             && let Event::Key(key) = event::read()?
@@ -176,6 +179,9 @@ fn handle_detail_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         KeyCode::Char('a') => app.open_article_list(),
         KeyCode::Char('B') => app.toggle_bookmark(),
         KeyCode::Char('t') => app.next_theme(),
+        KeyCode::Char('r') => app.speak_article(),
+        KeyCode::Char('R') => app.speak_full(),
+        KeyCode::Char('s') => app.stop_tts(),
         KeyCode::Char('?') => app.popup = Popup::Help,
         _ => {}
     }
