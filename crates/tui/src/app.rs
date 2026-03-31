@@ -8,6 +8,7 @@ use legal_ko_core::{cache, client, parser};
 
 use crate::theme::{self, Theme};
 
+use legal_ko_core::tts::OUTPUT_SR;
 use rodio::{OutputStream, Sink};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
@@ -42,14 +43,23 @@ pub enum Popup {
 pub enum Message {
     MetadataLoaded(MetadataIndex),
     MetadataError(String),
-    LawContentLoaded { id: String, content: String },
-    LawContentError { id: String, error: String },
+    LawContentLoaded {
+        id: String,
+        content: String,
+    },
+    LawContentError {
+        id: String,
+        error: String,
+    },
     TtsEngineLoaded,
     TtsEngineError(String),
-    TtsSynthesized { audio: Vec<f32> },
+    /// A streamed audio chunk ready to be appended to the sink.
+    TtsChunk {
+        audio: Vec<f32>,
+    },
+    /// Streaming synthesis finished (all chunks sent).
+    TtsSynthesisDone,
     TtsSynthesisError(String),
-    TtsPlaybackDone,
-    TtsPlaybackError(String),
 }
 
 // ── App state ─────────────────────────────────────────────────
@@ -220,26 +230,28 @@ impl App {
                 self.status_message = Some(format!("TTS error: {err}"));
                 error!("TTS engine load failed: {err}");
             }
-            Message::TtsSynthesized { audio } => {
-                self.start_playback(&audio);
+            Message::TtsChunk { audio } => {
+                // Append streamed audio chunk to the active sink
+                if let Some(ref sink) = self.tts_sink {
+                    let source = rodio::buffer::SamplesBuffer::new(1, OUTPUT_SR, audio);
+                    sink.append(source);
+                }
+            }
+            Message::TtsSynthesisDone => {
+                // Synthesis finished; state stays Playing until sink drains
+                if self.tts_state == TtsState::Synthesizing {
+                    self.tts_state = TtsState::Playing;
+                    self.status_message = Some("Playing...".to_string());
+                }
             }
             Message::TtsSynthesisError(err) => {
                 self.tts_state = TtsState::Ready;
+                self.tts_sink = None;
+                self.tts_stream = None;
+                self.tts_current_article = None;
+                self.tts_article_queue.clear();
                 self.status_message = Some(format!("TTS error: {err}"));
                 error!("TTS synthesis failed: {err}");
-            }
-            Message::TtsPlaybackDone => {
-                self.tts_state = TtsState::Ready;
-                self.tts_stream = None;
-                self.tts_sink = None;
-                self.status_message = Some("Playback finished".to_string());
-            }
-            Message::TtsPlaybackError(err) => {
-                self.tts_state = TtsState::Ready;
-                self.tts_stream = None;
-                self.tts_sink = None;
-                self.status_message = Some(format!("Playback error: {err}"));
-                error!("TTS playback failed: {err}");
             }
         }
     }
@@ -801,25 +813,53 @@ impl App {
         self.start_synthesis(text, label);
     }
 
-    /// Start synthesis in a background thread.
+    /// Start streaming synthesis in a background thread.
+    ///
+    /// Creates the audio sink immediately so playback begins as soon as the
+    /// first chunk is decoded.
     fn start_synthesis(&mut self, text: String, label: String) {
         self.tts_state = TtsState::Synthesizing;
         self.status_message = Some(format!("Synthesizing: {label}..."));
+
+        // Open audio output now so chunks can be appended as they arrive
+        match OutputStream::try_default() {
+            Ok((stream, stream_handle)) => match Sink::try_new(&stream_handle) {
+                Ok(sink) => {
+                    self.tts_stream = Some(stream);
+                    self.tts_sink = Some(sink);
+                }
+                Err(e) => {
+                    self.tts_state = TtsState::Ready;
+                    self.status_message = Some(format!("Audio error: {e:#}"));
+                    error!("Failed to create sink: {e:#}");
+                    return;
+                }
+            },
+            Err(e) => {
+                self.tts_state = TtsState::Ready;
+                self.status_message = Some(format!("Audio error: {e:#}"));
+                error!("Failed to open audio output: {e:#}");
+                return;
+            }
+        }
 
         let handle = self.tts_engine.clone();
         let tx = self.msg_tx.clone();
         tokio::task::spawn_blocking(move || {
             tts::with_suppressed_output(|| {
-                match tts::synthesize(
+                match tts::synthesize_streaming(
                     &handle,
                     &text,
                     tts::DEFAULT_KOREAN_VOICE,
                     tts::DEFAULT_CFG_SCALE,
-                ) {
-                    Ok(result) => {
-                        let _ = tx.send(Message::TtsSynthesized {
-                            audio: result.audio,
+                    |chunk| {
+                        let _ = tx.send(Message::TtsChunk {
+                            audio: chunk.to_vec(),
                         });
+                    },
+                ) {
+                    Ok(_result) => {
+                        let _ = tx.send(Message::TtsSynthesisDone);
                     }
                     Err(e) => {
                         let _ = tx.send(Message::TtsSynthesisError(format!("{e:#}")));
@@ -827,25 +867,6 @@ impl App {
                 }
             })
         });
-    }
-
-    /// Start audio playback from synthesized samples.
-    fn start_playback(&mut self, audio: &[f32]) {
-        match tts::play_audio_async(audio) {
-            Ok((stream, sink)) => {
-                self.tts_state = TtsState::Playing;
-                self.tts_stream = Some(stream);
-                self.tts_sink = Some(sink);
-                self.status_message = Some("Playing...".to_string());
-            }
-            Err(e) => {
-                self.tts_state = TtsState::Ready;
-                self.tts_current_article = None;
-                self.tts_article_queue.clear();
-                self.status_message = Some(format!("Playback error: {e:#}"));
-                error!("Failed to start playback: {e:#}");
-            }
-        }
     }
 
     /// Stop any ongoing TTS synthesis or playback.

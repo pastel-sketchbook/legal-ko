@@ -16,10 +16,11 @@ use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
 
 use rodio::{OutputStream, Sink};
-use vibe_rust::realtime::{RealtimeConfig, RealtimeTts, SynthesisResult, OUTPUT_SR};
+pub use vibe_rust::realtime::OUTPUT_SR;
+use vibe_rust::realtime::{RealtimeConfig, RealtimeTts, SynthesisResult};
 
-/// Default Korean voice preset (woman).
-pub const DEFAULT_KOREAN_VOICE: &str = "kr-spk0_woman";
+/// Default Korean voice preset (man).
+pub const DEFAULT_KOREAN_VOICE: &str = "kr-Spk1_man";
 
 /// Default CFG scale for synthesis.
 pub const DEFAULT_CFG_SCALE: f32 = 1.5;
@@ -149,6 +150,44 @@ pub fn synthesize(
     Ok(result)
 }
 
+/// Synthesize speech with streaming: each decoded audio chunk is passed to
+/// `on_chunk` as it becomes available, so playback can begin while generation
+/// continues.
+///
+/// Call from `spawn_blocking`.  Returns the full `SynthesisResult` when done.
+pub fn synthesize_streaming<F>(
+    handle: &TtsEngineHandle,
+    text: &str,
+    speaker: &str,
+    cfg_scale: f32,
+    on_chunk: F,
+) -> Result<SynthesisResult>
+where
+    F: FnMut(&[f32]),
+{
+    let mut guard = handle
+        .lock()
+        .map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
+
+    let tts = guard
+        .as_mut()
+        .context("TTS engine not loaded — call load_engine first")?;
+
+    debug!(
+        "Synthesizing (streaming) {} chars with voice '{speaker}'",
+        text.len()
+    );
+
+    let result = tts.synthesize_streaming(text, speaker, cfg_scale, on_chunk)?;
+
+    info!(
+        "Synthesized {:.1}s audio in {:.1}s (RTF: {:.2})",
+        result.duration_secs, result.generation_time_secs, result.rtf
+    );
+
+    Ok(result)
+}
+
 /// Play f32 PCM audio at 24 kHz mono through `rodio`.
 ///
 /// This blocks until playback completes.
@@ -196,7 +235,8 @@ pub fn play_audio_async(samples: &[f32]) -> Result<(OutputStream, Sink)> {
 
 /// Load the TTS engine and synthesize + play in one call (for CLI).
 ///
-/// This is a convenience wrapper that blocks the entire time.
+/// Uses streaming synthesis so audio playback begins as soon as the first
+/// chunk is decoded, rather than waiting for the full generation to finish.
 pub fn synthesize_and_play(
     project_root: &Path,
     text: &str,
@@ -206,8 +246,18 @@ pub fn synthesize_and_play(
     let handle = new_engine_handle();
     load_engine(&handle, project_root)?;
 
-    let result = synthesize(&handle, text, speaker, cfg_scale)?;
-    play_audio(&result.audio)?;
+    let (stream, stream_handle) =
+        OutputStream::try_default().context("Failed to open audio output device")?;
+    let sink = Sink::try_new(&stream_handle).context("Failed to create audio sink")?;
+
+    let result = synthesize_streaming(&handle, text, speaker, cfg_scale, |chunk| {
+        let source = rodio::buffer::SamplesBuffer::new(1, OUTPUT_SR, chunk.to_vec());
+        sink.append(source);
+    })?;
+
+    // Wait for playback to finish
+    sink.sleep_until_end();
+    drop(stream);
 
     Ok(result)
 }
