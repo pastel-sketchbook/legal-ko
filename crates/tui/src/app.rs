@@ -1,4 +1,5 @@
 use std::collections::{HashSet, VecDeque};
+use std::num::NonZero;
 
 use legal_ko_core::bookmarks::Bookmarks;
 use legal_ko_core::models::{ArticleRef, LawDetail, LawEntry, MetadataIndex};
@@ -9,9 +10,15 @@ use legal_ko_core::{cache, client, parser};
 use crate::theme::{self, Theme};
 
 use legal_ko_core::tts::OUTPUT_SR;
-use rodio::{OutputStream, Sink};
+use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
+
+/// Mono channel count for rodio.
+const CHANNELS: NonZero<u16> = NonZero::new(1).unwrap();
+
+/// Sample rate for rodio (must match OUTPUT_SR = 24000).
+const SAMPLE_RATE: NonZero<u32> = NonZero::new(OUTPUT_SR).unwrap();
 
 // ── View / Mode enums ─────────────────────────────────────────
 
@@ -116,10 +123,10 @@ pub struct App {
     pub tts_current_article: Option<usize>,
     /// Queue of article indices remaining to be spoken (for `R` read-all mode).
     tts_article_queue: VecDeque<usize>,
-    /// Keeps the audio OutputStream alive for the duration of playback.
-    tts_stream: Option<OutputStream>,
-    /// Sink handle for controlling playback (stop/pause).
-    tts_sink: Option<Sink>,
+    /// Keeps the audio device sink alive for the duration of playback.
+    tts_device_sink: Option<MixerDeviceSink>,
+    /// Player handle for controlling playback (stop/pause).
+    tts_player: Option<Player>,
 
     /// Tick counter incremented every event-loop iteration (~50ms).
     /// Used for UI animations (e.g. TTS loading indicator).
@@ -163,8 +170,8 @@ impl App {
             tts_engine: tts::new_engine_handle(),
             tts_current_article: None,
             tts_article_queue: VecDeque::new(),
-            tts_stream: None,
-            tts_sink: None,
+            tts_device_sink: None,
+            tts_player: None,
             tick: 0,
         }
     }
@@ -231,10 +238,10 @@ impl App {
                 error!("TTS engine load failed: {err}");
             }
             Message::TtsChunk { audio } => {
-                // Append streamed audio chunk to the active sink
-                if let Some(ref sink) = self.tts_sink {
-                    let source = rodio::buffer::SamplesBuffer::new(1, OUTPUT_SR, audio);
-                    sink.append(source);
+                // Append streamed audio chunk to the active player
+                if let Some(ref player) = self.tts_player {
+                    let source = rodio::buffer::SamplesBuffer::new(CHANNELS, SAMPLE_RATE, audio);
+                    player.append(source);
                 }
             }
             Message::TtsSynthesisDone => {
@@ -246,8 +253,8 @@ impl App {
             }
             Message::TtsSynthesisError(err) => {
                 self.tts_state = TtsState::Ready;
-                self.tts_sink = None;
-                self.tts_stream = None;
+                self.tts_player = None;
+                self.tts_device_sink = None;
                 self.tts_current_article = None;
                 self.tts_article_queue.clear();
                 self.status_message = Some(format!("TTS error: {err}"));
@@ -812,26 +819,19 @@ impl App {
 
     /// Start streaming synthesis in a background thread.
     ///
-    /// Creates the audio sink immediately so playback begins as soon as the
-    /// first chunk is decoded.
+    /// Creates the audio device sink immediately so playback begins as soon as
+    /// the first chunk is decoded.
     fn start_synthesis(&mut self, text: String, label: String) {
         self.tts_state = TtsState::Synthesizing;
         self.status_message = Some(format!("Synthesizing: {label}..."));
 
         // Open audio output now so chunks can be appended as they arrive
-        match OutputStream::try_default() {
-            Ok((stream, stream_handle)) => match Sink::try_new(&stream_handle) {
-                Ok(sink) => {
-                    self.tts_stream = Some(stream);
-                    self.tts_sink = Some(sink);
-                }
-                Err(e) => {
-                    self.tts_state = TtsState::Ready;
-                    self.status_message = Some(format!("Audio error: {e:#}"));
-                    error!("Failed to create sink: {e:#}");
-                    return;
-                }
-            },
+        match DeviceSinkBuilder::open_default_sink() {
+            Ok(device_sink) => {
+                let player = Player::connect_new(device_sink.mixer());
+                self.tts_device_sink = Some(device_sink);
+                self.tts_player = Some(player);
+            }
             Err(e) => {
                 self.tts_state = TtsState::Ready;
                 self.status_message = Some(format!("Audio error: {e:#}"));
@@ -866,10 +866,10 @@ impl App {
 
     /// Stop any ongoing TTS synthesis or playback.
     pub fn stop_tts(&mut self) {
-        if let Some(sink) = self.tts_sink.take() {
-            sink.stop();
+        if let Some(player) = self.tts_player.take() {
+            player.stop();
         }
-        self.tts_stream = None;
+        self.tts_device_sink = None;
         self.tts_article_queue.clear();
         self.tts_current_article = None;
 
@@ -882,11 +882,11 @@ impl App {
     /// Check if TTS playback finished; if there are queued articles, advance.
     pub fn check_tts_playback(&mut self) {
         if self.tts_state == TtsState::Playing
-            && let Some(ref sink) = self.tts_sink
-            && sink.empty()
+            && let Some(ref player) = self.tts_player
+            && player.empty()
         {
-            self.tts_sink = None;
-            self.tts_stream = None;
+            self.tts_player = None;
+            self.tts_device_sink = None;
 
             if self.tts_article_queue.is_empty() {
                 // All done

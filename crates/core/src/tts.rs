@@ -8,6 +8,7 @@
 //! - vibe-rust uses `println!` internally; we suppress stdout/stderr via fd
 //!   redirection so the ratatui TUI is not corrupted.
 
+use std::num::NonZero;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -15,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
 
-use rodio::{OutputStream, Sink};
+use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player};
 pub use vibe_rust::realtime::OUTPUT_SR;
 use vibe_rust::realtime::{RealtimeConfig, RealtimeTts, SynthesisResult};
 
@@ -24,6 +25,12 @@ pub const DEFAULT_KOREAN_VOICE: &str = "kr-Spk1_man";
 
 /// Default CFG scale for synthesis.
 pub const DEFAULT_CFG_SCALE: f32 = 1.5;
+
+/// Mono channel count for rodio.
+const CHANNELS: NonZero<u16> = NonZero::new(1).unwrap();
+
+/// Sample rate for rodio (must match OUTPUT_SR = 24000).
+const SAMPLE_RATE: NonZero<u32> = NonZero::new(OUTPUT_SR).unwrap();
 
 // ── stdout/stderr suppression ───────────────────────────────
 
@@ -178,7 +185,7 @@ where
         text.len()
     );
 
-    let result = tts.synthesize_streaming(text, speaker, cfg_scale, on_chunk)?;
+    let result = tts.synthesize_streaming(text, speaker, cfg_scale, None, on_chunk)?;
 
     info!(
         "Synthesized {:.1}s audio in {:.1}s (RTF: {:.2})",
@@ -197,40 +204,36 @@ pub fn play_audio(samples: &[f32]) -> Result<()> {
         return Ok(());
     }
 
-    let (_stream, stream_handle) =
-        OutputStream::try_default().context("Failed to open audio output device")?;
+    let sink =
+        DeviceSinkBuilder::open_default_sink().context("Failed to open audio output device")?;
+    let player = Player::connect_new(sink.mixer());
 
-    let sink = Sink::try_new(&stream_handle).context("Failed to create audio sink")?;
-
-    // rodio's SamplesBuffer takes the sample rate and channel count
-    let source = rodio::buffer::SamplesBuffer::new(1, OUTPUT_SR, samples.to_vec());
-
-    sink.append(source);
-    sink.sleep_until_end();
+    let source = rodio::buffer::SamplesBuffer::new(CHANNELS, SAMPLE_RATE, samples.to_vec());
+    player.append(source);
+    player.sleep_until_end();
 
     debug!("Audio playback finished");
     Ok(())
 }
 
-/// Play f32 PCM audio non-blocking. Returns the Sink handle so the caller
-/// can stop/pause playback.
+/// Play f32 PCM audio non-blocking. Returns the device sink and player handle
+/// so the caller can stop/pause playback.
 ///
-/// **Important**: The caller must keep the returned `OutputStream` alive
+/// **Important**: The caller must keep the returned `MixerDeviceSink` alive
 /// for the duration of playback (dropping it stops audio).
-pub fn play_audio_async(samples: &[f32]) -> Result<(OutputStream, Sink)> {
+pub fn play_audio_async(samples: &[f32]) -> Result<(MixerDeviceSink, Player)> {
     if samples.is_empty() {
         anyhow::bail!("No audio samples to play");
     }
 
-    let (stream, stream_handle) =
-        OutputStream::try_default().context("Failed to open audio output device")?;
+    let sink =
+        DeviceSinkBuilder::open_default_sink().context("Failed to open audio output device")?;
+    let player = Player::connect_new(sink.mixer());
 
-    let sink = Sink::try_new(&stream_handle).context("Failed to create audio sink")?;
+    let source = rodio::buffer::SamplesBuffer::new(CHANNELS, SAMPLE_RATE, samples.to_vec());
+    player.append(source);
 
-    let source = rodio::buffer::SamplesBuffer::new(1, OUTPUT_SR, samples.to_vec());
-    sink.append(source);
-
-    Ok((stream, sink))
+    Ok((sink, player))
 }
 
 /// Load the TTS engine and synthesize + play in one call (for CLI).
@@ -246,18 +249,18 @@ pub fn synthesize_and_play(
     let handle = new_engine_handle();
     load_engine(&handle, project_root)?;
 
-    let (stream, stream_handle) =
-        OutputStream::try_default().context("Failed to open audio output device")?;
-    let sink = Sink::try_new(&stream_handle).context("Failed to create audio sink")?;
+    let device_sink =
+        DeviceSinkBuilder::open_default_sink().context("Failed to open audio output device")?;
+    let player = Player::connect_new(device_sink.mixer());
 
     let result = synthesize_streaming(&handle, text, speaker, cfg_scale, |chunk| {
-        let source = rodio::buffer::SamplesBuffer::new(1, OUTPUT_SR, chunk.to_vec());
-        sink.append(source);
+        let source = rodio::buffer::SamplesBuffer::new(CHANNELS, SAMPLE_RATE, chunk.to_vec());
+        player.append(source);
     })?;
 
     // Wait for playback to finish
-    sink.sleep_until_end();
-    drop(stream);
+    player.sleep_until_end();
+    drop(device_sink);
 
     Ok(result)
 }
