@@ -1815,6 +1815,7 @@ dependencies = [
  "crossterm",
  "dirs",
  "legal-ko-core",
+ "libc",
  "ratatui",
  "rodio",
  "serde",

@@ -659,18 +659,15 @@ impl App {
                 let handle = self.tts_engine.clone();
                 let tx = self.msg_tx.clone();
                 tokio::task::spawn_blocking(move || {
-                    tts::with_suppressed_output(|| {
-                        let project_root =
-                            std::env::current_dir().unwrap_or_else(|_| "/tmp".into());
-                        match tts::load_engine(&handle, &project_root) {
-                            Ok(()) => {
-                                let _ = tx.send(Message::TtsEngineLoaded);
-                            }
-                            Err(e) => {
-                                let _ = tx.send(Message::TtsEngineError(format!("{e:#}")));
-                            }
+                    let project_root = std::env::current_dir().unwrap_or_else(|_| "/tmp".into());
+                    match tts::load_engine(&handle, &project_root) {
+                        Ok(()) => {
+                            let _ = tx.send(Message::TtsEngineLoaded);
                         }
-                    })
+                        Err(e) => {
+                            let _ = tx.send(Message::TtsEngineError(format!("{e:#}")));
+                        }
+                    }
                 });
             }
             _ => {} // Loading, Ready, Synthesizing, Playing — don't restart
@@ -846,26 +843,24 @@ impl App {
         let handle = self.tts_engine.clone();
         let tx = self.msg_tx.clone();
         tokio::task::spawn_blocking(move || {
-            tts::with_suppressed_output(|| {
-                match tts::synthesize_streaming(
-                    &handle,
-                    &text,
-                    tts::DEFAULT_KOREAN_VOICE,
-                    tts::DEFAULT_CFG_SCALE,
-                    |chunk| {
-                        let _ = tx.send(Message::TtsChunk {
-                            audio: chunk.to_vec(),
-                        });
-                    },
-                ) {
-                    Ok(_result) => {
-                        let _ = tx.send(Message::TtsSynthesisDone);
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Message::TtsSynthesisError(format!("{e:#}")));
-                    }
+            match tts::synthesize_streaming(
+                &handle,
+                &text,
+                tts::DEFAULT_KOREAN_VOICE,
+                tts::DEFAULT_CFG_SCALE,
+                |chunk| {
+                    let _ = tx.send(Message::TtsChunk {
+                        audio: chunk.to_vec(),
+                    });
+                },
+            ) {
+                Ok(_result) => {
+                    let _ = tx.send(Message::TtsSynthesisDone);
                 }
-            })
+                Err(e) => {
+                    let _ = tx.send(Message::TtsSynthesisError(format!("{e:#}")));
+                }
+            }
         });
     }
 

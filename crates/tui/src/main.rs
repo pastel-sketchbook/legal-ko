@@ -3,7 +3,8 @@ mod parser;
 mod theme;
 mod ui;
 
-use std::io;
+use std::io::BufWriter;
+use std::os::unix::io::FromRawFd;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -17,6 +18,9 @@ use ratatui::backend::CrosstermBackend;
 use tracing::info;
 
 use app::{App, InputMode, Popup, View};
+
+/// Terminal writer type: a buffered File wrapping a dup'd terminal fd.
+type TermWriter = BufWriter<std::fs::File>;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -40,11 +44,40 @@ async fn main() -> Result<()> {
 
     info!("Starting legal-ko");
 
-    // Setup terminal
+    // ── Permanent stdout/stderr suppression ──────────────────────
+    //
+    // ONNX Runtime (used by vibe-rust for TTS) spawns C++ background threads
+    // that print to stdout/stderr.  A temporary dup2 redirect is not enough
+    // because those threads can outlive the redirect.
+    //
+    // Strategy: save a private copy of the terminal fd, permanently point
+    // fd 1/2 at /dev/null, and have ratatui write through the private copy.
+    let (tty_fd, stdout_backup, stderr_backup) = unsafe {
+        let tty = libc::dup(libc::STDOUT_FILENO);
+        let out_bak = libc::dup(libc::STDOUT_FILENO);
+        let err_bak = libc::dup(libc::STDERR_FILENO);
+        assert!(tty >= 0, "failed to dup stdout for terminal writer");
+
+        // Redirect stdout/stderr → /dev/null
+        if let Ok(devnull) = std::fs::OpenOptions::new().write(true).open("/dev/null") {
+            use std::os::unix::io::AsRawFd;
+            let null_fd = devnull.as_raw_fd();
+            libc::dup2(null_fd, libc::STDOUT_FILENO);
+            libc::dup2(null_fd, libc::STDERR_FILENO);
+            // devnull dropped — the dup2'd fds remain open
+        }
+
+        (tty, out_bak, err_bak)
+    };
+
+    // Wrap the dup'd fd as a BufWriter<File> for ratatui
+    let tty_file = unsafe { std::fs::File::from_raw_fd(tty_fd) };
+    let mut tty_write = BufWriter::new(tty_file);
+
+    // Setup terminal via the private fd
     enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
+    execute!(tty_write, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(tty_write);
     let mut terminal = Terminal::new(backend)?;
 
     // Run app
@@ -54,6 +87,19 @@ async fn main() -> Result<()> {
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
+    drop(terminal);
+
+    // Restore stdout/stderr so post-exit error messages are visible
+    unsafe {
+        if stdout_backup >= 0 {
+            libc::dup2(stdout_backup, libc::STDOUT_FILENO);
+            libc::close(stdout_backup);
+        }
+        if stderr_backup >= 0 {
+            libc::dup2(stderr_backup, libc::STDERR_FILENO);
+            libc::close(stderr_backup);
+        }
+    }
 
     if let Err(ref e) = result {
         eprintln!("Error: {e:#}");
@@ -62,7 +108,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
+async fn run_app(terminal: &mut Terminal<CrosstermBackend<TermWriter>>) -> Result<()> {
     let mut app = App::new();
     app.start_loading();
 
