@@ -236,10 +236,104 @@ pub fn play_audio_async(samples: &[f32]) -> Result<(MixerDeviceSink, Player)> {
     Ok((sink, player))
 }
 
+/// Aggregated stats from multi-segment synthesis and playback.
+#[derive(Debug, Clone)]
+pub struct PlaybackStats {
+    /// Total audio duration in seconds.
+    pub duration_secs: f64,
+    /// Total wall-clock time spent generating audio.
+    pub generation_time_secs: f64,
+    /// Overall real-time factor (generation_time / duration).
+    pub rtf: f64,
+    /// Number of segments synthesized.
+    pub segments: usize,
+}
+
+/// Synthesize multiple text segments using **batch** mode and play them
+/// back-to-back with natural pipelining.
+///
+/// Each segment is fully synthesized via [`synthesize`] before being appended
+/// to the rodio player as **one large `SamplesBuffer`**.  This eliminates the
+/// micro-chunk source-boundary gaps that plague streaming mode.
+///
+/// Playback begins as soon as the first segment is ready, so later segments
+/// are synthesized while earlier ones are already playing — the same proven
+/// pipeline the TUI uses for `R` (read all).
+pub fn synthesize_and_play_segments(
+    project_root: &Path,
+    segments: &[String],
+    speaker: &str,
+    cfg_scale: f32,
+) -> Result<PlaybackStats> {
+    if segments.is_empty() {
+        anyhow::bail!("No text segments to speak");
+    }
+
+    let handle = new_engine_handle();
+    load_engine(&handle, project_root)?;
+
+    let device_sink =
+        DeviceSinkBuilder::open_default_sink().context("Failed to open audio output device")?;
+    let player = Player::connect_new(device_sink.mixer());
+
+    let mut total_duration = 0.0_f64;
+    let mut total_gen_time = 0.0_f64;
+    let mut synthesized = 0_usize;
+    let total = segments.len();
+
+    for (i, segment) in segments.iter().enumerate() {
+        if segment.trim().is_empty() {
+            continue;
+        }
+
+        let result = synthesize(&handle, segment, speaker, cfg_scale)?;
+
+        let source = rodio::buffer::SamplesBuffer::new(CHANNELS, SAMPLE_RATE, result.audio);
+        player.append(source);
+
+        total_duration += result.duration_secs;
+        total_gen_time += result.generation_time_secs;
+        synthesized += 1;
+
+        info!(
+            "Segment {}/{total} synthesized ({:.1}s audio in {:.1}s)",
+            i + 1,
+            result.duration_secs,
+            result.generation_time_secs,
+        );
+    }
+
+    player.sleep_until_end();
+    drop(device_sink);
+
+    Ok(PlaybackStats {
+        duration_secs: total_duration,
+        generation_time_secs: total_gen_time,
+        rtf: if total_duration > 0.0 {
+            total_gen_time / total_duration
+        } else {
+            0.0
+        },
+        segments: synthesized,
+    })
+}
+
+/// Seconds of audio to accumulate before starting playback.
+///
+/// This head-start buffer absorbs uneven chunk arrival from the TTS engine
+/// so the rodio player never starves between synthesis bursts.  Five seconds
+/// is generous enough to cover worst-case generation jitter on M1 even in
+/// debug builds, while still feeling responsive (<5 s initial delay).
+const PREBUFFER_SECS: usize = 5;
+
 /// Load the TTS engine and synthesize + play in one call (for CLI).
 ///
-/// Uses streaming synthesis so audio playback begins as soon as the first
-/// chunk is decoded, rather than waiting for the full generation to finish.
+/// Uses streaming synthesis with a **pre-buffer**: the first ~[`PREBUFFER_SECS`]
+/// seconds of audio are accumulated in memory before anything is sent to the
+/// audio device.  Once the buffer is full it is flushed as a single large
+/// source, and subsequent chunks are appended immediately.  This eliminates
+/// the play-pause-play stutter caused by the player draining faster than the
+/// next chunk arrives.
 pub fn synthesize_and_play(
     project_root: &Path,
     text: &str,
@@ -253,10 +347,36 @@ pub fn synthesize_and_play(
         DeviceSinkBuilder::open_default_sink().context("Failed to open audio output device")?;
     let player = Player::connect_new(device_sink.mixer());
 
+    let prebuffer_threshold = OUTPUT_SR as usize * PREBUFFER_SECS;
+    let mut prebuffer: Vec<f32> = Vec::with_capacity(prebuffer_threshold + 48_000);
+    let mut flushed = false;
+
     let result = synthesize_streaming(&handle, text, speaker, cfg_scale, |chunk| {
-        let source = rodio::buffer::SamplesBuffer::new(CHANNELS, SAMPLE_RATE, chunk.to_vec());
-        player.append(source);
+        if !flushed {
+            // Accumulate until we have enough runway
+            prebuffer.extend_from_slice(chunk);
+            if prebuffer.len() >= prebuffer_threshold {
+                let drained = std::mem::take(&mut prebuffer);
+                let source = rodio::buffer::SamplesBuffer::new(CHANNELS, SAMPLE_RATE, drained);
+                player.append(source);
+                flushed = true;
+                debug!(
+                    "Pre-buffer flushed ({:.1}s), playback started",
+                    prebuffer_threshold as f64 / OUTPUT_SR as f64
+                );
+            }
+        } else {
+            // Already playing — feed chunks directly
+            let source = rodio::buffer::SamplesBuffer::new(CHANNELS, SAMPLE_RATE, chunk.to_vec());
+            player.append(source);
+        }
     })?;
+
+    // Short text that never hit the threshold — flush whatever we collected
+    if !flushed && !prebuffer.is_empty() {
+        let source = rodio::buffer::SamplesBuffer::new(CHANNELS, SAMPLE_RATE, prebuffer);
+        player.append(source);
+    }
 
     // Wait for playback to finish
     player.sleep_until_end();

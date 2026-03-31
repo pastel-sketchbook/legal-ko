@@ -63,13 +63,25 @@ tasks:
       - cargo build --workspace
 
   run:
-    desc: Run the TUI application
+    desc: Run the TUI application (release)
+    deps: [build]
+    cmds:
+      - target/release/$PGM_NAME {{.CLI_ARGS}}
+
+  run:cli:
+    desc: Run the CLI application (release)
+    deps: [build]
+    cmds:
+      - target/release/$CLI_NAME {{.CLI_ARGS}}
+
+  run:dev:
+    desc: Run the TUI application (debug, fast compile)
     deps: [dev]
     cmds:
       - target/debug/$PGM_NAME {{.CLI_ARGS}}
 
-  run:cli:
-    desc: Run the CLI application
+  run:cli:dev:
+    desc: Run the CLI application (debug, fast compile)
     deps: [dev]
     cmds:
       - target/debug/$CLI_NAME {{.CLI_ARGS}}

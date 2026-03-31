@@ -27,8 +27,9 @@ Use `cargo` for all build/test/run tasks.
 - `cargo test --workspace` to run all tests.
 - `cargo clippy --workspace` for lints.
 - `cargo fmt --all` to format code.
-- `task run` to build debug and run TUI.
-- `task run:cli -- <subcommand>` to build debug and run CLI.
+- `task run` to build **release** and run TUI.
+- `task run:cli -- <subcommand>` to build **release** and run CLI.
+- `task run:dev` / `task run:cli:dev` for debug builds (fast compile, slow TTS).
 
 ## Install (macOS / Apple Silicon)
 
@@ -68,7 +69,7 @@ crates/
       styles.rs     — Badge-style key hints, status bar helpers
       help.rs       — Keybinding overlay popup
   cli/src/
-    main.rs         — clap subcommands: list, search, show, articles, bookmarks (all with --json)
+    main.rs         — clap subcommands: list, search, show, articles, bookmarks, speak (all with --json)
 ```
 
 ## CLI Subcommands
@@ -78,6 +79,7 @@ crates/
 - `legal-ko-cli show <id> [--json]`
 - `legal-ko-cli articles <id> [--json]`
 - `legal-ko-cli bookmarks [--json]`
+- `legal-ko-cli speak <id> [--article N] [--voice X] [--json]`
 
 ## Key Design Decisions
 

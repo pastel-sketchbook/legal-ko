@@ -7,7 +7,6 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use legal_ko_core::tts::TtsState;
 
 use crate::app::App;
-use crate::parser;
 use crate::theme::Theme;
 
 use super::styles;
@@ -82,13 +81,13 @@ fn render_detail_content(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         return;
     }
 
-    let Some(ref detail) = app.detail else {
+    let Some(ref _detail) = app.detail else {
         let msg = Paragraph::new("No content loaded").style(Style::default().fg(theme.muted));
         f.render_widget(msg, area);
         return;
     };
 
-    let (mut lines, _) = parser::parse_law_markdown(&detail.raw_markdown, theme);
+    let mut lines = app.detail_rendered_lines.clone();
 
     // Apply TTS highlight to lines of the currently-playing article
     if let Some((hl_start, hl_end)) = app.tts_highlight_lines() {

@@ -1,5 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 use std::num::NonZero;
+use std::sync::Arc;
 
 use legal_ko_core::bookmarks::Bookmarks;
 use legal_ko_core::models::{ArticleRef, LawDetail, LawEntry, MetadataIndex};
@@ -7,23 +8,20 @@ use legal_ko_core::preferences::Preferences;
 use legal_ko_core::tts::{self, TtsEngineHandle, TtsState};
 use legal_ko_core::{cache, client, parser};
 
+use ratatui::text::Line;
+
 use crate::theme::{self, Theme};
 
 use legal_ko_core::tts::OUTPUT_SR;
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player};
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Mono channel count for rodio.
 const CHANNELS: NonZero<u16> = NonZero::new(1).unwrap();
 
 /// Sample rate for rodio (must match OUTPUT_SR = 24000).
 const SAMPLE_RATE: NonZero<u32> = NonZero::new(OUTPUT_SR).unwrap();
-
-/// Number of audio chunks to buffer before unpausing the player.
-/// Each chunk is one vocoder window (~1-3s of audio), so 2 chunks gives
-/// a comfortable lead to prevent gaps between synthesis windows.
-const TTS_BUFFER_CHUNKS: usize = 2;
 
 // ── View / Mode enums ─────────────────────────────────────────
 
@@ -75,12 +73,17 @@ pub enum Message {
     },
     TtsEngineLoaded,
     TtsEngineError(String),
-    /// A streamed audio chunk ready to be appended to the sink.
-    TtsChunk {
-        audio: Vec<f32>,
+    /// Batch synthesis produced audio ready for playback.
+    TtsBatchReady {
+        articles_audio: Vec<Vec<f32>>,
+        article_indices: Vec<usize>,
     },
-    /// Streaming synthesis finished (all chunks sent).
+    /// All synthesis and playback for a batch session is done.
     TtsSynthesisDone,
+    /// The background thread has advanced to the next article in read-all mode.
+    TtsArticleAdvanced {
+        article_idx: usize,
+    },
     TtsSynthesisError(String),
 }
 
@@ -117,6 +120,8 @@ pub struct App {
     pub detail_lines_count: usize,
     pub detail_articles: Vec<ArticleRef>,
     pub detail_loading: bool,
+    /// Cached rendered lines from parse_law_markdown; invalidated on content/theme change.
+    pub detail_rendered_lines: Vec<Line<'static>>,
 
     // Bookmarks
     pub bookmarks: Bookmarks,
@@ -141,13 +146,11 @@ pub struct App {
     /// Keeps the audio device sink alive for the duration of playback.
     tts_device_sink: Option<MixerDeviceSink>,
     /// Player handle for controlling playback (stop/pause).
-    tts_player: Option<Player>,
+    tts_player: Option<Arc<Player>>,
     /// Action to execute once the TTS engine finishes loading.
     pending_tts_action: PendingTtsAction,
-    /// True while buffering initial chunks before unpausing the player.
+    /// True while buffering initial audio before unpausing the player.
     tts_buffering: bool,
-    /// Number of audio chunks received during the current synthesis.
-    tts_chunks_received: usize,
 
     /// Tick counter incremented every event-loop iteration (~50ms).
     /// Used for UI animations (e.g. TTS loading indicator).
@@ -182,6 +185,7 @@ impl App {
             detail_lines_count: 0,
             detail_articles: Vec::new(),
             detail_loading: false,
+            detail_rendered_lines: Vec::new(),
             bookmarks,
             status_message: None,
             msg_tx,
@@ -195,7 +199,6 @@ impl App {
             tts_player: None,
             pending_tts_action: PendingTtsAction::None,
             tts_buffering: false,
-            tts_chunks_received: 0,
             tick: 0,
         }
     }
@@ -213,6 +216,12 @@ impl App {
         };
         if let Err(e) = prefs.save() {
             warn!("Failed to save theme preference: {e}");
+        }
+        // Re-render cached lines with the new theme
+        if let Some(ref detail) = self.detail {
+            let (lines, _) = crate::parser::parse_law_markdown(&detail.raw_markdown, self.theme());
+            self.detail_lines_count = lines.len();
+            self.detail_rendered_lines = lines;
         }
     }
 
@@ -269,36 +278,54 @@ impl App {
                 self.status_message = Some(format!("TTS error: {err}"));
                 error!("TTS engine load failed: {err}");
             }
-            Message::TtsChunk { audio } => {
-                // Append streamed audio chunk to the active player
-                if let Some(ref player) = self.tts_player {
-                    let source = rodio::buffer::SamplesBuffer::new(CHANNELS, SAMPLE_RATE, audio);
-                    player.append(source);
-
-                    self.tts_chunks_received += 1;
-
-                    // Once we have enough buffered chunks, unpause for seamless playback
-                    if self.tts_buffering && self.tts_chunks_received >= TTS_BUFFER_CHUNKS {
-                        player.play();
-                        self.tts_buffering = false;
-                    }
-                }
-            }
             Message::TtsSynthesisDone => {
-                // If still buffering (short text with fewer chunks than threshold),
-                // unpause now so whatever audio we have plays immediately.
-                if self.tts_buffering {
-                    if let Some(ref player) = self.tts_player {
-                        player.play();
-                    }
-                    self.tts_buffering = false;
-                }
-
-                // Synthesis finished; state stays Playing until sink drains
+                self.tts_buffering = false;
                 if self.tts_state == TtsState::Synthesizing {
                     self.tts_state = TtsState::Playing;
                     self.status_message = Some("Playing...".to_string());
                 }
+            }
+            Message::TtsArticleAdvanced { article_idx } => {
+                self.tts_current_article = Some(article_idx);
+                if let Some(art) = self.detail_articles.get(article_idx) {
+                    self.detail_scroll = art.line_index;
+                    self.status_message = Some(format!("Reading: {}", art.label));
+                }
+            }
+            Message::TtsBatchReady {
+                articles_audio,
+                article_indices,
+            } => {
+                // Enqueue batch-synthesized articles for gapless playback
+                debug!("TTS batch ready: {} articles", articles_audio.len());
+                for idx in &article_indices {
+                    self.tts_article_queue.push_back(*idx);
+                }
+                // If we have a player, append audio; otherwise start fresh
+                if let Some(ref player) = self.tts_player {
+                    for samples in &articles_audio {
+                        let source = rodio::buffer::SamplesBuffer::new(
+                            CHANNELS,
+                            SAMPLE_RATE,
+                            samples.clone(),
+                        );
+                        player.append(source);
+                    }
+                } else if let Ok(sink) = DeviceSinkBuilder::open_default_sink() {
+                    let player = Player::connect_new(sink.mixer());
+                    for samples in &articles_audio {
+                        let source = rodio::buffer::SamplesBuffer::new(
+                            CHANNELS,
+                            SAMPLE_RATE,
+                            samples.clone(),
+                        );
+                        player.append(source);
+                    }
+                    self.tts_device_sink = Some(sink);
+                    self.tts_player = Some(Arc::new(player));
+                }
+                self.tts_state = TtsState::Playing;
+                self.status_message = Some("Playing...".to_string());
             }
             Message::TtsSynthesisError(err) => {
                 self.tts_state = TtsState::Ready;
@@ -307,7 +334,6 @@ impl App {
                 self.tts_current_article = None;
                 self.tts_article_queue.clear();
                 self.tts_buffering = false;
-                self.tts_chunks_received = 0;
                 self.status_message = Some(format!("TTS error: {err}"));
                 error!("TTS synthesis failed: {err}");
             }
@@ -455,6 +481,7 @@ impl App {
 
         let (lines, articles) = crate::parser::parse_law_markdown(content, self.theme());
         self.detail_lines_count = lines.len();
+        self.detail_rendered_lines = lines;
         self.detail_articles = articles.clone();
         self.detail = Some(LawDetail {
             entry,
@@ -695,6 +722,7 @@ impl App {
                 self.view = View::List;
                 self.detail = None;
                 self.detail_scroll = 0;
+                self.detail_rendered_lines.clear();
             }
             View::List => {
                 self.should_quit = true;
@@ -824,103 +852,118 @@ impl App {
             .position(|a| a.line_index >= self.detail_scroll)
             .unwrap_or(0);
 
-        // Queue all articles from start_idx onward
-        self.tts_article_queue = (start_idx..self.detail_articles.len()).collect::<VecDeque<_>>();
+        // Extract all article texts upfront so the background thread can
+        // synthesize them back-to-back into the same player without gaps.
+        let articles: Vec<(usize, String)> = (start_idx..self.detail_articles.len())
+            .filter_map(|idx| {
+                parser::extract_article_text(&detail.raw_markdown, idx).map(|t| (idx, t))
+            })
+            .collect();
 
-        // Start with the first queued article
-        self.advance_tts_queue();
+        if articles.is_empty() {
+            self.status_message = Some("No article text to read".to_string());
+            return;
+        }
+
+        self.tts_article_queue.clear();
+        self.tts_current_article = Some(articles[0].0);
+        self.detail_scroll = self.detail_articles[articles[0].0].line_index;
+        self.start_synthesis_batch(articles);
     }
 
-    /// Pop the next article from the queue and start synthesizing it.
-    /// Auto-scrolls to that article.
-    fn advance_tts_queue(&mut self) {
-        let Some(article_idx) = self.tts_article_queue.pop_front() else {
-            // Queue exhausted
-            self.tts_current_article = None;
-            self.tts_state = TtsState::Ready;
-            self.status_message = Some("Read-all finished".to_string());
-            return;
-        };
-
-        let Some(ref detail) = self.detail else {
-            return;
-        };
-
-        let text = match parser::extract_article_text(&detail.raw_markdown, article_idx) {
-            Some(t) => t,
-            None => {
-                // Skip this article, try next
-                self.advance_tts_queue();
-                return;
-            }
-        };
-
-        self.tts_current_article = Some(article_idx);
-        self.detail_scroll = self.detail_articles[article_idx].line_index;
-
-        let remaining = self.tts_article_queue.len();
-        let label = format!(
-            "{} ({}/{})",
-            self.detail_articles[article_idx].label,
-            self.detail_articles.len() - remaining,
-            self.detail_articles.len(),
-        );
-        self.start_synthesis(text, label);
-    }
-
-    /// Start streaming synthesis in a background thread.
+    /// Synthesize a single text using batch (non-streaming) mode.
     ///
-    /// Creates the audio device sink immediately so playback begins as soon as
-    /// the first chunk is decoded.
+    /// The entire text is synthesized before playback begins, producing
+    /// gapless audio with no vocoder boundary artefacts.
     fn start_synthesis(&mut self, text: String, label: String) {
         self.tts_state = TtsState::Synthesizing;
         self.status_message = Some(format!("Synthesizing: {label}..."));
-
-        // Reset buffering state — we accumulate TTS_BUFFER_CHUNKS chunks
-        // before unpausing, so the player has a comfortable audio lead and
-        // transitions between synthesis windows stay seamless.
         self.tts_buffering = true;
-        self.tts_chunks_received = 0;
-
-        // Open audio output now so chunks can be appended as they arrive
-        match DeviceSinkBuilder::open_default_sink() {
-            Ok(device_sink) => {
-                let player = Player::connect_new(device_sink.mixer());
-                // Start paused — we'll unpause once enough chunks are buffered.
-                player.pause();
-                self.tts_device_sink = Some(device_sink);
-                self.tts_player = Some(player);
-            }
-            Err(e) => {
-                self.tts_state = TtsState::Ready;
-                self.status_message = Some(format!("Audio error: {e:#}"));
-                error!("Failed to open audio output: {e:#}");
-                return;
-            }
-        }
 
         let handle = self.tts_engine.clone();
         let tx = self.msg_tx.clone();
         tokio::task::spawn_blocking(move || {
-            match tts::synthesize_streaming(
+            match tts::synthesize(
                 &handle,
                 &text,
                 tts::DEFAULT_KOREAN_VOICE,
                 tts::DEFAULT_CFG_SCALE,
-                |chunk| {
-                    let _ = tx.send(Message::TtsChunk {
-                        audio: chunk.to_vec(),
-                    });
-                },
             ) {
-                Ok(_result) => {
-                    let _ = tx.send(Message::TtsSynthesisDone);
+                Ok(result) => {
+                    let _ = tx.send(Message::TtsBatchReady {
+                        articles_audio: vec![result.audio],
+                        article_indices: vec![],
+                    });
                 }
                 Err(e) => {
                     let _ = tx.send(Message::TtsSynthesisError(format!("{e:#}")));
                 }
             }
         });
+    }
+
+    /// Synthesize multiple articles using batch (non-streaming) mode.
+    ///
+    /// Each article is fully synthesized before the next begins.  Audio is
+    /// appended to the same player so playback of earlier articles can begin
+    /// while later ones are still being generated.
+    fn start_synthesis_batch(&mut self, articles: Vec<(usize, String)>) {
+        self.tts_state = TtsState::Synthesizing;
+        self.status_message = Some("Synthesizing...".to_string());
+        self.tts_buffering = true;
+
+        match DeviceSinkBuilder::open_default_sink() {
+            Ok(device_sink) => {
+                let player = Arc::new(Player::connect_new(device_sink.mixer()));
+                self.tts_device_sink = Some(device_sink);
+                self.tts_player = Some(player.clone());
+
+                let handle = self.tts_engine.clone();
+                let tx = self.msg_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let total = articles.len();
+
+                    for (i, (article_idx, text)) in articles.into_iter().enumerate() {
+                        if i > 0 {
+                            let _ = tx.send(Message::TtsArticleAdvanced { article_idx });
+                        }
+
+                        match tts::synthesize(
+                            &handle,
+                            &text,
+                            tts::DEFAULT_KOREAN_VOICE,
+                            tts::DEFAULT_CFG_SCALE,
+                        ) {
+                            Ok(result) => {
+                                let source = rodio::buffer::SamplesBuffer::new(
+                                    CHANNELS,
+                                    SAMPLE_RATE,
+                                    result.audio,
+                                );
+                                player.append(source);
+                                // Start playback as soon as the first article
+                                // is fully synthesized.
+                                if i == 0 {
+                                    player.play();
+                                }
+                                info!("Batch article {}/{total} synthesized", i + 1);
+                            }
+                            Err(e) => {
+                                let _ = tx.send(Message::TtsSynthesisError(format!("{e:#}")));
+                                return;
+                            }
+                        }
+                    }
+
+                    let _ = tx.send(Message::TtsSynthesisDone);
+                });
+            }
+            Err(e) => {
+                self.tts_state = TtsState::Ready;
+                self.status_message = Some(format!("Audio error: {e:#}"));
+                error!("Failed to open audio output: {e:#}");
+            }
+        }
     }
 
     /// Stop any ongoing TTS synthesis or playback.
@@ -932,7 +975,6 @@ impl App {
         self.tts_article_queue.clear();
         self.tts_current_article = None;
         self.tts_buffering = false;
-        self.tts_chunks_received = 0;
 
         if self.tts_state == TtsState::Playing || self.tts_state == TtsState::Synthesizing {
             self.tts_state = TtsState::Ready;
@@ -940,7 +982,7 @@ impl App {
         }
     }
 
-    /// Check if TTS playback finished; if there are queued articles, advance.
+    /// Check if TTS playback finished (all audio drained from player).
     pub fn check_tts_playback(&mut self) {
         if self.tts_state == TtsState::Playing
             && let Some(ref player) = self.tts_player
@@ -948,16 +990,9 @@ impl App {
         {
             self.tts_player = None;
             self.tts_device_sink = None;
-
-            if self.tts_article_queue.is_empty() {
-                // All done
-                self.tts_state = TtsState::Ready;
-                self.tts_current_article = None;
-                self.status_message = Some("Playback finished".to_string());
-            } else {
-                // Advance to next article
-                self.advance_tts_queue();
-            }
+            self.tts_state = TtsState::Ready;
+            self.tts_current_article = None;
+            self.status_message = Some("Playback finished".to_string());
         }
     }
 

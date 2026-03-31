@@ -78,7 +78,9 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Read a law aloud using TTS (VibeVoice)
+    /// Read a law aloud using TTS (VibeVoice).
+    ///
+    /// Build with --release for smooth playback (debug builds are 10-50x slower).
     Speak {
         /// Law ID (법령MST number)
         id: String,
@@ -330,39 +332,94 @@ async fn cmd_speak(id: &str, article: Option<usize>, voice: &str, as_json: bool)
         }
     };
 
-    let text = if let Some(idx) = article {
-        parser::extract_article_text(&content, idx)
-            .ok_or_else(|| anyhow::anyhow!("Article index {idx} not found"))?
-    } else {
-        parser::extract_full_text(&content)
-    };
-
-    if text.is_empty() {
-        anyhow::bail!("No text content to speak");
-    }
-
     let voice = voice.to_string();
-    let result = tokio::task::spawn_blocking(move || {
-        let project_root = std::env::current_dir().unwrap_or_else(|_| "/tmp".into());
-        tts::synthesize_and_play(&project_root, &text, &voice, tts::DEFAULT_CFG_SCALE)
-    })
-    .await??;
 
-    if as_json {
-        let obj = json!({
-            "id": entry.id,
-            "title": entry.title,
-            "article_index": article,
-            "duration_secs": result.duration_secs,
-            "generation_time_secs": result.generation_time_secs,
-            "rtf": result.rtf,
-        });
-        println!("{}", serde_json::to_string_pretty(&obj).unwrap());
+    if let Some(idx) = article {
+        // Single article — use streaming (one segment, no gaps)
+        let text = parser::extract_article_text(&content, idx)
+            .ok_or_else(|| anyhow::anyhow!("Article index {idx} not found"))?;
+        if text.is_empty() {
+            anyhow::bail!("No text content to speak");
+        }
+
+        let result = tokio::task::spawn_blocking(move || {
+            let project_root = std::env::current_dir().unwrap_or_else(|_| "/tmp".into());
+            tts::synthesize_and_play(&project_root, &text, &voice, tts::DEFAULT_CFG_SCALE)
+        })
+        .await??;
+
+        if as_json {
+            let obj = json!({
+                "id": entry.id,
+                "title": entry.title,
+                "article_index": article,
+                "duration_secs": result.duration_secs,
+                "generation_time_secs": result.generation_time_secs,
+                "rtf": result.rtf,
+            });
+            println!("{}", serde_json::to_string_pretty(&obj).unwrap());
+        } else {
+            eprintln!(
+                "Spoke {:.1}s of audio in {:.1}s (RTF: {:.2})",
+                result.duration_secs, result.generation_time_secs, result.rtf
+            );
+        }
     } else {
-        eprintln!(
-            "Spoke {:.1}s of audio in {:.1}s (RTF: {:.2})",
-            result.duration_secs, result.generation_time_secs, result.rtf
-        );
+        // Full text — article-level batch synthesis for smooth playback.
+        // Each article is fully synthesized before being appended to the
+        // player as one large buffer (no micro-chunk gaps).  Playback of
+        // earlier articles overlaps with synthesis of later ones.
+        let articles = parser::extract_articles(&content);
+        let segments: Vec<String> = if articles.is_empty() {
+            // No articles found — fall back to full text as one segment
+            let full = parser::extract_full_text(&content);
+            if full.is_empty() {
+                anyhow::bail!("No text content to speak");
+            }
+            vec![full]
+        } else {
+            articles
+                .iter()
+                .enumerate()
+                .filter_map(|(i, _)| parser::extract_article_text(&content, i))
+                .filter(|t| !t.is_empty())
+                .collect()
+        };
+
+        if segments.is_empty() {
+            anyhow::bail!("No text content to speak");
+        }
+
+        let n_segments = segments.len();
+        eprintln!("Synthesizing {} article(s)...", n_segments);
+
+        let stats = tokio::task::spawn_blocking(move || {
+            let project_root = std::env::current_dir().unwrap_or_else(|_| "/tmp".into());
+            tts::synthesize_and_play_segments(
+                &project_root,
+                &segments,
+                &voice,
+                tts::DEFAULT_CFG_SCALE,
+            )
+        })
+        .await??;
+
+        if as_json {
+            let obj = json!({
+                "id": entry.id,
+                "title": entry.title,
+                "segments": stats.segments,
+                "duration_secs": stats.duration_secs,
+                "generation_time_secs": stats.generation_time_secs,
+                "rtf": stats.rtf,
+            });
+            println!("{}", serde_json::to_string_pretty(&obj).unwrap());
+        } else {
+            eprintln!(
+                "Spoke {:.1}s of audio ({} articles) in {:.1}s (RTF: {:.2})",
+                stats.duration_secs, stats.segments, stats.generation_time_secs, stats.rtf
+            );
+        }
     }
 
     Ok(())
