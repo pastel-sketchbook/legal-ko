@@ -23,7 +23,7 @@ pub struct MetadataEntry {
 pub type MetadataIndex = HashMap<String, MetadataEntry>;
 
 /// A single law entry for display in the list view
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct LawEntry {
     /// 법령MST identifier
     pub id: String,
@@ -34,21 +34,19 @@ pub struct LawEntry {
     /// Departments (소관부처)
     pub departments: Vec<String>,
     /// Enforcement date
-    #[allow(dead_code)]
     pub enforcement_date: String,
     /// Status (시행/폐지)
-    #[allow(dead_code)]
     pub status: String,
     /// Raw file path in the repo
     pub path: String,
 }
 
 /// A reference to an article (제X조) within a law document
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ArticleRef {
     /// Display label, e.g. "제1조 (목적)"
     pub label: String,
-    /// Line index in the rendered content
+    /// Line index in the parsed content
     pub line_index: usize,
 }
 
@@ -60,6 +58,5 @@ pub struct LawDetail {
     /// Raw markdown content
     pub raw_markdown: String,
     /// Extracted articles for navigation
-    #[allow(dead_code)]
     pub articles: Vec<ArticleRef>,
 }

@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 
-use crate::bookmarks::Bookmarks;
-use crate::data::models::{ArticleRef, LawDetail, LawEntry, MetadataIndex};
-use crate::data::{cache, client, parser};
-use crate::preferences::Preferences;
+use legal_ko_core::bookmarks::Bookmarks;
+use legal_ko_core::models::{ArticleRef, LawDetail, LawEntry, MetadataIndex};
+use legal_ko_core::preferences::Preferences;
+use legal_ko_core::{cache, client};
+
 use crate::theme::{self, Theme};
 
 use tokio::sync::mpsc;
@@ -168,7 +169,6 @@ impl App {
             Message::MetadataError(err) => {
                 self.status_message = Some(format!("Error: {err}"));
                 error!("Failed to load metadata: {err}");
-                // Stay on Loading view but show error
             }
             Message::LawContentLoaded { id, content } => {
                 self.on_law_content_loaded(&id, &content);
@@ -320,7 +320,7 @@ impl App {
             return;
         };
 
-        let (lines, articles) = parser::parse_law_markdown(content, self.theme());
+        let (lines, articles) = crate::parser::parse_law_markdown(content, self.theme());
         self.detail_lines_count = lines.len();
         self.detail_articles = articles.clone();
         self.detail = Some(LawDetail {
@@ -393,14 +393,12 @@ impl App {
         if self.detail_articles.is_empty() {
             return;
         }
-        // Find the first article after current scroll position
         for art in &self.detail_articles {
             if art.line_index > self.detail_scroll {
                 self.detail_scroll = art.line_index;
                 return;
             }
         }
-        // Wrap to first article
         self.detail_scroll = self.detail_articles[0].line_index;
     }
 
@@ -408,14 +406,12 @@ impl App {
         if self.detail_articles.is_empty() {
             return;
         }
-        // Find the last article before current scroll position
         for art in self.detail_articles.iter().rev() {
             if art.line_index < self.detail_scroll {
                 self.detail_scroll = art.line_index;
                 return;
             }
         }
-        // Wrap to last article
         self.detail_scroll = self.detail_articles.last().unwrap().line_index;
     }
 
@@ -524,7 +520,6 @@ impl App {
         match self.popup {
             Popup::CategoryFilter => {
                 if self.popup_selected == 0 {
-                    // "All" option
                     self.category_filter = None;
                 } else {
                     self.category_filter = self.categories.get(self.popup_selected - 1).cloned();
@@ -551,7 +546,7 @@ impl App {
 
     fn popup_items_count(&self) -> usize {
         match self.popup {
-            Popup::CategoryFilter => self.categories.len() + 1, // +1 for "All"
+            Popup::CategoryFilter => self.categories.len() + 1,
             Popup::DepartmentFilter => self.departments.len() + 1,
             Popup::ArticleList => self.detail_articles.len(),
             _ => 0,

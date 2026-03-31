@@ -1,11 +1,11 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
-use ratatui::Frame;
 
 use crate::app::App;
-use crate::data::parser;
+use crate::parser;
 use crate::theme::Theme;
 
 use super::styles;

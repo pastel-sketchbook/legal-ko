@@ -1201,18 +1201,44 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
-name = "legal-ko"
+name = "legal-ko-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "crossterm",
+ "legal-ko-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "legal-ko-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
  "dirs",
- "ratatui",
  "reqwest",
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "legal-ko-tui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "dirs",
+ "legal-ko-core",
+ "ratatui",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

@@ -3,18 +3,19 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::{debug, warn};
 
-use crate::theme;
+/// Default theme name (must match a name in the TUI's `theme::THEMES`).
+pub const DEFAULT_THEME: &str = "Default";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Preferences {
-    /// Theme name (must match a name in `theme::THEMES`).
+    /// Theme name (must match a name in the TUI's `theme::THEMES`).
     pub theme: String,
 }
 
 impl Default for Preferences {
     fn default() -> Self {
         Self {
-            theme: theme::THEMES[0].name.to_string(),
+            theme: DEFAULT_THEME.to_string(),
         }
     }
 }

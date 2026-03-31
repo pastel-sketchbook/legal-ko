@@ -1,7 +1,5 @@
 mod app;
-mod bookmarks;
-mod data;
-mod preferences;
+mod parser;
 mod theme;
 mod ui;
 

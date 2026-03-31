@@ -2,8 +2,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::theme::Theme;
-
-use super::models::ArticleRef;
+use legal_ko_core::models::ArticleRef;
 
 /// Parse markdown content into styled ratatui Lines and extract article references.
 ///
@@ -13,7 +12,7 @@ pub fn parse_law_markdown(raw: &str, theme: &Theme) -> (Vec<Line<'static>>, Vec<
     let mut articles: Vec<ArticleRef> = Vec::new();
 
     // Strip YAML frontmatter if present
-    let content = strip_frontmatter(raw);
+    let content = legal_ko_core::parser::strip_frontmatter(raw);
 
     for text_line in content.lines() {
         let line_index = lines.len();
@@ -87,21 +86,6 @@ pub fn parse_law_markdown(raw: &str, theme: &Theme) -> (Vec<Line<'static>>, Vec<
     (lines, articles)
 }
 
-/// Strip YAML frontmatter delimited by --- ... ---
-fn strip_frontmatter(raw: &str) -> &str {
-    if !raw.starts_with("---") {
-        return raw;
-    }
-    // Find the closing ---
-    if let Some(end) = raw[3..].find("\n---") {
-        let after = end + 3 + 4; // skip past \n---
-        if after < raw.len() {
-            return &raw[after..];
-        }
-    }
-    raw
-}
-
 /// Parse a line with inline **bold** markers into styled spans
 fn parse_inline_bold(line: &str, theme: &Theme) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
@@ -152,18 +136,6 @@ mod tests {
 
     fn default_theme() -> &'static Theme {
         &theme::THEMES[0]
-    }
-
-    #[test]
-    fn test_strip_frontmatter() {
-        let input = "---\ntitle: test\n---\n# Hello";
-        assert_eq!(strip_frontmatter(input), "\n# Hello");
-    }
-
-    #[test]
-    fn test_strip_frontmatter_none() {
-        let input = "# Hello\nworld";
-        assert_eq!(strip_frontmatter(input), input);
     }
 
     #[test]

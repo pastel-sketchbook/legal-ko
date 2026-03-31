@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use tracing::{debug, info};
 
-use super::models::MetadataIndex;
+use crate::models::MetadataIndex;
 
 const BASE_URL: &str = "https://raw.githubusercontent.com/9bow/legalize-kr/main";
 

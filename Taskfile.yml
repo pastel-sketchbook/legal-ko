@@ -1,6 +1,7 @@
 version: "3"
 env:
   PGM_NAME: legal-ko
+  CLI_NAME: legal-ko-cli
 tasks:
   default:
     desc: Show available tasks
@@ -10,17 +11,17 @@ tasks:
   fmt:
     desc: Format code
     cmds:
-      - cargo fmt
+      - cargo fmt --all
 
   check:
     desc: Type-check without building
     cmds:
-      - cargo check
+      - cargo check --workspace
 
   clippy:
     desc: Run clippy lints
     cmds:
-      - cargo clippy -- -D warnings
+      - cargo clippy --workspace -- -D warnings
 
   typos:
     desc: Check for typos in source and docs
@@ -31,25 +32,35 @@ tasks:
     desc: Run typos, format check, clippy lints, and tests
     cmds:
       - typos
-      - cargo fmt --check
-      - cargo clippy -- -D warnings
-      - cargo test
+      - cargo fmt --all --check
+      - cargo clippy --workspace -- -D warnings
+      - cargo test --workspace
 
   test:
     desc: Run unit tests
     cmds:
-      - cargo test
+      - cargo test --workspace
+
+  test:core:
+    desc: Run core library tests
+    cmds:
+      - cargo test -p legal-ko-core
+
+  test:tui:
+    desc: Run TUI crate tests
+    cmds:
+      - cargo test -p legal-ko-tui
 
   build:
-    desc: Format and build release binary
+    desc: Format and build release binaries
     cmds:
-      - cargo fmt
-      - cargo build --release
+      - cargo fmt --all
+      - cargo build --workspace --release
 
   dev:
-    desc: Build debug binary
+    desc: Build debug binaries
     cmds:
-      - cargo build
+      - cargo build --workspace
 
   run:
     desc: Run the TUI application
@@ -57,11 +68,18 @@ tasks:
     cmds:
       - target/debug/$PGM_NAME {{.CLI_ARGS}}
 
+  run:cli:
+    desc: Run the CLI application
+    deps: [dev]
+    cmds:
+      - target/debug/$CLI_NAME {{.CLI_ARGS}}
+
   install:
-    desc: Build release and copy to ~/bin
+    desc: Build release and copy binaries to ~/bin
     deps: [build]
     cmds:
       - cp target/release/$PGM_NAME ~/bin
+      - cp target/release/$CLI_NAME ~/bin
 
   rio:
     desc: Launch legal-ko in Rio terminal with D2Coding font
@@ -82,7 +100,7 @@ tasks:
   loc:files:
     desc: Lines of code per source file
     cmds:
-      - tokei src/ --files
+      - tokei crates/ --files
 
   version:patch:
     desc: Bump patch version (0.0.x)

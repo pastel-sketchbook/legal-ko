@@ -1,0 +1,21 @@
+[package]
+name = "legal-ko-tui"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "legal-ko"
+path = "src/main.rs"
+
+[dependencies]
+legal-ko-core = { path = "../core" }
+anyhow.workspace = true
+crossterm.workspace = true
+dirs.workspace = true
+ratatui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+unicode-width.workspace = true

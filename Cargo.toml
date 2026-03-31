@@ -1,13 +1,12 @@
-[package]
-name = "legal-ko"
+[workspace]
+members = ["crates/core", "crates/tui", "crates/cli"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 
-[[bin]]
-name = "legal-ko"
-path = "src/main.rs"
-
-[dependencies]
+[workspace.dependencies]
 anyhow = "1.0.102"
 clap = { version = "4.6.0", features = ["derive"] }
 crossterm = "0.29.0"
