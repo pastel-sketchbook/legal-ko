@@ -78,6 +78,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
         // Check if TTS playback finished
         app.check_tts_playback();
 
+        // Advance animation tick
+        app.tick = app.tick.wrapping_add(1);
+
         // Poll for input events with timeout
         if event::poll(Duration::from_millis(50))?
             && let Event::Key(key) = event::read()?

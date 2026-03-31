@@ -110,6 +110,10 @@ pub struct App {
     tts_stream: Option<OutputStream>,
     /// Sink handle for controlling playback (stop/pause).
     tts_sink: Option<Sink>,
+
+    /// Tick counter incremented every event-loop iteration (~50ms).
+    /// Used for UI animations (e.g. TTS loading indicator).
+    pub tick: usize,
 }
 
 impl App {
@@ -151,6 +155,7 @@ impl App {
             tts_article_queue: VecDeque::new(),
             tts_stream: None,
             tts_sink: None,
+            tick: 0,
         }
     }
 
@@ -642,15 +647,18 @@ impl App {
                 let handle = self.tts_engine.clone();
                 let tx = self.msg_tx.clone();
                 tokio::task::spawn_blocking(move || {
-                    let project_root = std::env::current_dir().unwrap_or_else(|_| "/tmp".into());
-                    match tts::load_engine(&handle, &project_root) {
-                        Ok(()) => {
-                            let _ = tx.send(Message::TtsEngineLoaded);
+                    tts::with_suppressed_output(|| {
+                        let project_root =
+                            std::env::current_dir().unwrap_or_else(|_| "/tmp".into());
+                        match tts::load_engine(&handle, &project_root) {
+                            Ok(()) => {
+                                let _ = tx.send(Message::TtsEngineLoaded);
+                            }
+                            Err(e) => {
+                                let _ = tx.send(Message::TtsEngineError(format!("{e:#}")));
+                            }
                         }
-                        Err(e) => {
-                            let _ = tx.send(Message::TtsEngineError(format!("{e:#}")));
-                        }
-                    }
+                    })
                 });
             }
             _ => {} // Loading, Ready, Synthesizing, Playing — don't restart
@@ -801,21 +809,23 @@ impl App {
         let handle = self.tts_engine.clone();
         let tx = self.msg_tx.clone();
         tokio::task::spawn_blocking(move || {
-            match tts::synthesize(
-                &handle,
-                &text,
-                tts::DEFAULT_KOREAN_VOICE,
-                tts::DEFAULT_CFG_SCALE,
-            ) {
-                Ok(result) => {
-                    let _ = tx.send(Message::TtsSynthesized {
-                        audio: result.audio,
-                    });
+            tts::with_suppressed_output(|| {
+                match tts::synthesize(
+                    &handle,
+                    &text,
+                    tts::DEFAULT_KOREAN_VOICE,
+                    tts::DEFAULT_CFG_SCALE,
+                ) {
+                    Ok(result) => {
+                        let _ = tx.send(Message::TtsSynthesized {
+                            audio: result.audio,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Message::TtsSynthesisError(format!("{e:#}")));
+                    }
                 }
-                Err(e) => {
-                    let _ = tx.send(Message::TtsSynthesisError(format!("{e:#}")));
-                }
-            }
+            })
         });
     }
 

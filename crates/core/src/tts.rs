@@ -29,10 +29,14 @@ pub const DEFAULT_CFG_SCALE: f32 = 1.5;
 /// Temporarily redirect stdout and stderr to `/dev/null`, run the closure,
 /// then restore the original file descriptors.
 ///
-/// This prevents vibe-rust's `println!` calls from corrupting the ratatui
-/// terminal.  Uses raw fd-level redirection (`dup`/`dup2`) so it catches
-/// *all* writes on fd 1 and fd 2, regardless of buffering.
-fn with_suppressed_output<F, R>(f: F) -> R
+/// This prevents vibe-rust's `println!` calls (and ONNX Runtime's C++ logger)
+/// from corrupting the ratatui terminal.  Uses raw fd-level redirection
+/// (`dup`/`dup2`) so it catches *all* writes on fd 1 and fd 2, regardless of
+/// buffering.
+///
+/// Callers should wrap the **entire** blocking task (not just individual calls)
+/// so that deferred output from background threads is also suppressed.
+pub fn with_suppressed_output<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {
@@ -104,8 +108,8 @@ pub fn load_engine(handle: &TtsEngineHandle, project_root: &Path) -> Result<()> 
         config.device, config.attn_impl
     );
 
-    let tts = with_suppressed_output(|| RealtimeTts::load(config, project_root))
-        .context("Failed to load VibeVoice TTS model")?;
+    let tts =
+        RealtimeTts::load(config, project_root).context("Failed to load VibeVoice TTS model")?;
 
     let mut guard = handle
         .lock()
@@ -135,7 +139,7 @@ pub fn synthesize(
 
     debug!("Synthesizing {} chars with voice '{speaker}'", text.len());
 
-    let result = with_suppressed_output(|| tts.synthesize(text, speaker, cfg_scale, None))?;
+    let result = tts.synthesize(text, speaker, cfg_scale, None)?;
 
     info!(
         "Synthesized {:.1}s audio in {:.1}s (RTF: {:.2})",

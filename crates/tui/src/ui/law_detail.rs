@@ -130,10 +130,30 @@ fn render_detail_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         };
 
         let tts_indicator = match app.tts_state {
-            TtsState::Loading => "\u{23f3} ",
-            TtsState::Synthesizing => "\u{1f50a}\u{2026} ",
-            TtsState::Playing => "\u{25b6}\u{fe0f} ",
-            _ => "",
+            TtsState::Loading => {
+                // Animated loading bar: a sliding highlight in a dot/pipe pattern
+                // Pattern cycles: ·· shifts a bright segment across ··|··|··|··
+                let frames = [
+                    "\u{2590}··|··|··|··\u{258c}",
+                    "·\u{2590}·|··|··|··\u{258c}",
+                    "··\u{2590}··|··|··|\u{258c}",
+                    "··|\u{2590}·|··|··|\u{258c}",
+                    "··|·\u{2590}|··|··|\u{258c}",
+                    "··|··\u{2590}··|··|\u{258c}",
+                    "··|··|\u{2590}·|··|\u{258c}",
+                    "··|··|·\u{2590}|··|\u{258c}",
+                    "··|··|··\u{2590}··|\u{258c}",
+                    "··|··|··|\u{2590}·|\u{258c}",
+                    "··|··|··|·\u{2590}|\u{258c}",
+                    "··|··|··|··\u{2590}\u{258c}",
+                ];
+                // Slow down: advance frame every ~3 ticks (~150ms per frame)
+                let frame = (app.tick / 3) % frames.len();
+                format!("{} ", frames[frame])
+            }
+            TtsState::Synthesizing => "\u{1f50a}\u{2026} ".to_string(),
+            TtsState::Playing => "\u{25b6}\u{fe0f} ".to_string(),
+            _ => String::new(),
         };
 
         let prefix = format!("{tts_indicator}{scroll_info}{article_count}");
