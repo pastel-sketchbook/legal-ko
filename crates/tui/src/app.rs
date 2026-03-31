@@ -20,6 +20,11 @@ const CHANNELS: NonZero<u16> = NonZero::new(1).unwrap();
 /// Sample rate for rodio (must match OUTPUT_SR = 24000).
 const SAMPLE_RATE: NonZero<u32> = NonZero::new(OUTPUT_SR).unwrap();
 
+/// Number of audio chunks to buffer before unpausing the player.
+/// Each chunk is one vocoder window (~1-3s of audio), so 2 chunks gives
+/// a comfortable lead to prevent gaps between synthesis windows.
+const TTS_BUFFER_CHUNKS: usize = 2;
+
 // ── View / Mode enums ─────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +47,16 @@ pub enum Popup {
     CategoryFilter,
     DepartmentFilter,
     ArticleList,
+}
+
+/// Action deferred until the TTS engine finishes loading.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PendingTtsAction {
+    None,
+    /// Read the article at the current scroll position.
+    SpeakArticle,
+    /// Read all articles from the current scroll position.
+    SpeakFull,
 }
 
 // ── Messages (background → main) ─────────────────────────────
@@ -127,6 +142,12 @@ pub struct App {
     tts_device_sink: Option<MixerDeviceSink>,
     /// Player handle for controlling playback (stop/pause).
     tts_player: Option<Player>,
+    /// Action to execute once the TTS engine finishes loading.
+    pending_tts_action: PendingTtsAction,
+    /// True while buffering initial chunks before unpausing the player.
+    tts_buffering: bool,
+    /// Number of audio chunks received during the current synthesis.
+    tts_chunks_received: usize,
 
     /// Tick counter incremented every event-loop iteration (~50ms).
     /// Used for UI animations (e.g. TTS loading indicator).
@@ -172,6 +193,9 @@ impl App {
             tts_article_queue: VecDeque::new(),
             tts_device_sink: None,
             tts_player: None,
+            pending_tts_action: PendingTtsAction::None,
+            tts_buffering: false,
+            tts_chunks_received: 0,
             tick: 0,
         }
     }
@@ -229,8 +253,16 @@ impl App {
             }
             Message::TtsEngineLoaded => {
                 self.tts_state = TtsState::Ready;
-                self.status_message = Some("TTS engine loaded".to_string());
                 info!("TTS engine loaded successfully");
+
+                // Auto-execute the pending action the user requested before load
+                match std::mem::replace(&mut self.pending_tts_action, PendingTtsAction::None) {
+                    PendingTtsAction::SpeakArticle => self.speak_article(),
+                    PendingTtsAction::SpeakFull => self.speak_full(),
+                    PendingTtsAction::None => {
+                        self.status_message = Some("TTS engine loaded".to_string());
+                    }
+                }
             }
             Message::TtsEngineError(err) => {
                 self.tts_state = TtsState::Error;
@@ -242,9 +274,26 @@ impl App {
                 if let Some(ref player) = self.tts_player {
                     let source = rodio::buffer::SamplesBuffer::new(CHANNELS, SAMPLE_RATE, audio);
                     player.append(source);
+
+                    self.tts_chunks_received += 1;
+
+                    // Once we have enough buffered chunks, unpause for seamless playback
+                    if self.tts_buffering && self.tts_chunks_received >= TTS_BUFFER_CHUNKS {
+                        player.play();
+                        self.tts_buffering = false;
+                    }
                 }
             }
             Message::TtsSynthesisDone => {
+                // If still buffering (short text with fewer chunks than threshold),
+                // unpause now so whatever audio we have plays immediately.
+                if self.tts_buffering {
+                    if let Some(ref player) = self.tts_player {
+                        player.play();
+                    }
+                    self.tts_buffering = false;
+                }
+
                 // Synthesis finished; state stays Playing until sink drains
                 if self.tts_state == TtsState::Synthesizing {
                     self.tts_state = TtsState::Playing;
@@ -257,6 +306,8 @@ impl App {
                 self.tts_device_sink = None;
                 self.tts_current_article = None;
                 self.tts_article_queue.clear();
+                self.tts_buffering = false;
+                self.tts_chunks_received = 0;
                 self.status_message = Some(format!("TTS error: {err}"));
                 error!("TTS synthesis failed: {err}");
             }
@@ -687,14 +738,14 @@ impl App {
         self.stop_tts();
 
         if self.tts_state == TtsState::Unloaded || self.tts_state == TtsState::Error {
+            self.pending_tts_action = PendingTtsAction::SpeakArticle;
             self.ensure_tts_loaded();
-            self.status_message =
-                Some("Loading TTS engine... press r again when ready".to_string());
             return;
         }
 
         if self.tts_state == TtsState::Loading {
-            self.status_message = Some("TTS engine still loading... please wait".to_string());
+            self.pending_tts_action = PendingTtsAction::SpeakArticle;
+            self.status_message = Some("TTS engine still loading...".to_string());
             return;
         }
 
@@ -737,14 +788,14 @@ impl App {
         self.stop_tts();
 
         if self.tts_state == TtsState::Unloaded || self.tts_state == TtsState::Error {
+            self.pending_tts_action = PendingTtsAction::SpeakFull;
             self.ensure_tts_loaded();
-            self.status_message =
-                Some("Loading TTS engine... press R again when ready".to_string());
             return;
         }
 
         if self.tts_state == TtsState::Loading {
-            self.status_message = Some("TTS engine still loading... please wait".to_string());
+            self.pending_tts_action = PendingTtsAction::SpeakFull;
+            self.status_message = Some("TTS engine still loading...".to_string());
             return;
         }
 
@@ -825,10 +876,18 @@ impl App {
         self.tts_state = TtsState::Synthesizing;
         self.status_message = Some(format!("Synthesizing: {label}..."));
 
+        // Reset buffering state — we accumulate TTS_BUFFER_CHUNKS chunks
+        // before unpausing, so the player has a comfortable audio lead and
+        // transitions between synthesis windows stay seamless.
+        self.tts_buffering = true;
+        self.tts_chunks_received = 0;
+
         // Open audio output now so chunks can be appended as they arrive
         match DeviceSinkBuilder::open_default_sink() {
             Ok(device_sink) => {
                 let player = Player::connect_new(device_sink.mixer());
+                // Start paused — we'll unpause once enough chunks are buffered.
+                player.pause();
                 self.tts_device_sink = Some(device_sink);
                 self.tts_player = Some(player);
             }
@@ -872,6 +931,8 @@ impl App {
         self.tts_device_sink = None;
         self.tts_article_queue.clear();
         self.tts_current_article = None;
+        self.tts_buffering = false;
+        self.tts_chunks_received = 0;
 
         if self.tts_state == TtsState::Playing || self.tts_state == TtsState::Synthesizing {
             self.tts_state = TtsState::Ready;
