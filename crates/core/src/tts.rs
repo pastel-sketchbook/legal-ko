@@ -5,7 +5,10 @@
 //! - `RealtimeTts::synthesize()` is synchronous — callers must use
 //!   `tokio::task::spawn_blocking` from async contexts.
 //! - Audio playback uses `rodio` for in-process playback from memory (24 kHz mono f32).
+//! - vibe-rust uses `println!` internally; we suppress stdout/stderr via fd
+//!   redirection so the ratatui TUI is not corrupted.
 
+use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -20,6 +23,47 @@ pub const DEFAULT_KOREAN_VOICE: &str = "kr-spk0_woman";
 
 /// Default CFG scale for synthesis.
 pub const DEFAULT_CFG_SCALE: f32 = 1.5;
+
+// ── stdout/stderr suppression ───────────────────────────────
+
+/// Temporarily redirect stdout and stderr to `/dev/null`, run the closure,
+/// then restore the original file descriptors.
+///
+/// This prevents vibe-rust's `println!` calls from corrupting the ratatui
+/// terminal.  Uses raw fd-level redirection (`dup`/`dup2`) so it catches
+/// *all* writes on fd 1 and fd 2, regardless of buffering.
+fn with_suppressed_output<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    // SAFETY: dup/dup2/close are well-defined POSIX calls.  We save the
+    // original fds, redirect to /dev/null, call the closure, then restore.
+    unsafe {
+        let stdout_backup = libc::dup(libc::STDOUT_FILENO);
+        let stderr_backup = libc::dup(libc::STDERR_FILENO);
+
+        if let Ok(devnull) = std::fs::OpenOptions::new().write(true).open("/dev/null") {
+            let null_fd = devnull.as_raw_fd();
+            libc::dup2(null_fd, libc::STDOUT_FILENO);
+            libc::dup2(null_fd, libc::STDERR_FILENO);
+            // devnull is dropped here, but the dup2'd fds remain open
+        }
+
+        let result = f();
+
+        // Restore originals
+        if stdout_backup >= 0 {
+            libc::dup2(stdout_backup, libc::STDOUT_FILENO);
+            libc::close(stdout_backup);
+        }
+        if stderr_backup >= 0 {
+            libc::dup2(stderr_backup, libc::STDERR_FILENO);
+            libc::close(stderr_backup);
+        }
+
+        result
+    }
+}
 
 /// TTS engine state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,8 +104,8 @@ pub fn load_engine(handle: &TtsEngineHandle, project_root: &Path) -> Result<()> 
         config.device, config.attn_impl
     );
 
-    let tts =
-        RealtimeTts::load(config, project_root).context("Failed to load VibeVoice TTS model")?;
+    let tts = with_suppressed_output(|| RealtimeTts::load(config, project_root))
+        .context("Failed to load VibeVoice TTS model")?;
 
     let mut guard = handle
         .lock()
@@ -91,7 +135,7 @@ pub fn synthesize(
 
     debug!("Synthesizing {} chars with voice '{speaker}'", text.len());
 
-    let result = tts.synthesize(text, speaker, cfg_scale, None)?;
+    let result = with_suppressed_output(|| tts.synthesize(text, speaker, cfg_scale, None))?;
 
     info!(
         "Synthesized {:.1}s audio in {:.1}s (RTF: {:.2})",
@@ -197,5 +241,11 @@ mod tests {
     #[test]
     fn test_default_state() {
         assert_eq!(TtsState::Unloaded, TtsState::Unloaded);
+    }
+
+    #[test]
+    fn test_suppressed_output_returns_value() {
+        let result = with_suppressed_output(|| 42);
+        assert_eq!(result, 42);
     }
 }

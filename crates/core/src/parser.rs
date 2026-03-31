@@ -175,8 +175,7 @@ mod tests {
 
     #[test]
     fn test_extract_full_text() {
-        let input =
-            "---\ntitle: test\n---\n# 법률\n##### 제1조 (목적)\n**①** 이 법은 목적이다.";
+        let input = "---\ntitle: test\n---\n# 법률\n##### 제1조 (목적)\n**①** 이 법은 목적이다.";
         let text = extract_full_text(input);
         assert!(text.contains("법률"));
         assert!(text.contains("제1조 (목적)"));

@@ -1796,6 +1796,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dirs",
+ "libc",
  "reqwest 0.13.2",
  "rodio",
  "serde",

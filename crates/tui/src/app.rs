@@ -642,8 +642,7 @@ impl App {
                 let handle = self.tts_engine.clone();
                 let tx = self.msg_tx.clone();
                 tokio::task::spawn_blocking(move || {
-                    let project_root =
-                        std::env::current_dir().unwrap_or_else(|_| "/tmp".into());
+                    let project_root = std::env::current_dir().unwrap_or_else(|_| "/tmp".into());
                     match tts::load_engine(&handle, &project_root) {
                         Ok(()) => {
                             let _ = tx.send(Message::TtsEngineLoaded);
@@ -671,8 +670,7 @@ impl App {
         }
 
         if self.tts_state == TtsState::Loading {
-            self.status_message =
-                Some("TTS engine still loading... please wait".to_string());
+            self.status_message = Some("TTS engine still loading... please wait".to_string());
             return;
         }
 
@@ -722,8 +720,7 @@ impl App {
         }
 
         if self.tts_state == TtsState::Loading {
-            self.status_message =
-                Some("TTS engine still loading... please wait".to_string());
+            self.status_message = Some("TTS engine still loading... please wait".to_string());
             return;
         }
 
@@ -753,8 +750,7 @@ impl App {
             .unwrap_or(0);
 
         // Queue all articles from start_idx onward
-        self.tts_article_queue = (start_idx..self.detail_articles.len())
-            .collect::<VecDeque<_>>();
+        self.tts_article_queue = (start_idx..self.detail_articles.len()).collect::<VecDeque<_>>();
 
         // Start with the first queued article
         self.advance_tts_queue();
