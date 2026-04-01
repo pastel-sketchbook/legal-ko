@@ -426,7 +426,7 @@ async fn cmd_speak(
 
         let stats = tokio::task::spawn_blocking(move || {
             let project_root = std::env::current_dir().unwrap_or_else(|_| "/tmp".into());
-            tts::synthesize_and_play_segments(&project_root, &segments, &voice, profile)
+            tts::synthesize_and_play_segments(&project_root, &segments, &voice, profile.cfg_scale())
         })
         .await??;
 

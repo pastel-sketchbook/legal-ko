@@ -8,6 +8,7 @@
 //! - vibe-rust uses `println!` internally; we suppress stdout/stderr via fd
 //!   redirection so the ratatui TUI is not corrupted.
 
+use std::fmt;
 use std::num::NonZero;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
@@ -24,11 +25,12 @@ use vibe_rust::realtime::{RealtimeConfig, RealtimeTts, SynthesisResult};
 pub const DEFAULT_KOREAN_VOICE: &str = "kr-Spk1_man";
 
 /// TTS quality/speed profile.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub enum TtsProfile {
     /// Fast mode: cfg_scale=1.0 for ~2x diffusion speedup, shorter prebuffer (1s).
     Fast,
     /// Balanced mode: cfg_scale=1.5 (original quality), longer prebuffer (5s).
+    #[default]
     Balanced,
 }
 
@@ -50,14 +52,14 @@ impl TtsProfile {
     }
 }
 
-impl Default for TtsProfile {
-    fn default() -> Self {
-        Self::Balanced
+impl fmt::Display for TtsProfile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Fast => write!(f, "Fast"),
+            Self::Balanced => write!(f, "Balanced"),
+        }
     }
 }
-
-/// Default CFG scale for synthesis (balanced profile).
-pub const DEFAULT_CFG_SCALE: f32 = 1.5;
 
 /// Mono channel count for rodio.
 const CHANNELS: NonZero<u16> = NonZero::new(1).unwrap();
@@ -296,7 +298,7 @@ pub fn synthesize_and_play_segments(
     project_root: &Path,
     segments: &[String],
     speaker: &str,
-    profile: TtsProfile,
+    cfg_scale: f32,
 ) -> Result<PlaybackStats> {
     if segments.is_empty() {
         anyhow::bail!("No text segments to speak");
@@ -308,8 +310,6 @@ pub fn synthesize_and_play_segments(
     let device_sink =
         DeviceSinkBuilder::open_default_sink().context("Failed to open audio output device")?;
     let player = Player::connect_new(device_sink.mixer());
-
-    let cfg_scale = profile.cfg_scale();
 
     let mut total_duration = 0.0_f64;
     let mut total_gen_time = 0.0_f64;
@@ -429,7 +429,12 @@ mod tests {
     #[test]
     fn test_synthesize_without_load_fails() {
         let handle = new_engine_handle();
-        let result = synthesize(&handle, "hello", DEFAULT_KOREAN_VOICE, DEFAULT_CFG_SCALE);
+        let result = synthesize(
+            &handle,
+            "hello",
+            DEFAULT_KOREAN_VOICE,
+            TtsProfile::default().cfg_scale(),
+        );
         assert!(result.is_err());
     }
 

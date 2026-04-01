@@ -25,6 +25,75 @@ const CHANNELS: NonZero<u16> = NonZero::new(1).unwrap();
 /// Sample rate for rodio (must match OUTPUT_SR = 24000).
 const SAMPLE_RATE: NonZero<u32> = NonZero::new(OUTPUT_SR).unwrap();
 
+// ── Prebuffer helper ──────────────────────────────────────────
+
+/// Accumulates streaming audio chunks until a threshold is reached, then
+/// flushes to the player and feeds subsequent chunks directly.
+///
+/// This eliminates the play-pause-play stutter caused by the player
+/// draining faster than the next chunk arrives.
+struct PrebufferStreamer {
+    player: Arc<Player>,
+    tx: mpsc::UnboundedSender<Message>,
+    prebuffer: Vec<f32>,
+    prebuffer_threshold: usize,
+    flushed: bool,
+}
+
+impl PrebufferStreamer {
+    fn new(player: Arc<Player>, tx: mpsc::UnboundedSender<Message>, prebuffer_secs: f64) -> Self {
+        let prebuffer_threshold = (OUTPUT_SR as f64 * prebuffer_secs) as usize;
+        Self {
+            player,
+            tx,
+            prebuffer: Vec::with_capacity(prebuffer_threshold + 48_000),
+            prebuffer_threshold,
+            flushed: false,
+        }
+    }
+
+    /// Feed a chunk of audio samples. Returns `true` if this chunk triggered
+    /// the initial flush (caller can perform additional actions like setting
+    /// playback start time).
+    fn feed(&mut self, chunk: &[f32]) -> bool {
+        if !self.flushed {
+            self.prebuffer.extend_from_slice(chunk);
+            if self.prebuffer.len() >= self.prebuffer_threshold {
+                let drained = std::mem::take(&mut self.prebuffer);
+                let source = rodio::buffer::SamplesBuffer::new(CHANNELS, SAMPLE_RATE, drained);
+                self.player.append(source);
+                self.player.play();
+                self.flushed = true;
+                let _ = self.tx.send(Message::TtsPlaybackStarted);
+                return true;
+            }
+        } else {
+            let source = rodio::buffer::SamplesBuffer::new(CHANNELS, SAMPLE_RATE, chunk.to_vec());
+            self.player.append(source);
+        }
+        false
+    }
+
+    /// Flush any remaining prebuffer (for short texts that never hit the
+    /// threshold). Returns `true` if audio was actually flushed.
+    fn flush_remaining(&mut self) -> bool {
+        if !self.flushed && !self.prebuffer.is_empty() {
+            let source = rodio::buffer::SamplesBuffer::new(
+                CHANNELS,
+                SAMPLE_RATE,
+                std::mem::take(&mut self.prebuffer),
+            );
+            self.player.append(source);
+            self.player.play();
+            self.flushed = true;
+            let _ = self.tx.send(Message::TtsPlaybackStarted);
+            true
+        } else {
+            false
+        }
+    }
+}
+
 // ── View / Mode enums ─────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -265,11 +334,7 @@ impl App {
             tts::TtsProfile::Fast => tts::TtsProfile::Balanced,
             tts::TtsProfile::Balanced => tts::TtsProfile::Fast,
         };
-        let profile_name = match self.tts_profile {
-            tts::TtsProfile::Fast => "Fast",
-            tts::TtsProfile::Balanced => "Balanced",
-        };
-        self.status_message = Some(format!("TTS profile: {}", profile_name));
+        self.status_message = Some(format!("TTS profile: {}", self.tts_profile));
     }
 
     /// Start fetching metadata in background
@@ -409,7 +474,13 @@ impl App {
                 debug!("Streaming playback started");
             }
             Message::TtsSynthesisComplete => {
-                // Streaming synthesis finished; playback continues until queue drains
+                // Streaming synthesis finished; transition to Playing so
+                // check_tts_playback() can detect when the player drains.
+                self.tts_buffering = false;
+                if self.tts_state == TtsState::Synthesizing {
+                    self.tts_state = TtsState::Playing;
+                    self.status_message = Some("Playing...".to_string());
+                }
                 debug!("Streaming synthesis complete");
             }
             Message::MeiliReady => {
@@ -1070,9 +1141,7 @@ impl App {
                 let prebuffer_secs = self.tts_profile.prebuffer_secs();
 
                 tokio::task::spawn_blocking(move || {
-                    let prebuffer_threshold = (OUTPUT_SR as f64 * prebuffer_secs) as usize;
-                    let mut prebuffer: Vec<f32> = Vec::with_capacity(prebuffer_threshold + 48_000);
-                    let mut flushed = false;
+                    let mut streamer = PrebufferStreamer::new(player, tx.clone(), prebuffer_secs);
 
                     let result = tts::synthesize_streaming(
                         &handle,
@@ -1080,46 +1149,13 @@ impl App {
                         tts::DEFAULT_KOREAN_VOICE,
                         cfg_scale,
                         |chunk| {
-                            if !flushed {
-                                // Accumulate until we have enough runway
-                                prebuffer.extend_from_slice(chunk);
-                                if prebuffer.len() >= prebuffer_threshold {
-                                    let drained = std::mem::take(&mut prebuffer);
-                                    let source = rodio::buffer::SamplesBuffer::new(
-                                        CHANNELS,
-                                        SAMPLE_RATE,
-                                        drained,
-                                    );
-                                    player.append(source);
-                                    player.play();
-                                    flushed = true;
-                                    let _ = tx.send(Message::TtsPlaybackStarted);
-                                }
-                            } else {
-                                // Already playing — feed chunks directly
-                                let source = rodio::buffer::SamplesBuffer::new(
-                                    CHANNELS,
-                                    SAMPLE_RATE,
-                                    chunk.to_vec(),
-                                );
-                                player.append(source);
-                            }
+                            streamer.feed(chunk);
                         },
                     );
 
                     match result {
                         Ok(_) => {
-                            // Short text that never hit the threshold — flush whatever we collected
-                            if !flushed && !prebuffer.is_empty() {
-                                let source = rodio::buffer::SamplesBuffer::new(
-                                    CHANNELS,
-                                    SAMPLE_RATE,
-                                    prebuffer,
-                                );
-                                player.append(source);
-                                player.play();
-                            }
-                            // Notify completion
+                            streamer.flush_remaining();
                             let _ = tx.send(Message::TtsSynthesisComplete);
                         }
                         Err(e) => {
@@ -1173,10 +1209,8 @@ impl App {
                     for (i, (_article_idx, text)) in articles.into_iter().enumerate() {
                         if i == 0 {
                             // FIRST article: stream with prebuffer for fast initial playback
-                            let prebuffer_threshold = (OUTPUT_SR as f64 * prebuffer_secs) as usize;
-                            let mut prebuffer: Vec<f32> =
-                                Vec::with_capacity(prebuffer_threshold + 48_000);
-                            let mut flushed = false;
+                            let mut streamer =
+                                PrebufferStreamer::new(player.clone(), tx.clone(), prebuffer_secs);
 
                             match tts::synthesize_streaming(
                                 &handle,
@@ -1184,46 +1218,19 @@ impl App {
                                 tts::DEFAULT_KOREAN_VOICE,
                                 cfg_scale,
                                 |chunk| {
-                                    if !flushed {
-                                        prebuffer.extend_from_slice(chunk);
-                                        if prebuffer.len() >= prebuffer_threshold {
-                                            let drained = std::mem::take(&mut prebuffer);
-                                            let source = rodio::buffer::SamplesBuffer::new(
-                                                CHANNELS,
-                                                SAMPLE_RATE,
-                                                drained,
-                                            );
-                                            player.append(source);
-                                            player.play();
-                                            playback_start = Some(Instant::now());
-                                            flushed = true;
-                                            let _ = tx.send(Message::TtsPlaybackStarted);
-                                            let _ = tx.send(Message::TtsArticleAdvanced {
-                                                article_idx: article_indices[0],
-                                            });
-                                        }
-                                    } else {
-                                        let source = rodio::buffer::SamplesBuffer::new(
-                                            CHANNELS,
-                                            SAMPLE_RATE,
-                                            chunk.to_vec(),
-                                        );
-                                        player.append(source);
+                                    if streamer.feed(chunk) {
+                                        // Initial flush just happened — record playback start
+                                        playback_start = Some(Instant::now());
+                                        let _ = tx.send(Message::TtsArticleAdvanced {
+                                            article_idx: article_indices[0],
+                                        });
                                     }
                                 },
                             ) {
                                 Ok(result) => {
-                                    // Flush remaining prebuffer if text was too short
-                                    if !flushed && !prebuffer.is_empty() {
-                                        let source = rodio::buffer::SamplesBuffer::new(
-                                            CHANNELS,
-                                            SAMPLE_RATE,
-                                            prebuffer,
-                                        );
-                                        player.append(source);
-                                        player.play();
+                                    if streamer.flush_remaining() {
+                                        // Short first article that never hit threshold
                                         playback_start = Some(Instant::now());
-                                        let _ = tx.send(Message::TtsPlaybackStarted);
                                         let _ = tx.send(Message::TtsArticleAdvanced {
                                             article_idx: article_indices[0],
                                         });
