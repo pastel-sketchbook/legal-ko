@@ -44,6 +44,8 @@ legal-ko        # or: task run
 | `Ctrl+d` / `Ctrl+u` | Page down / up |
 | `Enter` | Open law |
 | `/` | Search |
+| `↑` / `↓` | Navigate results while searching |
+| `Ctrl+k` / `Ctrl+j` | Navigate results while searching (vim) |
 | `c` | Filter by category |
 | `d` | Filter by department |
 | `n` / `p` | Next / previous article (제X조) |

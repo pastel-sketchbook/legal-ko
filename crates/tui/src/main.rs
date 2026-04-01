@@ -276,6 +276,14 @@ fn handle_search_key(app: &mut App, key: KeyEvent) {
         KeyCode::Esc => app.clear_search(),
         KeyCode::Enter => app.finish_search(),
         KeyCode::Backspace => app.search_pop_char(),
+        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.list_move_down();
+        }
+        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.list_move_up();
+        }
+        KeyCode::Down => app.list_move_down(),
+        KeyCode::Up => app.list_move_up(),
         KeyCode::Char(c) => app.search_push_char(c),
         _ => {}
     }

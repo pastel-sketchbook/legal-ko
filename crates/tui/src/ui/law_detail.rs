@@ -228,7 +228,13 @@ pub fn render_article_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect)
 
     let list = List::new(items).block(block);
 
-    f.render_widget(Clear, popup_area);
+    let clear_area = Rect {
+        x: popup_area.x.saturating_sub(1),
+        y: popup_area.y,
+        width: popup_area.width + 2,
+        height: popup_area.height,
+    };
+    f.render_widget(Clear, clear_area);
     f.render_widget(list, popup_area);
 }
 
