@@ -113,8 +113,8 @@ impl MeiliBackend {
     fn from_env() -> Option<Self> {
         let url = std::env::var(Self::ENV_URL).ok()?;
         let api_key = std::env::var(Self::ENV_KEY).ok();
-        let index_uid = std::env::var(Self::ENV_INDEX)
-            .unwrap_or_else(|_| Self::DEFAULT_INDEX.to_string());
+        let index_uid =
+            std::env::var(Self::ENV_INDEX).unwrap_or_else(|_| Self::DEFAULT_INDEX.to_string());
 
         let client = meilisearch_sdk::client::Client::new(&url, api_key.as_deref())
             .expect("Failed to create Meilisearch client");

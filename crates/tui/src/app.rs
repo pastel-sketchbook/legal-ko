@@ -483,8 +483,7 @@ impl App {
                 .enumerate()
                 .filter(|(_, entry)| {
                     // Search filter
-                    if !query_lower.is_empty()
-                        && !entry.title.to_lowercase().contains(&query_lower)
+                    if !query_lower.is_empty() && !entry.title.to_lowercase().contains(&query_lower)
                     {
                         return false;
                     }
@@ -1093,8 +1092,7 @@ impl App {
                                     let target_secs = accumulated_secs;
                                     let tx_timer = tx.clone();
                                     std::thread::spawn(move || {
-                                        let target =
-                                            start + Duration::from_secs_f64(target_secs);
+                                        let target = start + Duration::from_secs_f64(target_secs);
                                         let now = Instant::now();
                                         if target > now {
                                             std::thread::sleep(target - now);
