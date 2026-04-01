@@ -144,11 +144,16 @@ fn render_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let visible_height = area.height as usize;
     let total_width = area.width as usize;
 
-    // Column layout: bookmark(2) + title(flex) + gap(1) + category(bracket+content) + gap(1) + department
+    // Adaptive departments column: only show when at least one filtered entry has data
+    let show_dept = app
+        .filtered_indices
+        .iter()
+        .any(|&idx| !app.all_laws[idx].departments.is_empty());
+
     let bookmark_w: usize = 2;
-    let dept_w: usize = 16; // fits most department names
-    let cat_w: usize = 22; // fits brackets + longest category
-    let gaps: usize = 2; // 1 gap before cat, 1 gap before dept
+    let cat_w: usize = 14; // fits brackets + longest category (e.g. "[대통령령]" = 10 display width)
+    let dept_w: usize = if show_dept { 16 } else { 0 };
+    let gaps: usize = 1 + usize::from(show_dept); // 1 gap before cat, 1 before dept (if shown)
     let title_w = total_width.saturating_sub(bookmark_w + cat_w + dept_w + gaps);
 
     // Calculate the offset so the selected item is visible
@@ -176,8 +181,6 @@ fn render_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             let title_col = pad_to_width(&entry.title, title_w);
             let cat_text = format!("[{}]", entry.category);
             let cat_col = pad_to_width(&cat_text, cat_w);
-            let dept_text = entry.departments.join(", ");
-            let dept_col = pad_to_width(&dept_text, dept_w);
 
             let title_style = if is_selected {
                 Style::default()
@@ -188,7 +191,7 @@ fn render_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
                 Style::default().fg(theme.fg)
             };
 
-            let spans = vec![
+            let mut spans = vec![
                 Span::styled(
                     bookmark_marker.to_string(),
                     Style::default().fg(theme.bookmark),
@@ -196,9 +199,17 @@ fn render_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
                 Span::styled(title_col, title_style),
                 Span::styled(" ", Style::default()),
                 Span::styled(cat_col, Style::default().fg(theme.category)),
-                Span::styled(" ", Style::default()),
-                Span::styled(dept_col, Style::default().fg(theme.department)),
             ];
+
+            if show_dept {
+                let dept_text = entry.departments.join(", ");
+                let dept_col = pad_to_width(&dept_text, dept_w);
+                spans.push(Span::styled(" ", Style::default()));
+                spans.push(Span::styled(
+                    dept_col,
+                    Style::default().fg(theme.department),
+                ));
+            }
 
             ListItem::new(Line::from(spans))
         })
@@ -218,21 +229,22 @@ fn render_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             format!(" {}/{} ", app.list_selected + 1, app.filtered_indices.len())
         };
 
-        styles::status_line(
-            theme,
-            &prefix,
-            &[
-                ("j/k", "navigate"),
-                ("Enter", "open"),
-                ("/", "search"),
-                ("c", "category"),
-                ("d", "department"),
-                ("b", "bookmarks"),
-                ("t", "theme"),
-                ("?", "help"),
-            ],
-            area.width,
-        )
+        let pairs: Vec<(&str, &str)> = vec![
+            ("j/k", "navigate"),
+            ("Enter", "open"),
+            ("/", "search"),
+            ("c", "category"),
+            ("d", "department"),
+            ("b", "bookmarks"),
+            ("B", "bookmark"),
+            #[cfg(feature = "tts")]
+            ("T", "tts profile"),
+            ("t", "theme"),
+            ("q", "quit"),
+            ("?", "help"),
+        ];
+
+        styles::status_line(theme, &prefix, &pairs, area.width)
     };
 
     let bar = Paragraph::new(content).style(styles::status_bar(theme));
