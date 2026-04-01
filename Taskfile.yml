@@ -118,16 +118,17 @@ tasks:
     desc: Bump patch version (0.0.x)
     vars:
       CURRENT:
-        sh: grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'
+        sh: cat VERSION
       MAJOR:
-        sh: grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/' | cut -d. -f1
+        sh: cat VERSION | cut -d. -f1
       MINOR:
-        sh: grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/' | cut -d. -f2
+        sh: cat VERSION | cut -d. -f2
       PATCH:
-        sh: grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/' | cut -d. -f3
+        sh: cat VERSION | cut -d. -f3
     cmds:
       - |
         NEW="{{.MAJOR}}.{{.MINOR}}.$(({{.PATCH}} + 1))"
+        echo "$NEW" > VERSION
         sed -i "s/^version = \"{{.CURRENT}}\"/version = \"$NEW\"/" Cargo.toml
         cargo generate-lockfile
         echo "Bumped {{.CURRENT}} → $NEW"
@@ -136,14 +137,15 @@ tasks:
     desc: Bump minor version (0.x.0)
     vars:
       CURRENT:
-        sh: grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'
+        sh: cat VERSION
       MAJOR:
-        sh: grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/' | cut -d. -f1
+        sh: cat VERSION | cut -d. -f1
       MINOR:
-        sh: grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/' | cut -d. -f2
+        sh: cat VERSION | cut -d. -f2
     cmds:
       - |
         NEW="{{.MAJOR}}.$(({{.MINOR}} + 1)).0"
+        echo "$NEW" > VERSION
         sed -i "s/^version = \"{{.CURRENT}}\"/version = \"$NEW\"/" Cargo.toml
         cargo generate-lockfile
         echo "Bumped {{.CURRENT}} → $NEW"
@@ -152,12 +154,13 @@ tasks:
     desc: Bump major version (x.0.0)
     vars:
       CURRENT:
-        sh: grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'
+        sh: cat VERSION
       MAJOR:
-        sh: grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/' | cut -d. -f1
+        sh: cat VERSION | cut -d. -f1
     cmds:
       - |
         NEW="$(({{.MAJOR}} + 1)).0.0"
+        echo "$NEW" > VERSION
         sed -i "s/^version = \"{{.CURRENT}}\"/version = \"$NEW\"/" Cargo.toml
         cargo generate-lockfile
         echo "Bumped {{.CURRENT}} → $NEW"
@@ -166,7 +169,7 @@ tasks:
     desc: Create git tag from current version
     vars:
       VERSION:
-        sh: grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'
+        sh: cat VERSION
     cmds:
       - git tag -a "v{{.VERSION}}" -m "v{{.VERSION}}"
       - echo "Tagged v{{.VERSION}}"
