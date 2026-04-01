@@ -4,6 +4,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
+#[cfg(feature = "tts")]
 use legal_ko_core::tts::TtsState;
 
 use crate::app::App;
@@ -82,9 +83,11 @@ fn render_detail_content(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         return;
     };
 
+    #[cfg_attr(not(feature = "tts"), allow(unused_mut))]
     let mut lines = app.detail_rendered_lines.clone();
 
     // Apply TTS highlight to lines of the currently-playing article
+    #[cfg(feature = "tts")]
     if let Some((hl_start, hl_end)) = app.tts_highlight_lines() {
         let hl_bg = theme.highlight_bg;
         for (i, line) in lines.iter_mut().enumerate() {
@@ -125,10 +128,10 @@ fn render_detail_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             format!("{} articles ", app.detail_articles.len())
         };
 
+        #[cfg(feature = "tts")]
         let tts_indicator = match app.tts_state {
             TtsState::Loading => {
                 // Animated loading bar: a sliding highlight in a dot/pipe pattern
-                // Pattern cycles: ·· shifts a bright segment across ··|··|··|··
                 let frames = [
                     "\u{2590}··|··|··|··\u{258c}",
                     "·\u{2590}·|··|··|··\u{258c}",
@@ -151,6 +154,8 @@ fn render_detail_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             TtsState::Playing => "\u{25b6}\u{fe0f} ".to_string(),
             _ => String::new(),
         };
+        #[cfg(not(feature = "tts"))]
+        let tts_indicator = String::new();
 
         let prefix = format!("{tts_indicator}{scroll_info}{article_count}");
 
@@ -160,6 +165,7 @@ fn render_detail_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             pairs.push(("a", "article list"));
         }
         // TTS key hints
+        #[cfg(feature = "tts")]
         match app.tts_state {
             TtsState::Playing | TtsState::Synthesizing => {
                 pairs.push(("s", "stop"));

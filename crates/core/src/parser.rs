@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::models::ArticleRef;
 
 /// Strip YAML frontmatter delimited by --- ... ---
@@ -14,6 +16,175 @@ pub fn strip_frontmatter(raw: &str) -> &str {
         }
     }
     raw
+}
+
+/// Extract the raw YAML frontmatter block (without the `---` delimiters).
+///
+/// Returns `None` if no valid frontmatter is found.
+#[must_use]
+fn extract_frontmatter_block(raw: &str) -> Option<&str> {
+    if !raw.starts_with("---") {
+        return None;
+    }
+    let after_open = &raw[3..];
+    let end = after_open.find("\n---")?;
+    Some(&after_open[..end])
+}
+
+/// Parse YAML frontmatter into a flat key→value map.
+///
+/// Handles:
+/// - Simple scalars: `key: value` (with optional single-quote stripping)
+/// - Lists: lines starting with `- ` under a `key:` with no inline value
+///
+/// This is intentionally minimal — **no `serde_yaml` dependency**.
+#[must_use]
+pub fn parse_frontmatter(raw: &str) -> HashMap<String, FrontmatterValue> {
+    let Some(block) = extract_frontmatter_block(raw) else {
+        return HashMap::new();
+    };
+
+    let mut map = HashMap::new();
+    let mut current_key: Option<String> = None;
+    let mut current_list: Vec<String> = Vec::new();
+
+    for line in block.lines() {
+        // List continuation: "- value"
+        if let Some(item) = line.strip_prefix("- ") {
+            if current_key.is_some() {
+                current_list.push(strip_yaml_quotes(item.trim()));
+            }
+            continue;
+        }
+
+        // New key: "key: value" or "key:"
+        if let Some((key, value)) = line.split_once(':') {
+            let key = key.trim();
+            if key.is_empty() || key.starts_with('#') {
+                continue;
+            }
+
+            // Flush previous list key
+            if let Some(prev_key) = current_key.take() {
+                if current_list.is_empty() {
+                    // Was a scalar with no value — store empty string
+                    map.insert(prev_key, FrontmatterValue::Scalar(String::new()));
+                } else {
+                    map.insert(
+                        prev_key,
+                        FrontmatterValue::List(std::mem::take(&mut current_list)),
+                    );
+                }
+            }
+
+            let value = value.trim();
+            if value.is_empty() {
+                // This key has a list or empty value on subsequent lines
+                current_key = Some(key.to_string());
+                current_list.clear();
+            } else {
+                map.insert(
+                    key.to_string(),
+                    FrontmatterValue::Scalar(strip_yaml_quotes(value)),
+                );
+            }
+        }
+    }
+
+    // Flush final key
+    if let Some(key) = current_key {
+        if current_list.is_empty() {
+            map.insert(key, FrontmatterValue::Scalar(String::new()));
+        } else {
+            map.insert(key, FrontmatterValue::List(current_list));
+        }
+    }
+
+    map
+}
+
+/// A value from YAML frontmatter — either a simple string or a list of strings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FrontmatterValue {
+    Scalar(String),
+    List(Vec<String>),
+}
+
+impl FrontmatterValue {
+    /// Get as a scalar string, returning an empty string for lists.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            FrontmatterValue::Scalar(s) => s,
+            FrontmatterValue::List(_) => "",
+        }
+    }
+
+    /// Get as a list of strings. Scalars are returned as a single-element list.
+    #[must_use]
+    pub fn as_list(&self) -> Vec<String> {
+        match self {
+            FrontmatterValue::Scalar(s) => {
+                if s.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![s.clone()]
+                }
+            }
+            FrontmatterValue::List(v) => v.clone(),
+        }
+    }
+}
+
+/// Strip surrounding single or double quotes from a YAML value.
+fn strip_yaml_quotes(s: &str) -> String {
+    let s = s.trim();
+    if (s.starts_with('\'') && s.ends_with('\'')) || (s.starts_with('"') && s.ends_with('"')) {
+        s[1..s.len() - 1].to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+/// Enrich a `LawEntry` with metadata extracted from the YAML frontmatter of the
+/// raw markdown content.
+///
+/// Fields that are non-empty in the frontmatter overwrite the entry's defaults.
+/// This is called after fetching the full law content so that the list view can
+/// display accurate departments, dates, category, and status.
+pub fn enrich_entry_from_frontmatter(entry: &mut crate::models::LawEntry, raw: &str) {
+    let fm = parse_frontmatter(raw);
+
+    if let Some(v) = fm.get("제목") {
+        let s = v.as_str();
+        if !s.is_empty() {
+            entry.title = s.to_string();
+        }
+    }
+    if let Some(v) = fm.get("법령구분") {
+        let s = v.as_str();
+        if !s.is_empty() {
+            entry.category = s.to_string();
+        }
+    }
+    if let Some(v) = fm.get("소관부처") {
+        let list = v.as_list();
+        if !list.is_empty() {
+            entry.departments = list;
+        }
+    }
+    if let Some(v) = fm.get("시행일자") {
+        let s = v.as_str();
+        if !s.is_empty() {
+            entry.enforcement_date = s.to_string();
+        }
+    }
+    if let Some(v) = fm.get("상태") {
+        let s = v.as_str();
+        if !s.is_empty() {
+            entry.status = s.to_string();
+        }
+    }
 }
 
 /// Extract article references (제X조) from raw markdown content.
@@ -186,5 +357,49 @@ mod tests {
         // No markdown remains
         assert!(!text.contains('#'));
         assert!(!text.contains("**"));
+    }
+
+    #[test]
+    fn test_parse_frontmatter_scalars() {
+        let input = "---\n제목: 민법\n법령구분: 법률\n상태: 시행\n---\n# Content";
+        let fm = parse_frontmatter(input);
+        assert_eq!(fm.get("제목").unwrap().as_str(), "민법");
+        assert_eq!(fm.get("법령구분").unwrap().as_str(), "법률");
+        assert_eq!(fm.get("상태").unwrap().as_str(), "시행");
+    }
+
+    #[test]
+    fn test_parse_frontmatter_quoted_values() {
+        let input = "---\n법령ID: '001706'\n공포일자: '2026-03-17'\n---\n# Content";
+        let fm = parse_frontmatter(input);
+        assert_eq!(fm.get("법령ID").unwrap().as_str(), "001706");
+        assert_eq!(fm.get("공포일자").unwrap().as_str(), "2026-03-17");
+    }
+
+    #[test]
+    fn test_parse_frontmatter_list() {
+        let input = "---\n소관부처:\n- 법무부\n- 행정안전부\n---\n# Content";
+        let fm = parse_frontmatter(input);
+        let depts = fm.get("소관부처").unwrap().as_list();
+        assert_eq!(depts, vec!["법무부", "행정안전부"]);
+    }
+
+    #[test]
+    fn test_parse_frontmatter_empty() {
+        let input = "# No frontmatter";
+        let fm = parse_frontmatter(input);
+        assert!(fm.is_empty());
+    }
+
+    #[test]
+    fn test_parse_frontmatter_realistic() {
+        let input = "---\n제목: 민법\n법령MST: 284415\n법령ID: '001706'\n법령구분: 법률\n소관부처:\n- 법무부\n공포일자: '2026-03-17'\n시행일자: '2026-03-17'\n상태: 시행\n출처: https://www.law.go.kr/법령/민법\n---\n# 민법";
+        let fm = parse_frontmatter(input);
+        assert_eq!(fm.get("제목").unwrap().as_str(), "민법");
+        assert_eq!(fm.get("법령구분").unwrap().as_str(), "법률");
+        assert_eq!(fm.get("소관부처").unwrap().as_list(), vec!["법무부"]);
+        assert_eq!(fm.get("공포일자").unwrap().as_str(), "2026-03-17");
+        assert_eq!(fm.get("시행일자").unwrap().as_str(), "2026-03-17");
+        assert_eq!(fm.get("상태").unwrap().as_str(), "시행");
     }
 }

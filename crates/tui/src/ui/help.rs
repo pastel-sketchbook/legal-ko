@@ -10,7 +10,7 @@ use crate::theme::Theme;
 pub fn render_help(f: &mut Frame, theme: &Theme, area: Rect) {
     let popup_area = centered_rect(60, 80, area);
 
-    let help_lines = vec![
+    let mut help_lines = vec![
         header_line(theme, "Navigation"),
         key_line(theme, "j / \u{2193}", "Move down"),
         key_line(theme, "k / \u{2191}", "Move up"),
@@ -32,12 +32,19 @@ pub fn render_help(f: &mut Frame, theme: &Theme, area: Rect) {
         key_line(theme, "p", "Previous article"),
         key_line(theme, "a", "Article list popup"),
         Line::from(""),
-        header_line(theme, "Text-to-Speech"),
-        key_line(theme, "r", "Read current article aloud"),
-        key_line(theme, "R", "Read full law aloud"),
-        key_line(theme, "s", "Stop TTS playback"),
-        key_line(theme, "T", "Toggle TTS profile (Fast/Balanced)"),
-        Line::from(""),
+    ];
+
+    #[cfg(feature = "tts")]
+    {
+        help_lines.push(header_line(theme, "Text-to-Speech"));
+        help_lines.push(key_line(theme, "r", "Read current article aloud"));
+        help_lines.push(key_line(theme, "R", "Read full law aloud"));
+        help_lines.push(key_line(theme, "s", "Stop TTS playback"));
+        help_lines.push(key_line(theme, "T", "Toggle TTS profile (Fast/Balanced)"));
+        help_lines.push(Line::from(""));
+    }
+
+    help_lines.extend([
         header_line(theme, "Bookmarks"),
         key_line(theme, "B", "Toggle bookmark"),
         key_line(theme, "b", "Show bookmarks only"),
@@ -46,7 +53,7 @@ pub fn render_help(f: &mut Frame, theme: &Theme, area: Rect) {
         key_line(theme, "t", "Cycle theme"),
         key_line(theme, "?", "Toggle this help"),
         key_line(theme, "q", "Quit"),
-    ];
+    ]);
 
     let block = Block::default()
         .title(" Help \u{2014} Keybindings ")

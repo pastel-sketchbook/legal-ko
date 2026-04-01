@@ -5,6 +5,7 @@ use serde_json::json;
 use legal_ko_core::bookmarks::Bookmarks;
 use legal_ko_core::models::LawEntry;
 use legal_ko_core::search::{self, Searcher};
+#[cfg(feature = "tts")]
 use legal_ko_core::tts;
 use legal_ko_core::{cache, client, parser};
 
@@ -82,6 +83,7 @@ enum Command {
     /// Read a law aloud using TTS (`VibeVoice`).
     ///
     /// Build with --release for smooth playback (debug builds are 10-50x slower).
+    #[cfg(feature = "tts")]
     Speak {
         /// Law ID (법령MST number)
         id: String,
@@ -120,6 +122,7 @@ async fn main() -> Result<()> {
         Command::Show { id, json } => cmd_show(&id, json).await,
         Command::Articles { id, json } => cmd_articles(&id, json).await,
         Command::Bookmarks { json } => cmd_bookmarks(json).await,
+        #[cfg(feature = "tts")]
         Command::Speak {
             id,
             article,
@@ -341,6 +344,7 @@ async fn cmd_bookmarks(as_json: bool) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "tts")]
 #[allow(clippy::too_many_lines)]
 async fn cmd_speak(
     id: &str,

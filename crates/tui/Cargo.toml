@@ -10,16 +10,17 @@ path = "src/main.rs"
 [features]
 default = []
 meilisearch = ["legal-ko-core/meilisearch"]
+tts = ["legal-ko-core/tts", "dep:rodio", "dep:libc"]
 
 [dependencies]
 legal-ko-core = { path = "../core" }
 anyhow.workspace = true
 crossterm.workspace = true
 dirs.workspace = true
-libc.workspace = true
 ratatui.workspace = true
-rodio.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 unicode-width.workspace = true
+libc = { workspace = true, optional = true }
+rodio = { workspace = true, optional = true }

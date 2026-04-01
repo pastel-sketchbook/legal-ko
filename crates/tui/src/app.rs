@@ -1,12 +1,17 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
+#[cfg(feature = "tts")]
+use std::collections::VecDeque;
+#[cfg(feature = "tts")]
 use std::num::NonZero;
 use std::sync::Arc;
+#[cfg(feature = "tts")]
 use std::time::{Duration, Instant};
 
 use legal_ko_core::bookmarks::Bookmarks;
 use legal_ko_core::models::{ArticleRef, LawDetail, LawEntry, MetadataIndex};
 use legal_ko_core::preferences::Preferences;
 use legal_ko_core::search::Searcher;
+#[cfg(feature = "tts")]
 use legal_ko_core::tts::{self, TtsEngineHandle, TtsState};
 use legal_ko_core::{cache, client, parser};
 
@@ -14,19 +19,26 @@ use ratatui::text::Line;
 
 use crate::theme::{self, Theme};
 
+#[cfg(feature = "tts")]
 use legal_ko_core::tts::OUTPUT_SR;
+#[cfg(feature = "tts")]
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+#[cfg(feature = "tts")]
+use tracing::debug;
+use tracing::{error, info, warn};
 
 /// Mono channel count for rodio.
+#[cfg(feature = "tts")]
 const CHANNELS: NonZero<u16> = NonZero::new(1).unwrap();
 
 /// Sample rate for rodio (must match `OUTPUT_SR` = 24000).
+#[cfg(feature = "tts")]
 const SAMPLE_RATE: NonZero<u32> = NonZero::new(OUTPUT_SR).unwrap();
 
 // ── Prebuffer helper ──────────────────────────────────────────
 
+#[cfg(feature = "tts")]
 /// Accumulates streaming audio chunks until a threshold is reached, then
 /// flushes to the player and feeds subsequent chunks directly.
 ///
@@ -40,6 +52,7 @@ struct PrebufferStreamer {
     flushed: bool,
 }
 
+#[cfg(feature = "tts")]
 impl PrebufferStreamer {
     fn new(player: Arc<Player>, tx: mpsc::UnboundedSender<Message>, prebuffer_secs: f64) -> Self {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -120,6 +133,7 @@ pub enum Popup {
 }
 
 /// Action deferred until the TTS engine finishes loading.
+#[cfg(feature = "tts")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PendingTtsAction {
     None,
@@ -142,17 +156,22 @@ pub enum Message {
         id: String,
         error: String,
     },
+    #[cfg(feature = "tts")]
     TtsEngineLoaded,
+    #[cfg(feature = "tts")]
     TtsEngineError(String),
     /// Batch synthesis produced audio ready for playback.
+    #[cfg(feature = "tts")]
     #[allow(dead_code)]
     TtsBatchReady {
         articles_audio: Vec<Vec<f32>>,
         article_indices: Vec<usize>,
     },
     /// Streaming playback started (prebuffer flushed).
+    #[cfg(feature = "tts")]
     TtsPlaybackStarted,
     /// Streaming synthesis completed successfully.
+    #[cfg(feature = "tts")]
     TtsSynthesisComplete,
     /// Meilisearch warmup completed.
     MeiliReady,
@@ -164,11 +183,14 @@ pub enum Message {
         ids: Vec<String>,
     },
     /// All synthesis and playback for a batch session is done.
+    #[cfg(feature = "tts")]
     TtsSynthesisDone,
     /// The background thread has advanced to the next article in read-all mode.
+    #[cfg(feature = "tts")]
     TtsArticleAdvanced {
         article_idx: usize,
     },
+    #[cfg(feature = "tts")]
     TtsSynthesisError(String),
 }
 
@@ -223,21 +245,30 @@ pub struct App {
     pub theme_index: usize,
 
     // TTS
+    #[cfg(feature = "tts")]
     pub tts_state: TtsState,
+    #[cfg(feature = "tts")]
     pub tts_engine: TtsEngineHandle,
     /// TTS quality/speed profile (Fast=cfg 1.0, Balanced=cfg 1.5).
+    #[cfg(feature = "tts")]
     pub tts_profile: tts::TtsProfile,
     /// Index of the article currently being spoken (into `detail_articles`).
+    #[cfg(feature = "tts")]
     pub tts_current_article: Option<usize>,
     /// Queue of article indices remaining to be spoken (for `R` read-all mode).
+    #[cfg(feature = "tts")]
     tts_article_queue: VecDeque<usize>,
     /// Keeps the audio device sink alive for the duration of playback.
+    #[cfg(feature = "tts")]
     tts_device_sink: Option<MixerDeviceSink>,
     /// Player handle for controlling playback (stop/pause).
+    #[cfg(feature = "tts")]
     tts_player: Option<Arc<Player>>,
     /// Action to execute once the TTS engine finishes loading.
+    #[cfg(feature = "tts")]
     pending_tts_action: PendingTtsAction,
     /// True while buffering initial audio before unpausing the player.
+    #[cfg(feature = "tts")]
     tts_buffering: bool,
 
     /// Tick counter incremented every event-loop iteration (~50ms).
@@ -290,14 +321,23 @@ impl App {
             msg_tx,
             msg_rx,
             theme_index,
+            #[cfg(feature = "tts")]
             tts_state: TtsState::Unloaded,
+            #[cfg(feature = "tts")]
             tts_engine: tts::new_engine_handle(),
+            #[cfg(feature = "tts")]
             tts_profile: tts::TtsProfile::default(),
+            #[cfg(feature = "tts")]
             tts_current_article: None,
+            #[cfg(feature = "tts")]
             tts_article_queue: VecDeque::new(),
+            #[cfg(feature = "tts")]
             tts_device_sink: None,
+            #[cfg(feature = "tts")]
             tts_player: None,
+            #[cfg(feature = "tts")]
             pending_tts_action: PendingTtsAction::None,
+            #[cfg(feature = "tts")]
             tts_buffering: false,
             tick: 0,
             searcher: Arc::new(Searcher::from_env()),
@@ -331,6 +371,7 @@ impl App {
     }
 
     /// Toggle TTS profile between Fast (cfg=1.0, 1s prebuffer) and Balanced (cfg=1.5, 5s prebuffer).
+    #[cfg(feature = "tts")]
     pub fn toggle_tts_profile(&mut self) {
         self.tts_profile = match self.tts_profile {
             tts::TtsProfile::Fast => tts::TtsProfile::Balanced,
@@ -386,6 +427,7 @@ impl App {
             Message::LawContentLoaded { id, content } => {
                 self.on_law_content_loaded(&id, &content);
                 // Prewarm TTS engine in background so it's ready when user wants to speak
+                #[cfg(feature = "tts")]
                 self.ensure_tts_prewarmed();
             }
             Message::LawContentError { id, error } => {
@@ -393,6 +435,7 @@ impl App {
                 self.status_message = Some(format!("Error loading {id}: {error}"));
                 error!("Failed to load law {id}: {error}");
             }
+            #[cfg(feature = "tts")]
             Message::TtsEngineLoaded => {
                 self.tts_state = TtsState::Ready;
                 info!("TTS engine loaded successfully");
@@ -406,11 +449,13 @@ impl App {
                     }
                 }
             }
+            #[cfg(feature = "tts")]
             Message::TtsEngineError(err) => {
                 self.tts_state = TtsState::Error;
                 self.status_message = Some(format!("TTS error: {err}"));
                 error!("TTS engine load failed: {err}");
             }
+            #[cfg(feature = "tts")]
             Message::TtsSynthesisDone => {
                 self.tts_buffering = false;
                 if self.tts_state == TtsState::Synthesizing {
@@ -418,6 +463,7 @@ impl App {
                     self.status_message = Some("Playing...".to_string());
                 }
             }
+            #[cfg(feature = "tts")]
             Message::TtsArticleAdvanced { article_idx } => {
                 // Only advance if TTS is still active (timers may fire after stop)
                 if self.tts_state == TtsState::Synthesizing || self.tts_state == TtsState::Playing {
@@ -428,6 +474,7 @@ impl App {
                     }
                 }
             }
+            #[cfg(feature = "tts")]
             Message::TtsBatchReady {
                 articles_audio,
                 article_indices,
@@ -460,6 +507,7 @@ impl App {
                 self.tts_state = TtsState::Playing;
                 self.status_message = Some("Playing...".to_string());
             }
+            #[cfg(feature = "tts")]
             Message::TtsSynthesisError(err) => {
                 self.tts_state = TtsState::Ready;
                 self.tts_player = None;
@@ -470,12 +518,14 @@ impl App {
                 self.status_message = Some(format!("TTS error: {err}"));
                 error!("TTS synthesis failed: {err}");
             }
+            #[cfg(feature = "tts")]
             Message::TtsPlaybackStarted => {
                 self.tts_buffering = false;
                 self.tts_state = TtsState::Playing;
                 self.status_message = Some("Playing...".to_string());
                 debug!("Streaming playback started");
             }
+            #[cfg(feature = "tts")]
             Message::TtsSynthesisComplete => {
                 // Streaming synthesis finished; transition to Playing so
                 // check_tts_playback() can detect when the player drains.
@@ -695,11 +745,18 @@ impl App {
 
     fn on_law_content_loaded(&mut self, id: &str, content: &str) {
         let entry = self.all_laws.iter().find(|e| e.id == id).cloned();
-        let Some(entry) = entry else {
+        let Some(mut entry) = entry else {
             warn!("Law {id} not found in entries");
             self.detail_loading = false;
             return;
         };
+
+        // Enrich entry metadata from frontmatter (departments, dates, etc.)
+        parser::enrich_entry_from_frontmatter(&mut entry, content);
+        // Update the master list so the list view also reflects enriched data
+        if let Some(master) = self.all_laws.iter_mut().find(|e| e.id == id) {
+            master.clone_from(&entry);
+        }
 
         let (lines, articles) = crate::parser::parse_law_markdown(content, self.theme());
         self.detail_lines_count = lines.len();
@@ -942,6 +999,7 @@ impl App {
     pub fn go_back(&mut self) {
         match self.view {
             View::Detail => {
+                #[cfg(feature = "tts")]
                 self.stop_tts();
                 self.view = View::List;
                 self.detail = None;
@@ -957,6 +1015,7 @@ impl App {
     // ── TTS ───────────────────────────────────────────────────
 
     /// Ensure the TTS engine is loaded (starts background load if needed).
+    #[cfg(feature = "tts")]
     fn ensure_tts_loaded(&mut self) {
         match self.tts_state {
             TtsState::Unloaded | TtsState::Error => {
@@ -983,6 +1042,7 @@ impl App {
 
     /// Silently preload the TTS engine in the background if not already loaded.
     /// Unlike `ensure_tts_loaded()`, this doesn't show loading messages to the user.
+    #[cfg(feature = "tts")]
     fn ensure_tts_prewarmed(&mut self) {
         match self.tts_state {
             TtsState::Unloaded | TtsState::Error => {
@@ -1011,6 +1071,7 @@ impl App {
 
     /// Speak the current article (제X조 + its paragraphs).
     /// Auto-scrolls to the article and highlights it.
+    #[cfg(feature = "tts")]
     pub fn speak_article(&mut self) {
         self.stop_tts();
 
@@ -1058,6 +1119,7 @@ impl App {
 
     /// Speak all articles starting from the current scroll position.
     /// Reads article-by-article, auto-scrolling and highlighting each one.
+    #[cfg(feature = "tts")]
     pub fn speak_full(&mut self) {
         self.stop_tts();
 
@@ -1122,6 +1184,7 @@ impl App {
     /// Audio playback begins after a short prebuffer (determined by `tts_profile`),
     /// then chunks are appended as they arrive. Much better perceived latency
     /// than waiting for full synthesis.
+    #[cfg(feature = "tts")]
     fn start_synthesis(&mut self, text: String, label: &str) {
         self.tts_state = TtsState::Synthesizing;
         self.status_message = Some(format!("Synthesizing: {label}..."));
@@ -1181,6 +1244,7 @@ impl App {
     /// until the cumulative playback clock reaches the boundary, then sends
     /// `TtsArticleAdvanced`.  This keeps the scroll in sync with what the
     /// user actually hears, even when synthesis runs faster than real-time.
+    #[cfg(feature = "tts")]
     #[allow(clippy::too_many_lines)]
     fn start_synthesis_batch(&mut self, articles: Vec<(usize, String)>) {
         self.tts_state = TtsState::Synthesizing;
@@ -1326,6 +1390,7 @@ impl App {
     }
 
     /// Stop any ongoing TTS synthesis or playback.
+    #[cfg(feature = "tts")]
     pub fn stop_tts(&mut self) {
         if let Some(player) = self.tts_player.take() {
             player.stop();
@@ -1342,6 +1407,7 @@ impl App {
     }
 
     /// Check if TTS playback finished (all audio drained from player).
+    #[cfg(feature = "tts")]
     pub fn check_tts_playback(&mut self) {
         if self.tts_state == TtsState::Playing
             && let Some(ref player) = self.tts_player
@@ -1357,6 +1423,7 @@ impl App {
 
     /// Return the line range (start..end) of the currently-playing article,
     /// for the renderer to apply highlight styling.
+    #[cfg(feature = "tts")]
     pub fn tts_highlight_lines(&self) -> Option<(usize, usize)> {
         let article_idx = self.tts_current_article?;
         let start = self.detail_articles.get(article_idx)?.line_index;

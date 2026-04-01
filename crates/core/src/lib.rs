@@ -5,4 +5,5 @@ pub mod models;
 pub mod parser;
 pub mod preferences;
 pub mod search;
+#[cfg(feature = "tts")]
 pub mod tts;

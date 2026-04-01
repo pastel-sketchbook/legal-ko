@@ -4,7 +4,6 @@ mod theme;
 mod ui;
 
 use std::io::BufWriter;
-use std::os::unix::io::FromRawFd;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -19,8 +18,15 @@ use tracing::info;
 
 use app::{App, InputMode, Popup, View};
 
-/// Terminal writer type: a buffered File wrapping a dup'd terminal fd.
+/// Terminal writer type when TTS is enabled: a buffered File wrapping a dup'd terminal fd.
+/// This lets us permanently redirect stdout/stderr to /dev/null (to suppress ONNX
+/// Runtime noise) while ratatui writes through a private copy of the terminal fd.
+#[cfg(feature = "tts")]
 type TermWriter = BufWriter<std::fs::File>;
+
+/// Terminal writer type when TTS is disabled: standard buffered stdout.
+#[cfg(not(feature = "tts"))]
+type TermWriter = BufWriter<std::io::Stdout>;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -44,7 +50,7 @@ async fn main() -> Result<()> {
 
     info!("Starting legal-ko");
 
-    // ── Permanent stdout/stderr suppression ──────────────────────
+    // ── TTS: Permanent stdout/stderr suppression ────────────────
     //
     // ONNX Runtime (used by vibe-rust for TTS) spawns C++ background threads
     // that print to stdout/stderr.  A temporary dup2 redirect is not enough
@@ -52,11 +58,9 @@ async fn main() -> Result<()> {
     //
     // Strategy: save a private copy of the terminal fd, permanently point
     // fd 1/2 at /dev/null, and have ratatui write through the private copy.
-    // SAFETY: We dup stdout/stderr file descriptors to preserve a private copy
-    // of the terminal fd, then redirect fd 1/2 to /dev/null so ONNX Runtime's
-    // background C++ threads cannot pollute the TUI. The dup'd fd is valid
-    // because stdout is open, and dup2 is safe with valid open fds.
+    #[cfg(feature = "tts")]
     let (tty_fd, stdout_backup, stderr_backup) = unsafe {
+        use std::os::unix::io::AsRawFd;
         let tty = libc::dup(libc::STDOUT_FILENO);
         let out_bak = libc::dup(libc::STDOUT_FILENO);
         let err_bak = libc::dup(libc::STDERR_FILENO);
@@ -64,7 +68,6 @@ async fn main() -> Result<()> {
 
         // Redirect stdout/stderr → /dev/null
         if let Ok(devnull) = std::fs::OpenOptions::new().write(true).open("/dev/null") {
-            use std::os::unix::io::AsRawFd;
             let null_fd = devnull.as_raw_fd();
             libc::dup2(null_fd, libc::STDOUT_FILENO);
             libc::dup2(null_fd, libc::STDERR_FILENO);
@@ -74,13 +77,22 @@ async fn main() -> Result<()> {
         (tty, out_bak, err_bak)
     };
 
-    // SAFETY: `tty_fd` is a valid file descriptor obtained from `libc::dup` above.
-    // `from_raw_fd` takes ownership; we never use `tty_fd` again after this point.
-    let tty_file = unsafe { std::fs::File::from_raw_fd(tty_fd) };
-    let mut tty_write = BufWriter::new(tty_file);
+    // Build the terminal writer.
+    #[cfg(feature = "tts")]
+    let tty_write = {
+        use std::os::unix::io::FromRawFd;
+        // SAFETY: `tty_fd` is a valid file descriptor obtained from `libc::dup` above.
+        // `from_raw_fd` takes ownership; we never use `tty_fd` again after this point.
+        let tty_file = unsafe { std::fs::File::from_raw_fd(tty_fd) };
+        BufWriter::new(tty_file)
+    };
 
-    // Setup terminal via the private fd
+    #[cfg(not(feature = "tts"))]
+    let tty_write = BufWriter::new(std::io::stdout());
+
+    // Setup terminal
     enable_raw_mode()?;
+    let mut tty_write = tty_write;
     execute!(tty_write, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(tty_write);
     let mut terminal = Terminal::new(backend)?;
@@ -94,9 +106,8 @@ async fn main() -> Result<()> {
     terminal.show_cursor()?;
     drop(terminal);
 
-    // SAFETY: Restoring stdout/stderr from backup fds obtained via `libc::dup`
-    // earlier. Both backups are valid open fds (checked via >= 0 guard), and
-    // we close them immediately after dup2 to avoid leaking.
+    // TTS: Restore stdout/stderr from backup fds
+    #[cfg(feature = "tts")]
     unsafe {
         if stdout_backup >= 0 {
             libc::dup2(stdout_backup, libc::STDOUT_FILENO);
@@ -130,6 +141,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<TermWriter>>) -> Resul
         }
 
         // Check if TTS playback finished
+        #[cfg(feature = "tts")]
         app.check_tts_playback();
 
         // Advance animation tick
@@ -201,6 +213,7 @@ fn handle_list_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         KeyCode::Char('B') => app.toggle_bookmark(),
         KeyCode::Char('b') => app.toggle_bookmarks_only(),
         KeyCode::Char('t') => app.next_theme(),
+        #[cfg(feature = "tts")]
         KeyCode::Char('T') => app.toggle_tts_profile(),
         KeyCode::Char('?') => app.popup = Popup::Help,
         KeyCode::Esc => {
@@ -236,9 +249,13 @@ fn handle_detail_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         KeyCode::Char('a') => app.open_article_list(),
         KeyCode::Char('B') => app.toggle_bookmark(),
         KeyCode::Char('t') => app.next_theme(),
+        #[cfg(feature = "tts")]
         KeyCode::Char('T') => app.toggle_tts_profile(),
+        #[cfg(feature = "tts")]
         KeyCode::Char('r') => app.speak_article(),
+        #[cfg(feature = "tts")]
         KeyCode::Char('R') => app.speak_full(),
+        #[cfg(feature = "tts")]
         KeyCode::Char('s') => app.stop_tts(),
         KeyCode::Char('?') => app.popup = Popup::Help,
         _ => {}

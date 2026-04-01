@@ -6,17 +6,18 @@ edition.workspace = true
 [features]
 default = []
 meilisearch = ["dep:meilisearch-sdk"]
+tts = ["dep:rodio", "dep:libc", "dep:vibe-rust"]
 
 [dependencies]
 anyhow.workspace = true
 dirs.workspace = true
 reqwest.workspace = true
-rodio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-libc.workspace = true
 meilisearch-sdk = { workspace = true, optional = true }
-vibe-rust.workspace = true
+rodio = { workspace = true, optional = true }
+libc = { workspace = true, optional = true }
+vibe-rust = { workspace = true, optional = true }

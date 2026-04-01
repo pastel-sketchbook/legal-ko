@@ -1,25 +1,46 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Raw metadata entry from metadata.json
-#[derive(Debug, Clone, Deserialize, Serialize)]
+// ── GitHub Trees API response types ──────────────────────────
+
+/// A single entry from the GitHub Git Trees API response.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitTreeEntry {
+    pub path: String,
+    #[serde(rename = "type")]
+    pub entry_type: String,
+}
+
+/// Response from `GET /repos/:owner/:repo/git/trees/:sha?recursive=1`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitTreeResponse {
+    pub tree: Vec<GitTreeEntry>,
+    /// `true` when the tree has too many entries and was truncated.
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+// ── Law metadata types ───────────────────────────────────────
+
+/// Metadata entry for a single law file.
+///
+/// In the old repo layout this was deserialized directly from `metadata.json`.
+/// Now it is constructed from the GitHub tree listing + frontmatter parsing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetadataEntry {
     pub path: String,
-    #[serde(rename = "제목")]
     pub title: String,
-    #[serde(rename = "법령구분")]
     pub category: String,
-    #[serde(rename = "소관부처")]
     pub departments: Vec<String>,
-    #[serde(rename = "공포일자")]
     pub promulgation_date: String,
-    #[serde(rename = "시행일자")]
     pub enforcement_date: String,
-    #[serde(rename = "상태")]
     pub status: String,
 }
 
-/// Metadata index: 법령MST → `MetadataEntry`
+/// Metadata index: law ID → `MetadataEntry`.
+///
+/// The ID is a path-derived key such as `kr/민법/법률` (the `.md` extension is
+/// stripped so the ID remains stable).
 pub type MetadataIndex = HashMap<String, MetadataEntry>;
 
 /// A single law entry for display in the list view

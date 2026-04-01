@@ -10,6 +10,7 @@ path = "src/main.rs"
 [features]
 default = []
 meilisearch = ["legal-ko-core/meilisearch"]
+tts = ["legal-ko-core/tts"]
 
 [dependencies]
 legal-ko-core = { path = "../core" }
