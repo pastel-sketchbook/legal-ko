@@ -140,15 +140,39 @@ pub fn new_engine_handle() -> TtsEngineHandle {
     Arc::new(Mutex::new(None))
 }
 
+/// Environment variable to override ONNX intra-op thread count.
+///
+/// Controls how many CPU threads each ONNX operator can use internally.
+/// The upstream default is 4. Apple Silicon M2/M3 Pro/Max often benefit
+/// from 6–8 threads. Set to benchmark on your hardware:
+///
+/// ```sh
+/// LEGAL_KO_ONNX_THREADS=6 legal-ko-cli speak 123456
+/// ```
+pub const ONNX_THREADS_ENV: &str = "LEGAL_KO_ONNX_THREADS";
+
 /// Load the TTS engine synchronously (call from `spawn_blocking`).
 ///
 /// The `project_root` is passed to `RealtimeTts::load()` for resolving
 /// voice presets and model files (typically `std::env::current_dir()`).
+///
+/// Reads [`ONNX_THREADS_ENV`] to configure ONNX intra-op thread count.
 pub fn load_engine(handle: &TtsEngineHandle, project_root: &Path) -> Result<()> {
-    let config = RealtimeConfig::default();
+    let intra_threads = std::env::var(ONNX_THREADS_ENV)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0);
+
+    let config = RealtimeConfig {
+        intra_threads,
+        ..RealtimeConfig::default()
+    };
+
     info!(
-        "Loading VibeVoice TTS (device={}, attn={})",
-        config.device, config.attn_impl
+        "Loading VibeVoice TTS (device={}, attn={}, threads={})",
+        config.device,
+        config.attn_impl,
+        intra_threads.map_or("default".to_string(), |n| n.to_string()),
     );
 
     let tts =
@@ -300,12 +324,24 @@ pub fn synthesize_and_play_segments(
     speaker: &str,
     cfg_scale: f32,
 ) -> Result<PlaybackStats> {
+    let handle = new_engine_handle();
+    load_engine(&handle, project_root)?;
+    synthesize_and_play_segments_with_handle(&handle, segments, speaker, cfg_scale)
+}
+
+/// Like [`synthesize_and_play_segments`] but uses a pre-loaded engine handle.
+///
+/// This allows the caller to overlap engine loading with other work (e.g.,
+/// network I/O) and then pass the ready handle for synthesis.
+pub fn synthesize_and_play_segments_with_handle(
+    handle: &TtsEngineHandle,
+    segments: &[String],
+    speaker: &str,
+    cfg_scale: f32,
+) -> Result<PlaybackStats> {
     if segments.is_empty() {
         anyhow::bail!("No text segments to speak");
     }
-
-    let handle = new_engine_handle();
-    load_engine(&handle, project_root)?;
 
     let device_sink =
         DeviceSinkBuilder::open_default_sink().context("Failed to open audio output device")?;
@@ -321,7 +357,7 @@ pub fn synthesize_and_play_segments(
             continue;
         }
 
-        let result = synthesize(&handle, segment, speaker, cfg_scale)?;
+        let result = synthesize(handle, segment, speaker, cfg_scale)?;
 
         let source = rodio::buffer::SamplesBuffer::new(CHANNELS, SAMPLE_RATE, result.audio);
         player.append(source);
@@ -370,7 +406,19 @@ pub fn synthesize_and_play(
 ) -> Result<SynthesisResult> {
     let handle = new_engine_handle();
     load_engine(&handle, project_root)?;
+    synthesize_and_play_with_handle(&handle, text, speaker, profile)
+}
 
+/// Like [`synthesize_and_play`] but uses a pre-loaded engine handle.
+///
+/// This allows the caller to overlap engine loading with other work (e.g.,
+/// network I/O) and then pass the ready handle for synthesis.
+pub fn synthesize_and_play_with_handle(
+    handle: &TtsEngineHandle,
+    text: &str,
+    speaker: &str,
+    profile: TtsProfile,
+) -> Result<SynthesisResult> {
     let device_sink =
         DeviceSinkBuilder::open_default_sink().context("Failed to open audio output device")?;
     let player = Player::connect_new(device_sink.mixer());
@@ -381,7 +429,7 @@ pub fn synthesize_and_play(
     let mut prebuffer: Vec<f32> = Vec::with_capacity(prebuffer_threshold + 48_000);
     let mut flushed = false;
 
-    let result = synthesize_streaming(&handle, text, speaker, cfg_scale, |chunk| {
+    let result = synthesize_streaming(handle, text, speaker, cfg_scale, |chunk| {
         if !flushed {
             // Accumulate until we have enough runway
             prebuffer.extend_from_slice(chunk);

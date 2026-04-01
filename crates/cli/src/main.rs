@@ -343,6 +343,17 @@ async fn cmd_speak(
     fast: bool,
     as_json: bool,
 ) -> Result<()> {
+    // Start engine loading immediately in a background thread so it overlaps
+    // with the async network I/O below (metadata fetch, law content fetch).
+    // This hides ~3-5s of model loading latency.
+    let engine_handle = tts::new_engine_handle();
+    let engine_handle_bg = engine_handle.clone();
+    let engine_load = tokio::task::spawn_blocking(move || {
+        let project_root = std::env::current_dir().unwrap_or_else(|_| "/tmp".into());
+        tts::with_suppressed_output(|| tts::load_engine(&engine_handle_bg, &project_root))
+    });
+
+    // Fetch metadata and law content concurrently with engine loading.
     let entries = load_entries().await?;
     let entry = entries
         .iter()
@@ -357,6 +368,9 @@ async fn cmd_speak(
             c
         }
     };
+
+    // Wait for engine to finish loading before starting synthesis.
+    engine_load.await??;
 
     let voice = voice.to_string();
     let profile = if fast {
@@ -374,8 +388,9 @@ async fn cmd_speak(
         }
 
         let result = tokio::task::spawn_blocking(move || {
-            let project_root = std::env::current_dir().unwrap_or_else(|_| "/tmp".into());
-            tts::synthesize_and_play(&project_root, &text, &voice, profile)
+            tts::with_suppressed_output(|| {
+                tts::synthesize_and_play_with_handle(&engine_handle, &text, &voice, profile)
+            })
         })
         .await??;
 
@@ -425,8 +440,14 @@ async fn cmd_speak(
         eprintln!("Synthesizing {} article(s)...", n_segments);
 
         let stats = tokio::task::spawn_blocking(move || {
-            let project_root = std::env::current_dir().unwrap_or_else(|_| "/tmp".into());
-            tts::synthesize_and_play_segments(&project_root, &segments, &voice, profile.cfg_scale())
+            tts::with_suppressed_output(|| {
+                tts::synthesize_and_play_segments_with_handle(
+                    &engine_handle,
+                    &segments,
+                    &voice,
+                    profile.cfg_scale(),
+                )
+            })
         })
         .await??;
 
