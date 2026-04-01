@@ -193,6 +193,7 @@ fn handle_list_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         KeyCode::Char('B') => app.toggle_bookmark(),
         KeyCode::Char('b') => app.toggle_bookmarks_only(),
         KeyCode::Char('t') => app.next_theme(),
+        KeyCode::Char('T') => app.toggle_tts_profile(),
         KeyCode::Char('?') => app.popup = Popup::Help,
         KeyCode::Esc => {
             if !app.search_query.is_empty() {
@@ -228,6 +229,7 @@ fn handle_detail_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         KeyCode::Char('a') => app.open_article_list(),
         KeyCode::Char('B') => app.toggle_bookmark(),
         KeyCode::Char('t') => app.next_theme(),
+        KeyCode::Char('T') => app.toggle_tts_profile(),
         KeyCode::Char('r') => app.speak_article(),
         KeyCode::Char('R') => app.speak_full(),
         KeyCode::Char('s') => app.stop_tts(),

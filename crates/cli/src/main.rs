@@ -94,6 +94,10 @@ enum Command {
         #[arg(long, default_value = "kr-spk0_woman")]
         voice: String,
 
+        /// Use fast synthesis profile (cfg_scale=1.0, 1s prebuffer)
+        #[arg(long)]
+        fast: bool,
+
         /// Output synthesis stats as JSON (no playback)
         #[arg(long)]
         json: bool,
@@ -120,8 +124,9 @@ async fn main() -> Result<()> {
             id,
             article,
             voice,
+            fast,
             json,
-        } => cmd_speak(&id, article, &voice, json).await,
+        } => cmd_speak(&id, article, &voice, fast, json).await,
     }
 }
 
@@ -331,7 +336,13 @@ async fn cmd_bookmarks(as_json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_speak(id: &str, article: Option<usize>, voice: &str, as_json: bool) -> Result<()> {
+async fn cmd_speak(
+    id: &str,
+    article: Option<usize>,
+    voice: &str,
+    fast: bool,
+    as_json: bool,
+) -> Result<()> {
     let entries = load_entries().await?;
     let entry = entries
         .iter()
@@ -348,6 +359,11 @@ async fn cmd_speak(id: &str, article: Option<usize>, voice: &str, as_json: bool)
     };
 
     let voice = voice.to_string();
+    let profile = if fast {
+        tts::TtsProfile::Fast
+    } else {
+        tts::TtsProfile::Balanced
+    };
 
     if let Some(idx) = article {
         // Single article — use streaming (one segment, no gaps)
@@ -359,7 +375,7 @@ async fn cmd_speak(id: &str, article: Option<usize>, voice: &str, as_json: bool)
 
         let result = tokio::task::spawn_blocking(move || {
             let project_root = std::env::current_dir().unwrap_or_else(|_| "/tmp".into());
-            tts::synthesize_and_play(&project_root, &text, &voice, tts::DEFAULT_CFG_SCALE)
+            tts::synthesize_and_play(&project_root, &text, &voice, profile)
         })
         .await??;
 
@@ -410,12 +426,7 @@ async fn cmd_speak(id: &str, article: Option<usize>, voice: &str, as_json: bool)
 
         let stats = tokio::task::spawn_blocking(move || {
             let project_root = std::env::current_dir().unwrap_or_else(|_| "/tmp".into());
-            tts::synthesize_and_play_segments(
-                &project_root,
-                &segments,
-                &voice,
-                tts::DEFAULT_CFG_SCALE,
-            )
+            tts::synthesize_and_play_segments(&project_root, &segments, &voice, profile)
         })
         .await??;
 

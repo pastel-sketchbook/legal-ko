@@ -23,7 +23,40 @@ use vibe_rust::realtime::{RealtimeConfig, RealtimeTts, SynthesisResult};
 /// Default Korean voice preset (man).
 pub const DEFAULT_KOREAN_VOICE: &str = "kr-Spk1_man";
 
-/// Default CFG scale for synthesis.
+/// TTS quality/speed profile.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TtsProfile {
+    /// Fast mode: cfg_scale=1.0 for ~2x diffusion speedup, shorter prebuffer (1s).
+    Fast,
+    /// Balanced mode: cfg_scale=1.5 (original quality), longer prebuffer (5s).
+    Balanced,
+}
+
+impl TtsProfile {
+    /// Get the CFG scale for this profile.
+    pub fn cfg_scale(self) -> f32 {
+        match self {
+            Self::Fast => 1.0,
+            Self::Balanced => 1.5,
+        }
+    }
+
+    /// Get the prebuffer duration in seconds for streaming playback.
+    pub fn prebuffer_secs(self) -> f64 {
+        match self {
+            Self::Fast => 1.0,
+            Self::Balanced => 5.0,
+        }
+    }
+}
+
+impl Default for TtsProfile {
+    fn default() -> Self {
+        Self::Balanced
+    }
+}
+
+/// Default CFG scale for synthesis (balanced profile).
 pub const DEFAULT_CFG_SCALE: f32 = 1.5;
 
 /// Mono channel count for rodio.
@@ -263,7 +296,7 @@ pub fn synthesize_and_play_segments(
     project_root: &Path,
     segments: &[String],
     speaker: &str,
-    cfg_scale: f32,
+    profile: TtsProfile,
 ) -> Result<PlaybackStats> {
     if segments.is_empty() {
         anyhow::bail!("No text segments to speak");
@@ -275,6 +308,8 @@ pub fn synthesize_and_play_segments(
     let device_sink =
         DeviceSinkBuilder::open_default_sink().context("Failed to open audio output device")?;
     let player = Player::connect_new(device_sink.mixer());
+
+    let cfg_scale = profile.cfg_scale();
 
     let mut total_duration = 0.0_f64;
     let mut total_gen_time = 0.0_f64;
@@ -318,27 +353,20 @@ pub fn synthesize_and_play_segments(
     })
 }
 
-/// Seconds of audio to accumulate before starting playback.
-///
-/// This head-start buffer absorbs uneven chunk arrival from the TTS engine
-/// so the rodio player never starves between synthesis bursts.  Five seconds
-/// is generous enough to cover worst-case generation jitter on M1 even in
-/// debug builds, while still feeling responsive (<5 s initial delay).
-const PREBUFFER_SECS: usize = 5;
-
 /// Load the TTS engine and synthesize + play in one call (for CLI).
 ///
-/// Uses streaming synthesis with a **pre-buffer**: the first ~[`PREBUFFER_SECS`]
-/// seconds of audio are accumulated in memory before anything is sent to the
-/// audio device.  Once the buffer is full it is flushed as a single large
-/// source, and subsequent chunks are appended immediately.  This eliminates
-/// the play-pause-play stutter caused by the player draining faster than the
-/// next chunk arrives.
+/// Uses streaming synthesis with a **pre-buffer**: the first ~N seconds of audio
+/// are accumulated in memory before anything is sent to the audio device.
+/// Once the buffer is full it is flushed as a single large source, and
+/// subsequent chunks are appended immediately.  This eliminates the play-pause-play
+/// stutter caused by the player draining faster than the next chunk arrives.
+///
+/// The prebuffer duration is determined by `profile`.
 pub fn synthesize_and_play(
     project_root: &Path,
     text: &str,
     speaker: &str,
-    cfg_scale: f32,
+    profile: TtsProfile,
 ) -> Result<SynthesisResult> {
     let handle = new_engine_handle();
     load_engine(&handle, project_root)?;
@@ -347,7 +375,9 @@ pub fn synthesize_and_play(
         DeviceSinkBuilder::open_default_sink().context("Failed to open audio output device")?;
     let player = Player::connect_new(device_sink.mixer());
 
-    let prebuffer_threshold = OUTPUT_SR as usize * PREBUFFER_SECS;
+    let prebuffer_secs = profile.prebuffer_secs();
+    let cfg_scale = profile.cfg_scale();
+    let prebuffer_threshold = (OUTPUT_SR as f64 * prebuffer_secs) as usize;
     let mut prebuffer: Vec<f32> = Vec::with_capacity(prebuffer_threshold + 48_000);
     let mut flushed = false;
 

@@ -80,6 +80,10 @@ pub enum Message {
         articles_audio: Vec<Vec<f32>>,
         article_indices: Vec<usize>,
     },
+    /// Streaming playback started (prebuffer flushed).
+    TtsPlaybackStarted,
+    /// Streaming synthesis completed successfully.
+    TtsSynthesisComplete,
     /// Meilisearch warmup completed.
     MeiliReady,
     /// Meilisearch warmup failed.
@@ -150,6 +154,8 @@ pub struct App {
     // TTS
     pub tts_state: TtsState,
     pub tts_engine: TtsEngineHandle,
+    /// TTS quality/speed profile (Fast=cfg 1.0, Balanced=cfg 1.5).
+    pub tts_profile: tts::TtsProfile,
     /// Index of the article currently being spoken (into `detail_articles`).
     pub tts_current_article: Option<usize>,
     /// Queue of article indices remaining to be spoken (for `R` read-all mode).
@@ -215,6 +221,7 @@ impl App {
             theme_index,
             tts_state: TtsState::Unloaded,
             tts_engine: tts::new_engine_handle(),
+            tts_profile: tts::TtsProfile::default(),
             tts_current_article: None,
             tts_article_queue: VecDeque::new(),
             tts_device_sink: None,
@@ -250,6 +257,19 @@ impl App {
             self.detail_lines_count = lines.len();
             self.detail_rendered_lines = lines;
         }
+    }
+
+    /// Toggle TTS profile between Fast (cfg=1.0, 1s prebuffer) and Balanced (cfg=1.5, 5s prebuffer).
+    pub fn toggle_tts_profile(&mut self) {
+        self.tts_profile = match self.tts_profile {
+            tts::TtsProfile::Fast => tts::TtsProfile::Balanced,
+            tts::TtsProfile::Balanced => tts::TtsProfile::Fast,
+        };
+        let profile_name = match self.tts_profile {
+            tts::TtsProfile::Fast => "Fast",
+            tts::TtsProfile::Balanced => "Balanced",
+        };
+        self.status_message = Some(format!("TTS profile: {}", profile_name));
     }
 
     /// Start fetching metadata in background
@@ -297,6 +317,8 @@ impl App {
             }
             Message::LawContentLoaded { id, content } => {
                 self.on_law_content_loaded(&id, &content);
+                // Prewarm TTS engine in background so it's ready when user wants to speak
+                self.ensure_tts_prewarmed();
             }
             Message::LawContentError { id, error } => {
                 self.detail_loading = false;
@@ -349,12 +371,9 @@ impl App {
                 }
                 // If we have a player, append audio; otherwise start fresh
                 if let Some(ref player) = self.tts_player {
-                    for samples in &articles_audio {
-                        let source = rodio::buffer::SamplesBuffer::new(
-                            CHANNELS,
-                            SAMPLE_RATE,
-                            samples.clone(),
-                        );
+                    for samples in articles_audio {
+                        let source =
+                            rodio::buffer::SamplesBuffer::new(CHANNELS, SAMPLE_RATE, samples);
                         player.append(source);
                     }
                 } else if let Ok(sink) = DeviceSinkBuilder::open_default_sink() {
@@ -382,6 +401,16 @@ impl App {
                 self.tts_buffering = false;
                 self.status_message = Some(format!("TTS error: {err}"));
                 error!("TTS synthesis failed: {err}");
+            }
+            Message::TtsPlaybackStarted => {
+                self.tts_buffering = false;
+                self.tts_state = TtsState::Playing;
+                self.status_message = Some("Playing...".to_string());
+                debug!("Streaming playback started");
+            }
+            Message::TtsSynthesisComplete => {
+                // Streaming synthesis finished; playback continues until queue drains
+                debug!("Streaming synthesis complete");
             }
             Message::MeiliReady => {
                 self.meili_ready = true;
@@ -879,6 +908,34 @@ impl App {
         }
     }
 
+    /// Silently preload the TTS engine in the background if not already loaded.
+    /// Unlike ensure_tts_loaded(), this doesn't show loading messages to the user.
+    fn ensure_tts_prewarmed(&mut self) {
+        match self.tts_state {
+            TtsState::Unloaded | TtsState::Error => {
+                self.tts_state = TtsState::Loading;
+                let handle = self.tts_engine.clone();
+                let tx = self.msg_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    tts::with_suppressed_output(|| {
+                        match tts::load_engine(
+                            &handle,
+                            &std::env::current_dir().unwrap_or("/tmp".into()),
+                        ) {
+                            Ok(_) => {
+                                let _ = tx.send(Message::TtsEngineLoaded);
+                            }
+                            Err(e) => {
+                                let _ = tx.send(Message::TtsEngineError(format!("{e:#}")));
+                            }
+                        }
+                    });
+                });
+            }
+            _ => {} // Already loading, ready, synthesizing, or playing
+        }
+    }
+
     /// Speak the current article (제X조 + its paragraphs).
     /// Auto-scrolls to the article and highlights it.
     pub fn speak_article(&mut self) {
@@ -990,42 +1047,98 @@ impl App {
         self.start_synthesis_batch(articles);
     }
 
-    /// Synthesize a single text using batch (non-streaming) mode.
+    /// Synthesize a single text using streaming mode for immediate playback.
     ///
-    /// The entire text is synthesized before playback begins, producing
-    /// gapless audio with no vocoder boundary artefacts.
+    /// Audio playback begins after a short prebuffer (determined by tts_profile),
+    /// then chunks are appended as they arrive. Much better perceived latency
+    /// than waiting for full synthesis.
     fn start_synthesis(&mut self, text: String, label: String) {
         self.tts_state = TtsState::Synthesizing;
         self.status_message = Some(format!("Synthesizing: {label}..."));
         self.tts_buffering = true;
 
-        let handle = self.tts_engine.clone();
-        let tx = self.msg_tx.clone();
-        tokio::task::spawn_blocking(move || {
-            match tts::synthesize(
-                &handle,
-                &text,
-                tts::DEFAULT_KOREAN_VOICE,
-                tts::DEFAULT_CFG_SCALE,
-            ) {
-                Ok(result) => {
-                    let _ = tx.send(Message::TtsBatchReady {
-                        articles_audio: vec![result.audio],
-                        article_indices: vec![],
-                    });
-                }
-                Err(e) => {
-                    let _ = tx.send(Message::TtsSynthesisError(format!("{e:#}")));
-                }
+        // Open audio device and create player
+        match rodio::DeviceSinkBuilder::open_default_sink() {
+            Ok(device_sink) => {
+                let player = std::sync::Arc::new(rodio::Player::connect_new(device_sink.mixer()));
+                self.tts_device_sink = Some(device_sink);
+                self.tts_player = Some(player.clone());
+
+                let handle = self.tts_engine.clone();
+                let tx = self.msg_tx.clone();
+                let cfg_scale = self.tts_profile.cfg_scale();
+                let prebuffer_secs = self.tts_profile.prebuffer_secs();
+
+                tokio::task::spawn_blocking(move || {
+                    let prebuffer_threshold = (OUTPUT_SR as f64 * prebuffer_secs) as usize;
+                    let mut prebuffer: Vec<f32> = Vec::with_capacity(prebuffer_threshold + 48_000);
+                    let mut flushed = false;
+
+                    let result = tts::synthesize_streaming(
+                        &handle,
+                        &text,
+                        tts::DEFAULT_KOREAN_VOICE,
+                        cfg_scale,
+                        |chunk| {
+                            if !flushed {
+                                // Accumulate until we have enough runway
+                                prebuffer.extend_from_slice(chunk);
+                                if prebuffer.len() >= prebuffer_threshold {
+                                    let drained = std::mem::take(&mut prebuffer);
+                                    let source = rodio::buffer::SamplesBuffer::new(
+                                        CHANNELS,
+                                        SAMPLE_RATE,
+                                        drained,
+                                    );
+                                    player.append(source);
+                                    player.play();
+                                    flushed = true;
+                                    let _ = tx.send(Message::TtsPlaybackStarted);
+                                }
+                            } else {
+                                // Already playing — feed chunks directly
+                                let source = rodio::buffer::SamplesBuffer::new(
+                                    CHANNELS,
+                                    SAMPLE_RATE,
+                                    chunk.to_vec(),
+                                );
+                                player.append(source);
+                            }
+                        },
+                    );
+
+                    match result {
+                        Ok(_) => {
+                            // Short text that never hit the threshold — flush whatever we collected
+                            if !flushed && !prebuffer.is_empty() {
+                                let source = rodio::buffer::SamplesBuffer::new(
+                                    CHANNELS,
+                                    SAMPLE_RATE,
+                                    prebuffer,
+                                );
+                                player.append(source);
+                                player.play();
+                            }
+                            // Notify completion
+                            let _ = tx.send(Message::TtsSynthesisComplete);
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Message::TtsSynthesisError(format!("{e:#}")));
+                        }
+                    }
+                });
             }
-        });
+            Err(e) => {
+                self.status_message = Some(format!("Audio device error: {e:#}"));
+                self.tts_state = TtsState::Ready;
+            }
+        }
     }
 
-    /// Synthesize multiple articles using batch (non-streaming) mode.
+    /// Synthesize multiple articles using hybrid streaming+batch mode.
     ///
-    /// Each article is fully synthesized before the next begins.  Audio is
-    /// appended to the same player so playback of earlier articles can begin
-    /// while later ones are still being generated.
+    /// The FIRST article uses streaming synthesis (quick initial playback),
+    /// then remaining articles use batch synthesis for gapless transitions.
     ///
     /// Scroll / highlight advances are **timed to actual playback**, not to
     /// synthesis completion.  After each article is synthesized we know its
@@ -1046,10 +1159,11 @@ impl App {
 
                 let handle = self.tts_engine.clone();
                 let tx = self.msg_tx.clone();
+                let cfg_scale = self.tts_profile.cfg_scale();
+                let prebuffer_secs = self.tts_profile.prebuffer_secs();
+
                 tokio::task::spawn_blocking(move || {
                     let total = articles.len();
-                    // Collect article indices upfront so we can peek ahead
-                    // after `articles` is consumed by the iterator.
                     let article_indices: Vec<usize> =
                         articles.iter().map(|(idx, _)| *idx).collect();
 
@@ -1057,57 +1171,138 @@ impl App {
                     let mut accumulated_secs = 0.0_f64;
 
                     for (i, (_article_idx, text)) in articles.into_iter().enumerate() {
-                        match tts::synthesize(
-                            &handle,
-                            &text,
-                            tts::DEFAULT_KOREAN_VOICE,
-                            tts::DEFAULT_CFG_SCALE,
-                        ) {
-                            Ok(result) => {
-                                let article_duration = result.duration_secs;
-                                let source = rodio::buffer::SamplesBuffer::new(
-                                    CHANNELS,
-                                    SAMPLE_RATE,
-                                    result.audio,
-                                );
-                                player.append(source);
+                        if i == 0 {
+                            // FIRST article: stream with prebuffer for fast initial playback
+                            let prebuffer_threshold = (OUTPUT_SR as f64 * prebuffer_secs) as usize;
+                            let mut prebuffer: Vec<f32> =
+                                Vec::with_capacity(prebuffer_threshold + 48_000);
+                            let mut flushed = false;
 
-                                if i == 0 {
-                                    player.play();
-                                    playback_start = Some(Instant::now());
-                                    // Scroll to first article immediately
-                                    let _ = tx.send(Message::TtsArticleAdvanced {
-                                        article_idx: article_indices[0],
-                                    });
-                                }
-
-                                accumulated_secs += article_duration;
-
-                                // Schedule scroll to the NEXT article when this
-                                // one's audio finishes playing.
-                                if let Some(start) = playback_start
-                                    && i + 1 < total
-                                {
-                                    let next_article_idx = article_indices[i + 1];
-                                    let target_secs = accumulated_secs;
-                                    let tx_timer = tx.clone();
-                                    std::thread::spawn(move || {
-                                        let target = start + Duration::from_secs_f64(target_secs);
-                                        let now = Instant::now();
-                                        if target > now {
-                                            std::thread::sleep(target - now);
+                            match tts::synthesize_streaming(
+                                &handle,
+                                &text,
+                                tts::DEFAULT_KOREAN_VOICE,
+                                cfg_scale,
+                                |chunk| {
+                                    if !flushed {
+                                        prebuffer.extend_from_slice(chunk);
+                                        if prebuffer.len() >= prebuffer_threshold {
+                                            let drained = std::mem::take(&mut prebuffer);
+                                            let source = rodio::buffer::SamplesBuffer::new(
+                                                CHANNELS,
+                                                SAMPLE_RATE,
+                                                drained,
+                                            );
+                                            player.append(source);
+                                            player.play();
+                                            playback_start = Some(Instant::now());
+                                            flushed = true;
+                                            let _ = tx.send(Message::TtsPlaybackStarted);
+                                            let _ = tx.send(Message::TtsArticleAdvanced {
+                                                article_idx: article_indices[0],
+                                            });
                                         }
-                                        let _ = tx_timer.send(Message::TtsArticleAdvanced {
-                                            article_idx: next_article_idx,
+                                    } else {
+                                        let source = rodio::buffer::SamplesBuffer::new(
+                                            CHANNELS,
+                                            SAMPLE_RATE,
+                                            chunk.to_vec(),
+                                        );
+                                        player.append(source);
+                                    }
+                                },
+                            ) {
+                                Ok(result) => {
+                                    // Flush remaining prebuffer if text was too short
+                                    if !flushed && !prebuffer.is_empty() {
+                                        let source = rodio::buffer::SamplesBuffer::new(
+                                            CHANNELS,
+                                            SAMPLE_RATE,
+                                            prebuffer,
+                                        );
+                                        player.append(source);
+                                        player.play();
+                                        playback_start = Some(Instant::now());
+                                        let _ = tx.send(Message::TtsPlaybackStarted);
+                                        let _ = tx.send(Message::TtsArticleAdvanced {
+                                            article_idx: article_indices[0],
                                         });
-                                    });
-                                }
+                                    }
 
-                                info!("Batch article {}/{total} synthesized", i + 1);
+                                    accumulated_secs += result.duration_secs;
+
+                                    // Schedule scroll to second article
+                                    if let Some(start) = playback_start
+                                        && total > 1
+                                    {
+                                        let next_article_idx = article_indices[1];
+                                        let target_secs = accumulated_secs;
+                                        let tx_timer = tx.clone();
+                                        std::thread::spawn(move || {
+                                            let target =
+                                                start + Duration::from_secs_f64(target_secs);
+                                            let now = Instant::now();
+                                            if target > now {
+                                                std::thread::sleep(target - now);
+                                            }
+                                            let _ = tx_timer.send(Message::TtsArticleAdvanced {
+                                                article_idx: next_article_idx,
+                                            });
+                                        });
+                                    }
+
+                                    info!("Batch article 1/{total} synthesized (streaming)");
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(Message::TtsSynthesisError(format!("{e:#}")));
+                                    return;
+                                }
                             }
-                            Err(e) => {
-                                let _ = tx.send(Message::TtsSynthesisError(format!("{e:#}")));
-                                return;
+                        } else {
+                            // Remaining articles: batch synthesis
+                            match tts::synthesize(
+                                &handle,
+                                &text,
+                                tts::DEFAULT_KOREAN_VOICE,
+                                cfg_scale,
+                            ) {
+                                Ok(result) => {
+                                    let article_duration = result.duration_secs;
+                                    let source = rodio::buffer::SamplesBuffer::new(
+                                        CHANNELS,
+                                        SAMPLE_RATE,
+                                        result.audio,
+                                    );
+                                    player.append(source);
+
+                                    accumulated_secs += article_duration;
+
+                                    // Schedule scroll to the NEXT article
+                                    if let Some(start) = playback_start
+                                        && i + 1 < total
+                                    {
+                                        let next_article_idx = article_indices[i + 1];
+                                        let target_secs = accumulated_secs;
+                                        let tx_timer = tx.clone();
+                                        std::thread::spawn(move || {
+                                            let target =
+                                                start + Duration::from_secs_f64(target_secs);
+                                            let now = Instant::now();
+                                            if target > now {
+                                                std::thread::sleep(target - now);
+                                            }
+                                            let _ = tx_timer.send(Message::TtsArticleAdvanced {
+                                                article_idx: next_article_idx,
+                                            });
+                                        });
+                                    }
+
+                                    info!("Batch article {}/{total} synthesized", i + 1);
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(Message::TtsSynthesisError(format!("{e:#}")));
+                                    return;
+                                }
                             }
                         }
                     }

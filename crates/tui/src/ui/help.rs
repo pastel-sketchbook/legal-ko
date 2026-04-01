@@ -36,6 +36,7 @@ pub fn render_help(f: &mut Frame, theme: &Theme, area: Rect) {
         key_line(theme, "r", "Read current article aloud"),
         key_line(theme, "R", "Read full law aloud"),
         key_line(theme, "s", "Stop TTS playback"),
+        key_line(theme, "T", "Toggle TTS profile (Fast/Balanced)"),
         Line::from(""),
         header_line(theme, "Bookmarks"),
         key_line(theme, "B", "Toggle bookmark"),
