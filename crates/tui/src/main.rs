@@ -52,6 +52,10 @@ async fn main() -> Result<()> {
     //
     // Strategy: save a private copy of the terminal fd, permanently point
     // fd 1/2 at /dev/null, and have ratatui write through the private copy.
+    // SAFETY: We dup stdout/stderr file descriptors to preserve a private copy
+    // of the terminal fd, then redirect fd 1/2 to /dev/null so ONNX Runtime's
+    // background C++ threads cannot pollute the TUI. The dup'd fd is valid
+    // because stdout is open, and dup2 is safe with valid open fds.
     let (tty_fd, stdout_backup, stderr_backup) = unsafe {
         let tty = libc::dup(libc::STDOUT_FILENO);
         let out_bak = libc::dup(libc::STDOUT_FILENO);
@@ -70,7 +74,8 @@ async fn main() -> Result<()> {
         (tty, out_bak, err_bak)
     };
 
-    // Wrap the dup'd fd as a BufWriter<File> for ratatui
+    // SAFETY: `tty_fd` is a valid file descriptor obtained from `libc::dup` above.
+    // `from_raw_fd` takes ownership; we never use `tty_fd` again after this point.
     let tty_file = unsafe { std::fs::File::from_raw_fd(tty_fd) };
     let mut tty_write = BufWriter::new(tty_file);
 
@@ -89,7 +94,9 @@ async fn main() -> Result<()> {
     terminal.show_cursor()?;
     drop(terminal);
 
-    // Restore stdout/stderr so post-exit error messages are visible
+    // SAFETY: Restoring stdout/stderr from backup fds obtained via `libc::dup`
+    // earlier. Both backups are valid open fds (checked via >= 0 guard), and
+    // we close them immediately after dup2 to avoid leaking.
     unsafe {
         if stdout_backup >= 0 {
             libc::dup2(stdout_backup, libc::STDOUT_FILENO);
@@ -108,6 +115,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::unused_async)]
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<TermWriter>>) -> Result<()> {
     let mut app = App::new();
     app.start_loading();
@@ -179,10 +187,10 @@ fn handle_list_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         KeyCode::Char('g') | KeyCode::Home => app.list_top(),
         KeyCode::Char('G') | KeyCode::End => app.list_bottom(),
         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.list_page_down(page_size)
+            app.list_page_down(page_size);
         }
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.list_page_up(page_size)
+            app.list_page_up(page_size);
         }
         KeyCode::PageDown => app.list_page_down(page_size),
         KeyCode::PageUp => app.list_page_up(page_size),
@@ -196,10 +204,10 @@ fn handle_list_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         KeyCode::Char('T') => app.toggle_tts_profile(),
         KeyCode::Char('?') => app.popup = Popup::Help,
         KeyCode::Esc => {
-            if !app.search_query.is_empty() {
-                app.clear_search();
-            } else {
+            if app.search_query.is_empty() {
                 app.go_back();
+            } else {
+                app.clear_search();
             }
         }
         _ => {}
@@ -210,17 +218,16 @@ fn handle_detail_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
     let page_size = terminal_height.saturating_sub(2);
 
     match key.code {
-        KeyCode::Char('q') => app.go_back(),
-        KeyCode::Esc => app.go_back(),
+        KeyCode::Char('q') | KeyCode::Esc => app.go_back(),
         KeyCode::Char('j') | KeyCode::Down => app.detail_scroll_down(1),
         KeyCode::Char('k') | KeyCode::Up => app.detail_scroll_up(1),
         KeyCode::Char('g') | KeyCode::Home => app.detail_top(),
         KeyCode::Char('G') | KeyCode::End => app.detail_bottom(),
         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.detail_scroll_down(page_size)
+            app.detail_scroll_down(page_size);
         }
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.detail_scroll_up(page_size)
+            app.detail_scroll_up(page_size);
         }
         KeyCode::PageDown => app.detail_scroll_down(page_size),
         KeyCode::PageUp => app.detail_scroll_up(page_size),

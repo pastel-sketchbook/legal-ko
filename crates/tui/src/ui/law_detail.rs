@@ -36,20 +36,15 @@ fn render_detail_title(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let title = app
         .detail
         .as_ref()
-        .map(|d| d.entry.title.as_str())
-        .unwrap_or("Loading...");
+        .map_or("Loading...", |d| d.entry.title.as_str());
 
-    let bookmark_marker = app
-        .detail
-        .as_ref()
-        .map(|d| {
-            if app.bookmarks.is_bookmarked(&d.entry.id) {
-                " \u{2605}"
-            } else {
-                ""
-            }
-        })
-        .unwrap_or("");
+    let bookmark_marker = app.detail.as_ref().map_or("", |d| {
+        if app.bookmarks.is_bookmarked(&d.entry.id) {
+            " \u{2605}"
+        } else {
+            ""
+        }
+    });
 
     let title_style = styles::title_bar(theme);
 
@@ -105,8 +100,10 @@ fn render_detail_content(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)]
+    let scroll_y = u16::try_from(app.detail_scroll).unwrap_or(u16::MAX);
     let paragraph = Paragraph::new(lines)
-        .scroll((app.detail_scroll as u16, 0))
+        .scroll((scroll_y, 0))
         .wrap(Wrap { trim: false });
 
     f.render_widget(paragraph, area);
@@ -122,10 +119,10 @@ fn render_detail_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             String::new()
         };
 
-        let article_count = if !app.detail_articles.is_empty() {
-            format!("{} articles ", app.detail_articles.len())
-        } else {
+        let article_count = if app.detail_articles.is_empty() {
             String::new()
+        } else {
+            format!("{} articles ", app.detail_articles.len())
         };
 
         let tts_indicator = match app.tts_state {

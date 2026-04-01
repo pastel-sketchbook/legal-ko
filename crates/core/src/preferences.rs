@@ -55,6 +55,11 @@ impl Preferences {
     }
 
     /// Save preferences to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config directory cannot be created, serialization
+    /// fails, or the file cannot be written.
     pub fn save(&self) -> Result<()> {
         let path = Self::path()?;
         if let Some(parent) = path.parent() {

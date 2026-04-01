@@ -1,6 +1,7 @@
 use crate::models::ArticleRef;
 
 /// Strip YAML frontmatter delimited by --- ... ---
+#[must_use]
 pub fn strip_frontmatter(raw: &str) -> &str {
     if !raw.starts_with("---") {
         return raw;
@@ -20,6 +21,7 @@ pub fn strip_frontmatter(raw: &str) -> &str {
 /// Returns a list of `ArticleRef` with the label and the line index
 /// within the stripped content (matching the line ordering that a
 /// renderer would produce).
+#[must_use]
 pub fn extract_articles(raw: &str) -> Vec<ArticleRef> {
     let content = strip_frontmatter(raw);
     let mut articles = Vec::new();
@@ -64,6 +66,7 @@ fn strip_markdown_line(line: &str) -> String {
 ///
 /// The `article_index` corresponds to the index into the list returned
 /// by [`extract_articles`].
+#[must_use]
 pub fn extract_article_text(raw: &str, article_index: usize) -> Option<String> {
     let articles = extract_articles(raw);
     let article = articles.get(article_index)?;
@@ -79,8 +82,7 @@ pub fn extract_article_text(raw: &str, article_index: usize) -> Option<String> {
     // Find the end: next article heading, or next major heading, or end of content
     let end = articles
         .get(article_index + 1)
-        .map(|next| next.line_index)
-        .unwrap_or(lines.len());
+        .map_or(lines.len(), |next| next.line_index);
 
     let mut result = String::new();
     for &line in &lines[start..end] {
@@ -99,6 +101,7 @@ pub fn extract_article_text(raw: &str, article_index: usize) -> Option<String> {
 /// Extract plain text for the entire law content, stripped of markdown formatting.
 ///
 /// Empty lines are collapsed; frontmatter is removed.
+#[must_use]
 pub fn extract_full_text(raw: &str) -> String {
     let content = strip_frontmatter(raw);
     let mut result = String::new();

@@ -19,7 +19,7 @@ pub struct MetadataEntry {
     pub status: String,
 }
 
-/// Metadata index: 법령MST → MetadataEntry
+/// Metadata index: 법령MST → `MetadataEntry`
 pub type MetadataIndex = HashMap<String, MetadataEntry>;
 
 /// A single law entry for display in the list view

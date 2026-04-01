@@ -4,6 +4,7 @@ use tracing::debug;
 use crate::models::LawEntry;
 
 /// Fallback substring search on law titles. Returns matching IDs in input order.
+#[must_use]
 pub fn naive_search_ids(entries: &[LawEntry], query: &str, limit: usize) -> Vec<String> {
     let query_lower = query.to_lowercase();
     entries
@@ -51,6 +52,7 @@ impl Searcher {
     }
 
     /// Returns `true` if a Meilisearch backend is configured.
+    #[must_use]
     pub fn is_enabled(&self) -> bool {
         #[cfg(feature = "meilisearch")]
         {
@@ -66,6 +68,12 @@ impl Searcher {
     ///
     /// No-op if the backend is disabled. Safe to call on every startup — it
     /// replaces documents in-place using the primary key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the Meilisearch backend is configured but the
+    /// indexing request fails.
+    #[allow(clippy::unused_async)]
     pub async fn warmup(&self, entries: &[LawEntry]) -> Result<()> {
         #[cfg(feature = "meilisearch")]
         {
@@ -81,6 +89,11 @@ impl Searcher {
     ///
     /// Returns `Err` only if the Meilisearch backend is configured but the
     /// request fails. Returns `Ok(vec![])` if the backend is disabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the Meilisearch search request fails.
+    #[allow(clippy::unused_async)]
     pub async fn search_ids(&self, query: &str, limit: usize) -> Result<Vec<String>> {
         #[cfg(feature = "meilisearch")]
         {
@@ -116,8 +129,7 @@ impl MeiliBackend {
         let index_uid =
             std::env::var(Self::ENV_INDEX).unwrap_or_else(|_| Self::DEFAULT_INDEX.to_string());
 
-        let client = meilisearch_sdk::client::Client::new(&url, api_key.as_deref())
-            .expect("Failed to create Meilisearch client");
+        let client = meilisearch_sdk::client::Client::new(&url, api_key.as_deref()).ok()?;
 
         Some(Self {
             client,

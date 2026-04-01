@@ -393,7 +393,6 @@ pub const THEMES: &[Theme] = &[
 /// Look up a theme index by name (case-sensitive). Returns 0 (Default)
 /// if no theme matches.
 #[must_use]
-#[allow(dead_code)]
 pub fn theme_index_by_name(name: &str) -> usize {
     THEMES.iter().position(|t| t.name == name).unwrap_or(0)
 }

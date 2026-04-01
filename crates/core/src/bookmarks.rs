@@ -44,7 +44,12 @@ impl Bookmarks {
         Ok(bookmarks)
     }
 
-    /// Save bookmarks to disk
+    /// Save bookmarks to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config directory cannot be created, serialization
+    /// fails, or the file cannot be written.
     pub fn save(&self) -> Result<()> {
         let path = Self::path()?;
         if let Some(parent) = path.parent() {
@@ -71,6 +76,7 @@ impl Bookmarks {
     }
 
     /// Check if a law is bookmarked
+    #[must_use]
     pub fn is_bookmarked(&self, id: &str) -> bool {
         self.ids.contains(id)
     }

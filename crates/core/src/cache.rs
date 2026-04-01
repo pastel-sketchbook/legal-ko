@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
+use std::fmt::Write;
 use std::path::PathBuf;
 use tracing::debug;
 
@@ -14,10 +15,17 @@ fn cache_dir() -> Result<PathBuf> {
 /// Generate a cache key from a file path
 fn cache_key(path: &str) -> String {
     let hash = Sha256::digest(path.as_bytes());
-    hash.iter().map(|b| format!("{b:02x}")).collect()
+    hash.iter().fold(String::new(), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    })
 }
 
-/// Try to read cached content for a given path
+/// Try to read cached content for a given path.
+///
+/// # Errors
+///
+/// Returns an error if the cache file exists but cannot be read.
 pub fn read_cache(path: &str) -> Result<Option<String>> {
     let file = cache_dir()?.join(cache_key(path));
     if file.exists() {
@@ -31,7 +39,12 @@ pub fn read_cache(path: &str) -> Result<Option<String>> {
     }
 }
 
-/// Write content to cache for a given path
+/// Write content to cache for a given path.
+///
+/// # Errors
+///
+/// Returns an error if the cache directory cannot be created or the file
+/// cannot be written.
 pub fn write_cache(path: &str, content: &str) -> Result<()> {
     let dir = cache_dir()?;
     std::fs::create_dir_all(&dir)

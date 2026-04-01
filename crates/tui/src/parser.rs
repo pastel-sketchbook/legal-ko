@@ -6,7 +6,7 @@ use legal_ko_core::models::ArticleRef;
 
 /// Parse markdown content into styled ratatui Lines and extract article references.
 ///
-/// Returns (rendered_lines, articles).
+/// Returns (`rendered_lines`, articles).
 pub fn parse_law_markdown(raw: &str, theme: &Theme) -> (Vec<Line<'static>>, Vec<ArticleRef>) {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut articles: Vec<ArticleRef> = Vec::new();
@@ -62,9 +62,11 @@ pub fn parse_law_markdown(raw: &str, theme: &Theme) -> (Vec<Line<'static>>, Vec<
                     .fg(theme.heading_major)
                     .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             )]));
-        } else if text_line.starts_with("**") && text_line.ends_with("**") {
+        } else if let Some(inner) = text_line
+            .strip_prefix("**")
+            .and_then(|s| s.strip_suffix("**"))
+        {
             // Bold paragraph markers like **①**
-            let inner = &text_line[2..text_line.len() - 2];
             lines.push(Line::from(vec![Span::styled(
                 inner.to_string(),
                 Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),

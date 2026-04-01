@@ -22,7 +22,7 @@ use tracing::{debug, error, info, warn};
 /// Mono channel count for rodio.
 const CHANNELS: NonZero<u16> = NonZero::new(1).unwrap();
 
-/// Sample rate for rodio (must match OUTPUT_SR = 24000).
+/// Sample rate for rodio (must match `OUTPUT_SR` = 24000).
 const SAMPLE_RATE: NonZero<u32> = NonZero::new(OUTPUT_SR).unwrap();
 
 // ── Prebuffer helper ──────────────────────────────────────────
@@ -42,7 +42,8 @@ struct PrebufferStreamer {
 
 impl PrebufferStreamer {
     fn new(player: Arc<Player>, tx: mpsc::UnboundedSender<Message>, prebuffer_secs: f64) -> Self {
-        let prebuffer_threshold = (OUTPUT_SR as f64 * prebuffer_secs) as usize;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let prebuffer_threshold = (f64::from(OUTPUT_SR) * prebuffer_secs) as usize;
         Self {
             player,
             tx,
@@ -56,7 +57,10 @@ impl PrebufferStreamer {
     /// the initial flush (caller can perform additional actions like setting
     /// playback start time).
     fn feed(&mut self, chunk: &[f32]) -> bool {
-        if !self.flushed {
+        if self.flushed {
+            let source = rodio::buffer::SamplesBuffer::new(CHANNELS, SAMPLE_RATE, chunk.to_vec());
+            self.player.append(source);
+        } else {
             self.prebuffer.extend_from_slice(chunk);
             if self.prebuffer.len() >= self.prebuffer_threshold {
                 let drained = std::mem::take(&mut self.prebuffer);
@@ -67,9 +71,6 @@ impl PrebufferStreamer {
                 let _ = self.tx.send(Message::TtsPlaybackStarted);
                 return true;
             }
-        } else {
-            let source = rodio::buffer::SamplesBuffer::new(CHANNELS, SAMPLE_RATE, chunk.to_vec());
-            self.player.append(source);
         }
         false
     }
@@ -130,7 +131,6 @@ enum PendingTtsAction {
 
 // ── Messages (background → main) ─────────────────────────────
 
-#[allow(dead_code)]
 pub enum Message {
     MetadataLoaded(MetadataIndex),
     MetadataError(String),
@@ -145,6 +145,7 @@ pub enum Message {
     TtsEngineLoaded,
     TtsEngineError(String),
     /// Batch synthesis produced audio ready for playback.
+    #[allow(dead_code)]
     TtsBatchReady {
         articles_audio: Vec<Vec<f32>>,
         article_indices: Vec<usize>,
@@ -173,6 +174,7 @@ pub enum Message {
 
 // ── App state ─────────────────────────────────────────────────
 
+#[allow(clippy::struct_excessive_bools)]
 pub struct App {
     pub view: View,
     pub input_mode: InputMode,
@@ -204,7 +206,7 @@ pub struct App {
     pub detail_lines_count: usize,
     pub detail_articles: Vec<ArticleRef>,
     pub detail_loading: bool,
-    /// Cached rendered lines from parse_law_markdown; invalidated on content/theme change.
+    /// Cached rendered lines from `parse_law_markdown`; invalidated on content/theme change.
     pub detail_rendered_lines: Vec<Line<'static>>,
 
     // Bookmarks
@@ -353,6 +355,7 @@ impl App {
     }
 
     /// Process a message from background tasks
+    #[allow(clippy::too_many_lines)]
     pub fn handle_message(&mut self, msg: Message) {
         match msg {
             Message::MetadataLoaded(index) => {
@@ -602,7 +605,7 @@ impl App {
         if self.filtered_indices.is_empty() {
             self.list_selected = 0;
         } else if self.list_selected >= self.filtered_indices.len() {
-            self.list_selected = self.filtered_indices.len() - 1;
+            self.list_selected = self.filtered_indices.len().saturating_sub(1);
         }
     }
 
@@ -701,7 +704,7 @@ impl App {
         let (lines, articles) = crate::parser::parse_law_markdown(content, self.theme());
         self.detail_lines_count = lines.len();
         self.detail_rendered_lines = lines;
-        self.detail_articles = articles.clone();
+        self.detail_articles.clone_from(&articles);
         self.detail = Some(LawDetail {
             entry,
             raw_markdown: content.to_string(),
@@ -716,7 +719,8 @@ impl App {
     // ── List navigation ───────────────────────────────────────
 
     pub fn list_move_down(&mut self) {
-        if !self.filtered_indices.is_empty() && self.list_selected < self.filtered_indices.len() - 1
+        if !self.filtered_indices.is_empty()
+            && self.list_selected < self.filtered_indices.len().saturating_sub(1)
         {
             self.list_selected += 1;
         }
@@ -732,7 +736,8 @@ impl App {
         if self.filtered_indices.is_empty() {
             return;
         }
-        self.list_selected = (self.list_selected + page_size).min(self.filtered_indices.len() - 1);
+        self.list_selected =
+            (self.list_selected + page_size).min(self.filtered_indices.len().saturating_sub(1));
     }
 
     pub fn list_page_up(&mut self, page_size: usize) {
@@ -745,7 +750,7 @@ impl App {
 
     pub fn list_bottom(&mut self) {
         if !self.filtered_indices.is_empty() {
-            self.list_selected = self.filtered_indices.len() - 1;
+            self.list_selected = self.filtered_indices.len().saturating_sub(1);
         }
     }
 
@@ -807,7 +812,7 @@ impl App {
         let id = match self.view {
             View::List => self.selected_entry().map(|e| e.id.clone()),
             View::Detail => self.detail.as_ref().map(|d| d.entry.id.clone()),
-            _ => None,
+            View::Loading => None,
         };
 
         if let Some(id) = id {
@@ -884,7 +889,7 @@ impl App {
 
     pub fn popup_move_down(&mut self) {
         let max = self.popup_items_count();
-        if max > 0 && self.popup_selected < max - 1 {
+        if max > 0 && self.popup_selected < max.saturating_sub(1) {
             self.popup_selected += 1;
         }
     }
@@ -943,10 +948,7 @@ impl App {
                 self.detail_scroll = 0;
                 self.detail_rendered_lines.clear();
             }
-            View::List => {
-                self.should_quit = true;
-            }
-            View::Loading => {
+            View::List | View::Loading => {
                 self.should_quit = true;
             }
         }
@@ -980,7 +982,7 @@ impl App {
     }
 
     /// Silently preload the TTS engine in the background if not already loaded.
-    /// Unlike ensure_tts_loaded(), this doesn't show loading messages to the user.
+    /// Unlike `ensure_tts_loaded()`, this doesn't show loading messages to the user.
     fn ensure_tts_prewarmed(&mut self) {
         match self.tts_state {
             TtsState::Unloaded | TtsState::Error => {
@@ -993,7 +995,7 @@ impl App {
                             &handle,
                             &std::env::current_dir().unwrap_or("/tmp".into()),
                         ) {
-                            Ok(_) => {
+                            Ok(()) => {
                                 let _ = tx.send(Message::TtsEngineLoaded);
                             }
                             Err(e) => {
@@ -1040,12 +1042,9 @@ impl App {
             .rposition(|a| a.line_index <= self.detail_scroll)
             .unwrap_or(0);
 
-        let text = match parser::extract_article_text(&detail.raw_markdown, article_idx) {
-            Some(t) => t,
-            None => {
-                self.status_message = Some("Could not extract article text".to_string());
-                return;
-            }
+        let Some(text) = parser::extract_article_text(&detail.raw_markdown, article_idx) else {
+            self.status_message = Some("Could not extract article text".to_string());
+            return;
         };
 
         // Single article — no queue
@@ -1054,7 +1053,7 @@ impl App {
         self.detail_scroll = self.detail_articles[article_idx].line_index;
 
         let label = self.detail_articles[article_idx].label.clone();
-        self.start_synthesis(text, label);
+        self.start_synthesis(text, &label);
     }
 
     /// Speak all articles starting from the current scroll position.
@@ -1088,7 +1087,7 @@ impl App {
             self.tts_article_queue.clear();
             self.tts_current_article = None;
             let title = detail.entry.title.clone();
-            self.start_synthesis(text, title);
+            self.start_synthesis(text, &title);
             return;
         }
 
@@ -1120,10 +1119,10 @@ impl App {
 
     /// Synthesize a single text using streaming mode for immediate playback.
     ///
-    /// Audio playback begins after a short prebuffer (determined by tts_profile),
+    /// Audio playback begins after a short prebuffer (determined by `tts_profile`),
     /// then chunks are appended as they arrive. Much better perceived latency
     /// than waiting for full synthesis.
-    fn start_synthesis(&mut self, text: String, label: String) {
+    fn start_synthesis(&mut self, text: String, label: &str) {
         self.tts_state = TtsState::Synthesizing;
         self.status_message = Some(format!("Synthesizing: {label}..."));
         self.tts_buffering = true;
@@ -1182,6 +1181,7 @@ impl App {
     /// until the cumulative playback clock reaches the boundary, then sends
     /// `TtsArticleAdvanced`.  This keeps the scroll in sync with what the
     /// user actually hears, even when synthesis runs faster than real-time.
+    #[allow(clippy::too_many_lines)]
     fn start_synthesis_batch(&mut self, articles: Vec<(usize, String)>) {
         self.tts_state = TtsState::Synthesizing;
         self.status_message = Some("Synthesizing...".to_string());
@@ -1363,8 +1363,7 @@ impl App {
         let end = self
             .detail_articles
             .get(article_idx + 1)
-            .map(|a| a.line_index)
-            .unwrap_or(self.detail_lines_count);
+            .map_or(self.detail_lines_count, |a| a.line_index);
         Some((start, end))
     }
 }

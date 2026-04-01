@@ -5,7 +5,11 @@ use crate::models::MetadataIndex;
 
 const BASE_URL: &str = "https://raw.githubusercontent.com/9bow/legalize-kr/main";
 
-/// Fetch the metadata index from GitHub
+/// Fetch the metadata index from GitHub.
+///
+/// # Errors
+///
+/// Returns an error if the HTTP request fails or the response cannot be parsed.
 pub async fn fetch_metadata() -> Result<MetadataIndex> {
     let url = format!("{BASE_URL}/metadata.json");
     info!("Fetching metadata from {url}");
@@ -25,7 +29,11 @@ pub async fn fetch_metadata() -> Result<MetadataIndex> {
     Ok(index)
 }
 
-/// Fetch a single law file's raw markdown content from GitHub
+/// Fetch a single law file's raw markdown content from GitHub.
+///
+/// # Errors
+///
+/// Returns an error if the HTTP request fails or the response body cannot be read.
 pub async fn fetch_law_content(path: &str) -> Result<String> {
     let url = format!("{BASE_URL}/{path}");
     debug!("Fetching law content from {url}");

@@ -79,7 +79,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Read a law aloud using TTS (VibeVoice).
+    /// Read a law aloud using TTS (`VibeVoice`).
     ///
     /// Build with --release for smooth playback (debug builds are 10-50x slower).
     Speak {
@@ -94,7 +94,7 @@ enum Command {
         #[arg(long, default_value = "kr-spk0_woman")]
         voice: String,
 
-        /// Use fast synthesis profile (cfg_scale=1.0, 1s prebuffer)
+        /// Use fast synthesis profile (`cfg_scale`=1.0, 1s prebuffer)
         #[arg(long)]
         fast: bool,
 
@@ -150,8 +150,8 @@ async fn load_entries() -> Result<Vec<LawEntry>> {
 
 fn apply_filters<'a>(
     entries: &'a [LawEntry],
-    category: &Option<String>,
-    department: &Option<String>,
+    category: Option<&str>,
+    department: Option<&str>,
     bookmarks_only: bool,
     bookmarks: &Bookmarks,
 ) -> Vec<&'a LawEntry> {
@@ -159,12 +159,12 @@ fn apply_filters<'a>(
         .iter()
         .filter(|e| {
             if let Some(cat) = category
-                && &e.category != cat
+                && e.category != cat
             {
                 return false;
             }
             if let Some(dept) = department
-                && !e.departments.contains(dept)
+                && !e.departments.iter().any(|d| d == dept)
             {
                 return false;
             }
@@ -176,7 +176,7 @@ fn apply_filters<'a>(
         .collect()
 }
 
-fn print_entries(entries: &[&LawEntry], as_json: bool) {
+fn print_entries(entries: &[&LawEntry], as_json: bool) -> Result<()> {
     if as_json {
         let items: Vec<_> = entries
             .iter()
@@ -192,7 +192,7 @@ fn print_entries(entries: &[&LawEntry], as_json: bool) {
                 })
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&items).unwrap());
+        println!("{}", serde_json::to_string_pretty(&items)?);
     } else {
         for e in entries {
             println!(
@@ -204,6 +204,7 @@ fn print_entries(entries: &[&LawEntry], as_json: bool) {
             );
         }
     }
+    Ok(())
 }
 
 async fn cmd_list(
@@ -215,11 +216,17 @@ async fn cmd_list(
 ) -> Result<()> {
     let entries = load_entries().await?;
     let bm = Bookmarks::load();
-    let mut filtered = apply_filters(&entries, &category, &department, bookmarks_only, &bm);
+    let mut filtered = apply_filters(
+        &entries,
+        category.as_deref(),
+        department.as_deref(),
+        bookmarks_only,
+        &bm,
+    );
     if let Some(n) = limit {
         filtered.truncate(n);
     }
-    print_entries(&filtered, as_json);
+    print_entries(&filtered, as_json)?;
     Ok(())
 }
 
@@ -247,7 +254,7 @@ async fn cmd_search(query: &str, as_json: bool, limit: Option<usize>) -> Result<
         .filter_map(|id| by_id.get(id.as_str()).copied())
         .collect();
 
-    print_entries(&results, as_json);
+    print_entries(&results, as_json)?;
     Ok(())
 }
 
@@ -259,13 +266,12 @@ async fn cmd_show(id: &str, as_json: bool) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Law not found: {id}"))?;
 
     // Try cache first, then fetch
-    let content = match cache::read_cache(&entry.path)? {
-        Some(c) => c,
-        None => {
-            let c = client::fetch_law_content(&entry.path).await?;
-            let _ = cache::write_cache(&entry.path, &c);
-            c
-        }
+    let content = if let Some(c) = cache::read_cache(&entry.path)? {
+        c
+    } else {
+        let c = client::fetch_law_content(&entry.path).await?;
+        let _ = cache::write_cache(&entry.path, &c);
+        c
     };
 
     let stripped = parser::strip_frontmatter(&content);
@@ -278,7 +284,7 @@ async fn cmd_show(id: &str, as_json: bool) -> Result<()> {
             "departments": entry.departments,
             "content": stripped,
         });
-        println!("{}", serde_json::to_string_pretty(&obj).unwrap());
+        println!("{}", serde_json::to_string_pretty(&obj)?);
     } else {
         println!("{stripped}");
     }
@@ -292,13 +298,12 @@ async fn cmd_articles(id: &str, as_json: bool) -> Result<()> {
         .find(|e| e.id == id)
         .ok_or_else(|| anyhow::anyhow!("Law not found: {id}"))?;
 
-    let content = match cache::read_cache(&entry.path)? {
-        Some(c) => c,
-        None => {
-            let c = client::fetch_law_content(&entry.path).await?;
-            let _ = cache::write_cache(&entry.path, &c);
-            c
-        }
+    let content = if let Some(c) = cache::read_cache(&entry.path)? {
+        c
+    } else {
+        let c = client::fetch_law_content(&entry.path).await?;
+        let _ = cache::write_cache(&entry.path, &c);
+        c
     };
 
     let articles = parser::extract_articles(&content);
@@ -318,7 +323,7 @@ async fn cmd_articles(id: &str, as_json: bool) -> Result<()> {
             "title": entry.title,
             "articles": items,
         });
-        println!("{}", serde_json::to_string_pretty(&obj).unwrap());
+        println!("{}", serde_json::to_string_pretty(&obj)?);
     } else {
         println!("# {} — {}", entry.id, entry.title);
         for a in &articles {
@@ -332,10 +337,11 @@ async fn cmd_bookmarks(as_json: bool) -> Result<()> {
     let bm = Bookmarks::load();
     let entries = load_entries().await?;
     let results: Vec<&LawEntry> = entries.iter().filter(|e| bm.is_bookmarked(&e.id)).collect();
-    print_entries(&results, as_json);
+    print_entries(&results, as_json)?;
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 async fn cmd_speak(
     id: &str,
     article: Option<usize>,
@@ -360,13 +366,12 @@ async fn cmd_speak(
         .find(|e| e.id == id)
         .ok_or_else(|| anyhow::anyhow!("Law not found: {id}"))?;
 
-    let content = match cache::read_cache(&entry.path)? {
-        Some(c) => c,
-        None => {
-            let c = client::fetch_law_content(&entry.path).await?;
-            let _ = cache::write_cache(&entry.path, &c);
-            c
-        }
+    let content = if let Some(c) = cache::read_cache(&entry.path)? {
+        c
+    } else {
+        let c = client::fetch_law_content(&entry.path).await?;
+        let _ = cache::write_cache(&entry.path, &c);
+        c
     };
 
     // Wait for engine to finish loading before starting synthesis.
@@ -403,7 +408,7 @@ async fn cmd_speak(
                 "generation_time_secs": result.generation_time_secs,
                 "rtf": result.rtf,
             });
-            println!("{}", serde_json::to_string_pretty(&obj).unwrap());
+            println!("{}", serde_json::to_string_pretty(&obj)?);
         } else {
             eprintln!(
                 "Spoke {:.1}s of audio in {:.1}s (RTF: {:.2})",
@@ -437,7 +442,7 @@ async fn cmd_speak(
         }
 
         let n_segments = segments.len();
-        eprintln!("Synthesizing {} article(s)...", n_segments);
+        eprintln!("Synthesizing {n_segments} article(s)...");
 
         let stats = tokio::task::spawn_blocking(move || {
             tts::with_suppressed_output(|| {
@@ -460,7 +465,7 @@ async fn cmd_speak(
                 "generation_time_secs": stats.generation_time_secs,
                 "rtf": stats.rtf,
             });
-            println!("{}", serde_json::to_string_pretty(&obj).unwrap());
+            println!("{}", serde_json::to_string_pretty(&obj)?);
         } else {
             eprintln!(
                 "Spoke {:.1}s of audio ({} articles) in {:.1}s (RTF: {:.2})",

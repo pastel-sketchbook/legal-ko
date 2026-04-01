@@ -1,4 +1,4 @@
-//! TTS engine wrapper around `vibe-rust` RealtimeTts with `rodio` playback.
+//! TTS engine wrapper around `vibe-rust` `RealtimeTts` with `rodio` playback.
 //!
 //! Design:
 //! - Model loading is expensive (~3-5s), so we load once and hold in an `Arc<Mutex<..>>`.
@@ -27,15 +27,16 @@ pub const DEFAULT_KOREAN_VOICE: &str = "kr-Spk1_man";
 /// TTS quality/speed profile.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub enum TtsProfile {
-    /// Fast mode: cfg_scale=1.0 for ~2x diffusion speedup, shorter prebuffer (1s).
+    /// Fast mode: `cfg_scale=1.0` for ~2x diffusion speedup, shorter prebuffer (1s).
     Fast,
-    /// Balanced mode: cfg_scale=1.5 (original quality), longer prebuffer (5s).
+    /// Balanced mode: `cfg_scale=1.5` (original quality), longer prebuffer (5s).
     #[default]
     Balanced,
 }
 
 impl TtsProfile {
     /// Get the CFG scale for this profile.
+    #[must_use]
     pub fn cfg_scale(self) -> f32 {
         match self {
             Self::Fast => 1.0,
@@ -44,6 +45,7 @@ impl TtsProfile {
     }
 
     /// Get the prebuffer duration in seconds for streaming playback.
+    #[must_use]
     pub fn prebuffer_secs(self) -> f64 {
         match self {
             Self::Fast => 1.0,
@@ -64,7 +66,7 @@ impl fmt::Display for TtsProfile {
 /// Mono channel count for rodio.
 const CHANNELS: NonZero<u16> = NonZero::new(1).unwrap();
 
-/// Sample rate for rodio (must match OUTPUT_SR = 24000).
+/// Sample rate for rodio (must match `OUTPUT_SR` = 24000).
 const SAMPLE_RATE: NonZero<u32> = NonZero::new(OUTPUT_SR).unwrap();
 
 // ── stdout/stderr suppression ───────────────────────────────
@@ -157,6 +159,10 @@ pub const ONNX_THREADS_ENV: &str = "LEGAL_KO_ONNX_THREADS";
 /// voice presets and model files (typically `std::env::current_dir()`).
 ///
 /// Reads [`ONNX_THREADS_ENV`] to configure ONNX intra-op thread count.
+///
+/// # Errors
+///
+/// Returns an error if model loading fails or the engine mutex is poisoned.
 pub fn load_engine(handle: &TtsEngineHandle, project_root: &Path) -> Result<()> {
     let intra_threads = std::env::var(ONNX_THREADS_ENV)
         .ok()
@@ -190,6 +196,10 @@ pub fn load_engine(handle: &TtsEngineHandle, project_root: &Path) -> Result<()> 
 /// Synthesize speech from text synchronously (call from `spawn_blocking`).
 ///
 /// Returns the raw `SynthesisResult` containing audio samples.
+///
+/// # Errors
+///
+/// Returns an error if the engine is not loaded or synthesis fails.
 pub fn synthesize(
     handle: &TtsEngineHandle,
     text: &str,
@@ -221,6 +231,10 @@ pub fn synthesize(
 /// continues.
 ///
 /// Call from `spawn_blocking`.  Returns the full `SynthesisResult` when done.
+///
+/// # Errors
+///
+/// Returns an error if the engine is not loaded or synthesis fails.
 pub fn synthesize_streaming<F>(
     handle: &TtsEngineHandle,
     text: &str,
@@ -257,6 +271,10 @@ where
 /// Play f32 PCM audio at 24 kHz mono through `rodio`.
 ///
 /// This blocks until playback completes.
+///
+/// # Errors
+///
+/// Returns an error if the audio output device cannot be opened.
 pub fn play_audio(samples: &[f32]) -> Result<()> {
     if samples.is_empty() {
         warn!("No audio samples to play");
@@ -280,6 +298,10 @@ pub fn play_audio(samples: &[f32]) -> Result<()> {
 ///
 /// **Important**: The caller must keep the returned `MixerDeviceSink` alive
 /// for the duration of playback (dropping it stops audio).
+///
+/// # Errors
+///
+/// Returns an error if samples are empty or the audio device cannot be opened.
 pub fn play_audio_async(samples: &[f32]) -> Result<(MixerDeviceSink, Player)> {
     if samples.is_empty() {
         anyhow::bail!("No audio samples to play");
@@ -302,7 +324,7 @@ pub struct PlaybackStats {
     pub duration_secs: f64,
     /// Total wall-clock time spent generating audio.
     pub generation_time_secs: f64,
-    /// Overall real-time factor (generation_time / duration).
+    /// Overall real-time factor (`generation_time` / duration).
     pub rtf: f64,
     /// Number of segments synthesized.
     pub segments: usize,
@@ -318,6 +340,11 @@ pub struct PlaybackStats {
 /// Playback begins as soon as the first segment is ready, so later segments
 /// are synthesized while earlier ones are already playing — the same proven
 /// pipeline the TUI uses for `R` (read all).
+///
+/// # Errors
+///
+/// Returns an error if the engine cannot be loaded, no segments are provided,
+/// the audio device cannot be opened, or any segment synthesis fails.
 pub fn synthesize_and_play_segments(
     project_root: &Path,
     segments: &[String],
@@ -333,6 +360,11 @@ pub fn synthesize_and_play_segments(
 ///
 /// This allows the caller to overlap engine loading with other work (e.g.,
 /// network I/O) and then pass the ready handle for synthesis.
+///
+/// # Errors
+///
+/// Returns an error if no segments are provided, the audio device cannot be
+/// opened, or any segment synthesis fails.
 pub fn synthesize_and_play_segments_with_handle(
     handle: &TtsEngineHandle,
     segments: &[String],
@@ -398,6 +430,11 @@ pub fn synthesize_and_play_segments_with_handle(
 /// stutter caused by the player draining faster than the next chunk arrives.
 ///
 /// The prebuffer duration is determined by `profile`.
+///
+/// # Errors
+///
+/// Returns an error if the engine cannot be loaded, the audio device cannot be
+/// opened, or synthesis fails.
 pub fn synthesize_and_play(
     project_root: &Path,
     text: &str,
@@ -413,6 +450,10 @@ pub fn synthesize_and_play(
 ///
 /// This allows the caller to overlap engine loading with other work (e.g.,
 /// network I/O) and then pass the ready handle for synthesis.
+///
+/// # Errors
+///
+/// Returns an error if the audio device cannot be opened or synthesis fails.
 pub fn synthesize_and_play_with_handle(
     handle: &TtsEngineHandle,
     text: &str,
@@ -425,12 +466,17 @@ pub fn synthesize_and_play_with_handle(
 
     let prebuffer_secs = profile.prebuffer_secs();
     let cfg_scale = profile.cfg_scale();
-    let prebuffer_threshold = (OUTPUT_SR as f64 * prebuffer_secs) as usize;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let prebuffer_threshold = (f64::from(OUTPUT_SR) * prebuffer_secs) as usize;
     let mut prebuffer: Vec<f32> = Vec::with_capacity(prebuffer_threshold + 48_000);
     let mut flushed = false;
 
     let result = synthesize_streaming(handle, text, speaker, cfg_scale, |chunk| {
-        if !flushed {
+        if flushed {
+            // Already playing — feed chunks directly
+            let source = rodio::buffer::SamplesBuffer::new(CHANNELS, SAMPLE_RATE, chunk.to_vec());
+            player.append(source);
+        } else {
             // Accumulate until we have enough runway
             prebuffer.extend_from_slice(chunk);
             if prebuffer.len() >= prebuffer_threshold {
@@ -438,15 +484,10 @@ pub fn synthesize_and_play_with_handle(
                 let source = rodio::buffer::SamplesBuffer::new(CHANNELS, SAMPLE_RATE, drained);
                 player.append(source);
                 flushed = true;
-                debug!(
-                    "Pre-buffer flushed ({:.1}s), playback started",
-                    prebuffer_threshold as f64 / OUTPUT_SR as f64
-                );
+                #[allow(clippy::cast_precision_loss)]
+                let threshold_secs = prebuffer_threshold as f64 / f64::from(OUTPUT_SR);
+                debug!("Pre-buffer flushed ({threshold_secs:.1}s), playback started");
             }
-        } else {
-            // Already playing — feed chunks directly
-            let source = rodio::buffer::SamplesBuffer::new(CHANNELS, SAMPLE_RATE, chunk.to_vec());
-            player.append(source);
         }
     })?;
 

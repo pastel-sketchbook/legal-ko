@@ -46,10 +46,10 @@ pub fn render(f: &mut Frame, app: &App) {
             match app.popup {
                 Popup::Help => help::render_help(f, theme, area),
                 Popup::CategoryFilter => {
-                    render_filter_popup(f, app, theme, area, FilterKind::Category)
+                    render_filter_popup(f, app, theme, area, FilterKind::Category);
                 }
                 Popup::DepartmentFilter => {
-                    render_filter_popup(f, app, theme, area, FilterKind::Department)
+                    render_filter_popup(f, app, theme, area, FilterKind::Department);
                 }
                 Popup::None | Popup::ArticleList => {}
             }
@@ -88,6 +88,7 @@ fn render_loading(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     f.render_widget(paragraph, area);
 }
 
+#[derive(Clone, Copy)]
 enum FilterKind {
     Category,
     Department,

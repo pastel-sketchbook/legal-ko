@@ -71,10 +71,10 @@ fn render_title_bar(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         title_style.add_modifier(Modifier::BOLD),
     )];
 
-    if filtered != total {
-        parts.push(Span::styled(format!(" [{filtered}/{total}] "), title_style));
-    } else {
+    if filtered == total {
         parts.push(Span::styled(format!(" [{total}] "), title_style));
+    } else {
+        parts.push(Span::styled(format!(" [{filtered}/{total}] "), title_style));
     }
 
     // Active filters
@@ -114,13 +114,13 @@ fn render_search_bar(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             Span::styled(app.search_query.clone(), Style::default().fg(theme.search)),
             Span::styled("\u{258c}", Style::default().fg(theme.search)),
         ])
-    } else if !app.search_query.is_empty() {
+    } else if app.search_query.is_empty() {
+        Line::from("")
+    } else {
         Line::from(vec![
             Span::styled(" / ", Style::default().fg(theme.muted)),
             Span::styled(app.search_query.clone(), Style::default().fg(theme.fg)),
         ])
-    } else {
-        Line::from("")
     };
 
     let bar = Paragraph::new(content).style(Style::default().bg(theme.bg));
@@ -212,10 +212,10 @@ fn render_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let content = if let Some(ref msg) = app.status_message {
         styles::status_message_line(theme, msg, area.width)
     } else {
-        let prefix = if !app.filtered_indices.is_empty() {
-            format!(" {}/{} ", app.list_selected + 1, app.filtered_indices.len())
-        } else {
+        let prefix = if app.filtered_indices.is_empty() {
             String::new()
+        } else {
+            format!(" {}/{} ", app.list_selected + 1, app.filtered_indices.len())
         };
 
         styles::status_line(
