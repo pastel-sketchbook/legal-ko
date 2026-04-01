@@ -7,7 +7,7 @@ alwaysApply: true
 # Rust — legal-ko
 
 Cargo workspace to browse, search, and read all Korean laws from the
-[legalize-kr](https://github.com/9bow/legalize-kr) GitHub repository.
+[legalize-kr](https://github.com/legalize-kr/legalize-kr) GitHub repository.
 This is a Rust 2024-edition workspace with three crates.
 Use `cargo` for all build/test/run tasks.
 
