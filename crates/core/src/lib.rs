@@ -4,4 +4,5 @@ pub mod client;
 pub mod models;
 pub mod parser;
 pub mod preferences;
+pub mod search;
 pub mod tts;

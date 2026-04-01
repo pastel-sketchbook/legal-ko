@@ -1,10 +1,12 @@
 use std::collections::{HashSet, VecDeque};
 use std::num::NonZero;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use legal_ko_core::bookmarks::Bookmarks;
 use legal_ko_core::models::{ArticleRef, LawDetail, LawEntry, MetadataIndex};
 use legal_ko_core::preferences::Preferences;
+use legal_ko_core::search::Searcher;
 use legal_ko_core::tts::{self, TtsEngineHandle, TtsState};
 use legal_ko_core::{cache, client, parser};
 
@@ -77,6 +79,15 @@ pub enum Message {
     TtsBatchReady {
         articles_audio: Vec<Vec<f32>>,
         article_indices: Vec<usize>,
+    },
+    /// Meilisearch warmup completed.
+    MeiliReady,
+    /// Meilisearch warmup failed.
+    MeiliError(String),
+    /// Ranked search results from Meilisearch.
+    MeiliSearchResults {
+        seq: u64,
+        ids: Vec<String>,
     },
     /// All synthesis and playback for a batch session is done.
     TtsSynthesisDone,
@@ -155,6 +166,17 @@ pub struct App {
     /// Tick counter incremented every event-loop iteration (~50ms).
     /// Used for UI animations (e.g. TTS loading indicator).
     pub tick: usize,
+
+    // Meilisearch
+    pub searcher: Arc<Searcher>,
+    /// True once warmup completed successfully.
+    pub meili_ready: bool,
+    /// Monotonic counter to discard stale search results.
+    pub search_seq: u64,
+    /// Ranked IDs from the last Meilisearch query (if any).
+    pub meili_search_ids: Option<Vec<String>>,
+    /// The query string that produced `meili_search_ids`.
+    pub meili_search_query: Option<String>,
 }
 
 impl App {
@@ -200,6 +222,11 @@ impl App {
             pending_tts_action: PendingTtsAction::None,
             tts_buffering: false,
             tick: 0,
+            searcher: Arc::new(Searcher::from_env()),
+            meili_ready: false,
+            search_seq: 0,
+            meili_search_ids: None,
+            meili_search_query: None,
         }
     }
 
@@ -247,6 +274,22 @@ impl App {
                 self.load_metadata(index);
                 self.view = View::List;
                 self.status_message = Some(format!("Loaded {} laws", self.all_laws.len()));
+                // Start Meilisearch warmup in background
+                if self.searcher.is_enabled() {
+                    let searcher = Arc::clone(&self.searcher);
+                    let entries = self.all_laws.clone();
+                    let tx = self.msg_tx.clone();
+                    tokio::spawn(async move {
+                        match searcher.warmup(&entries).await {
+                            Ok(()) => {
+                                let _ = tx.send(Message::MeiliReady);
+                            }
+                            Err(e) => {
+                                let _ = tx.send(Message::MeiliError(format!("{e:#}")));
+                            }
+                        }
+                    });
+                }
             }
             Message::MetadataError(err) => {
                 self.status_message = Some(format!("Error: {err}"));
@@ -286,10 +329,13 @@ impl App {
                 }
             }
             Message::TtsArticleAdvanced { article_idx } => {
-                self.tts_current_article = Some(article_idx);
-                if let Some(art) = self.detail_articles.get(article_idx) {
-                    self.detail_scroll = art.line_index;
-                    self.status_message = Some(format!("Reading: {}", art.label));
+                // Only advance if TTS is still active (timers may fire after stop)
+                if self.tts_state == TtsState::Synthesizing || self.tts_state == TtsState::Playing {
+                    self.tts_current_article = Some(article_idx);
+                    if let Some(art) = self.detail_articles.get(article_idx) {
+                        self.detail_scroll = art.line_index;
+                        self.status_message = Some(format!("Playing: {}", art.label));
+                    }
                 }
             }
             Message::TtsBatchReady {
@@ -337,6 +383,24 @@ impl App {
                 self.status_message = Some(format!("TTS error: {err}"));
                 error!("TTS synthesis failed: {err}");
             }
+            Message::MeiliReady => {
+                self.meili_ready = true;
+                info!("Meilisearch index ready");
+                // Re-run search if there is an active query
+                if !self.search_query.is_empty() {
+                    self.dispatch_meili_search();
+                }
+            }
+            Message::MeiliError(err) => {
+                warn!("Meilisearch warmup failed: {err}");
+            }
+            Message::MeiliSearchResults { seq, ids } => {
+                if seq == self.search_seq {
+                    self.meili_search_ids = Some(ids);
+                    self.meili_search_query = Some(self.search_query.clone());
+                    self.apply_filters();
+                }
+            }
         }
     }
 
@@ -378,39 +442,62 @@ impl App {
         self.apply_filters();
     }
 
-    /// Apply search + category + department + bookmarks filters
+    /// Apply search + category + department + bookmarks filters.
+    ///
+    /// When Meilisearch ranked results are available for the current query,
+    /// they are used for ordering and filtering. Otherwise falls back to naive
+    /// substring matching on the title.
     pub fn apply_filters(&mut self) {
-        let query_lower = self.search_query.to_lowercase();
+        let query = &self.search_query;
+        let use_meili = !query.is_empty()
+            && self
+                .meili_search_query
+                .as_deref()
+                .is_some_and(|q| q == query);
 
-        self.filtered_indices = self
-            .all_laws
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| {
-                // Search filter
-                if !query_lower.is_empty() && !entry.title.to_lowercase().contains(&query_lower) {
-                    return false;
-                }
-                // Category filter
-                if let Some(ref cat) = self.category_filter
-                    && &entry.category != cat
-                {
-                    return false;
-                }
-                // Department filter
-                if let Some(ref dept) = self.department_filter
-                    && !entry.departments.contains(dept)
-                {
-                    return false;
-                }
-                // Bookmarks filter
-                if self.bookmarks_only && !self.bookmarks.is_bookmarked(&entry.id) {
-                    return false;
-                }
-                true
-            })
-            .map(|(i, _)| i)
-            .collect();
+        if use_meili {
+            // Build index lookup: id → position in all_laws
+            let id_to_idx: std::collections::HashMap<&str, usize> = self
+                .all_laws
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (e.id.as_str(), i))
+                .collect();
+
+            let meili_ids = self.meili_search_ids.as_deref().unwrap_or(&[]);
+
+            self.filtered_indices = meili_ids
+                .iter()
+                .filter_map(|id| id_to_idx.get(id.as_str()).copied())
+                .filter(|&i| {
+                    let entry = &self.all_laws[i];
+                    self.passes_non_search_filters(entry)
+                })
+                .collect();
+        } else {
+            let query_lower = query.to_lowercase();
+
+            self.filtered_indices = self
+                .all_laws
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| {
+                    // Search filter
+                    if !query_lower.is_empty()
+                        && !entry.title.to_lowercase().contains(&query_lower)
+                    {
+                        return false;
+                    }
+                    self.passes_non_search_filters(entry)
+                })
+                .map(|(i, _)| i)
+                .collect();
+
+            // Dispatch async Meilisearch query if ready and query is non-empty
+            if !query.is_empty() && self.meili_ready {
+                self.dispatch_meili_search();
+            }
+        }
 
         // Clamp selection
         if self.filtered_indices.is_empty() {
@@ -418,6 +505,39 @@ impl App {
         } else if self.list_selected >= self.filtered_indices.len() {
             self.list_selected = self.filtered_indices.len() - 1;
         }
+    }
+
+    /// Check category, department, and bookmark filters (excludes search query).
+    fn passes_non_search_filters(&self, entry: &LawEntry) -> bool {
+        if let Some(ref cat) = self.category_filter
+            && &entry.category != cat
+        {
+            return false;
+        }
+        if let Some(ref dept) = self.department_filter
+            && !entry.departments.contains(dept)
+        {
+            return false;
+        }
+        if self.bookmarks_only && !self.bookmarks.is_bookmarked(&entry.id) {
+            return false;
+        }
+        true
+    }
+
+    /// Dispatch an async Meilisearch search for the current query.
+    fn dispatch_meili_search(&mut self) {
+        self.search_seq += 1;
+        let seq = self.search_seq;
+        let query = self.search_query.clone();
+        let limit = self.all_laws.len();
+        let searcher = Arc::clone(&self.searcher);
+        let tx = self.msg_tx.clone();
+        tokio::spawn(async move {
+            if let Ok(ids) = searcher.search_ids(&query, limit).await {
+                let _ = tx.send(Message::MeiliSearchResults { seq, ids });
+            }
+        });
     }
 
     /// Get the currently selected law entry (if any)
@@ -907,6 +1027,13 @@ impl App {
     /// Each article is fully synthesized before the next begins.  Audio is
     /// appended to the same player so playback of earlier articles can begin
     /// while later ones are still being generated.
+    ///
+    /// Scroll / highlight advances are **timed to actual playback**, not to
+    /// synthesis completion.  After each article is synthesized we know its
+    /// audio duration, so we spawn a lightweight timer thread that sleeps
+    /// until the cumulative playback clock reaches the boundary, then sends
+    /// `TtsArticleAdvanced`.  This keeps the scroll in sync with what the
+    /// user actually hears, even when synthesis runs faster than real-time.
     fn start_synthesis_batch(&mut self, articles: Vec<(usize, String)>) {
         self.tts_state = TtsState::Synthesizing;
         self.status_message = Some("Synthesizing...".to_string());
@@ -922,12 +1049,15 @@ impl App {
                 let tx = self.msg_tx.clone();
                 tokio::task::spawn_blocking(move || {
                     let total = articles.len();
+                    // Collect article indices upfront so we can peek ahead
+                    // after `articles` is consumed by the iterator.
+                    let article_indices: Vec<usize> =
+                        articles.iter().map(|(idx, _)| *idx).collect();
 
-                    for (i, (article_idx, text)) in articles.into_iter().enumerate() {
-                        if i > 0 {
-                            let _ = tx.send(Message::TtsArticleAdvanced { article_idx });
-                        }
+                    let mut playback_start: Option<Instant> = None;
+                    let mut accumulated_secs = 0.0_f64;
 
+                    for (i, (_article_idx, text)) in articles.into_iter().enumerate() {
                         match tts::synthesize(
                             &handle,
                             &text,
@@ -935,17 +1065,46 @@ impl App {
                             tts::DEFAULT_CFG_SCALE,
                         ) {
                             Ok(result) => {
+                                let article_duration = result.duration_secs;
                                 let source = rodio::buffer::SamplesBuffer::new(
                                     CHANNELS,
                                     SAMPLE_RATE,
                                     result.audio,
                                 );
                                 player.append(source);
-                                // Start playback as soon as the first article
-                                // is fully synthesized.
+
                                 if i == 0 {
                                     player.play();
+                                    playback_start = Some(Instant::now());
+                                    // Scroll to first article immediately
+                                    let _ = tx.send(Message::TtsArticleAdvanced {
+                                        article_idx: article_indices[0],
+                                    });
                                 }
+
+                                accumulated_secs += article_duration;
+
+                                // Schedule scroll to the NEXT article when this
+                                // one's audio finishes playing.
+                                if let Some(start) = playback_start
+                                    && i + 1 < total
+                                {
+                                    let next_article_idx = article_indices[i + 1];
+                                    let target_secs = accumulated_secs;
+                                    let tx_timer = tx.clone();
+                                    std::thread::spawn(move || {
+                                        let target =
+                                            start + Duration::from_secs_f64(target_secs);
+                                        let now = Instant::now();
+                                        if target > now {
+                                            std::thread::sleep(target - now);
+                                        }
+                                        let _ = tx_timer.send(Message::TtsArticleAdvanced {
+                                            article_idx: next_article_idx,
+                                        });
+                                    });
+                                }
+
                                 info!("Batch article {}/{total} synthesized", i + 1);
                             }
                             Err(e) => {

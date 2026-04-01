@@ -7,6 +7,10 @@ edition.workspace = true
 name = "legal-ko"
 path = "src/main.rs"
 
+[features]
+default = []
+meilisearch = ["legal-ko-core/meilisearch"]
+
 [dependencies]
 legal-ko-core = { path = "../core" }
 anyhow.workspace = true

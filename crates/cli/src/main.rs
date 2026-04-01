@@ -4,6 +4,7 @@ use serde_json::json;
 
 use legal_ko_core::bookmarks::Bookmarks;
 use legal_ko_core::models::LawEntry;
+use legal_ko_core::search::{self, Searcher};
 use legal_ko_core::tts;
 use legal_ko_core::{cache, client, parser};
 
@@ -219,14 +220,28 @@ async fn cmd_list(
 
 async fn cmd_search(query: &str, as_json: bool, limit: Option<usize>) -> Result<()> {
     let entries = load_entries().await?;
-    let query_lower = query.to_lowercase();
-    let mut results: Vec<&LawEntry> = entries
+    let n = limit.unwrap_or(50);
+
+    let searcher = Searcher::from_env();
+    let ids = if searcher.is_enabled() {
+        match searcher.warmup(&entries).await {
+            Ok(()) => searcher
+                .search_ids(query, n)
+                .await
+                .unwrap_or_else(|_| search::naive_search_ids(&entries, query, n)),
+            Err(_) => search::naive_search_ids(&entries, query, n),
+        }
+    } else {
+        search::naive_search_ids(&entries, query, n)
+    };
+
+    let by_id: std::collections::HashMap<&str, &LawEntry> =
+        entries.iter().map(|e| (e.id.as_str(), e)).collect();
+    let results: Vec<&LawEntry> = ids
         .iter()
-        .filter(|e| e.title.to_lowercase().contains(&query_lower))
+        .filter_map(|id| by_id.get(id.as_str()).copied())
         .collect();
-    if let Some(n) = limit {
-        results.truncate(n);
-    }
+
     print_entries(&results, as_json);
     Ok(())
 }

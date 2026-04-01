@@ -3,6 +3,10 @@ name = "legal-ko-core"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+meilisearch = ["dep:meilisearch-sdk"]
+
 [dependencies]
 anyhow.workspace = true
 dirs.workspace = true
@@ -14,4 +18,5 @@ sha2.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 libc.workspace = true
+meilisearch-sdk = { workspace = true, optional = true }
 vibe-rust.workspace = true

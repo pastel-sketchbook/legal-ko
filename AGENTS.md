@@ -43,7 +43,8 @@ cp target/release/legal-ko-cli ~/bin/legal-ko-cli
 
 Workspace deps: `ratatui`, `crossterm`, `tokio` (full), `reqwest` (json),
 `serde`/`serde_json`, `clap` (derive), `anyhow`, `tracing`,
-`tracing-subscriber`, `dirs`, `sha2`, `unicode-width`.
+`tracing-subscriber`, `dirs`, `sha2`, `unicode-width`,
+`meilisearch-sdk` (optional, behind `meilisearch` feature).
 
 ## Architecture
 
@@ -57,6 +58,7 @@ crates/
     cache.rs        — Disk cache at ~/.cache/legal-ko/ (SHA256 keyed)
     bookmarks.rs    — Persist bookmarks to ~/.config/legal-ko/bookmarks.json
     preferences.rs  — Theme preference persistence to ~/.config/legal-ko/preferences.json
+    search.rs       — Meilisearch integration (feature-gated), naive fallback search
   tui/src/
     main.rs         — entry point, terminal setup, tokio runtime, event loop
     app.rs          — App state machine (View, InputMode, Popup), Message handling
@@ -89,6 +91,7 @@ crates/
 - **Vim keybindings**: j/k navigate, `/` search, Enter open, Esc back, n/p article nav, etc.
 - **Theme system**: 14 themes with persistence, `t` key cycles, semantic color fields.
 - **Core/TUI split**: Parser split — core has `strip_frontmatter` + `extract_articles` (pure text), TUI has `parse_law_markdown` (ratatui Lines with theme colors).
+- **Search**: Optional Meilisearch backend (feature `meilisearch`), configured via `LEGAL_KO_MEILI_URL`, `LEGAL_KO_MEILI_KEY`, `LEGAL_KO_MEILI_INDEX` env vars. Falls back to naive title substring search when Meilisearch is unavailable.
 
 ## Conventions
 
