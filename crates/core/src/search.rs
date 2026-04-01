@@ -1,3 +1,5 @@
+#[cfg(feature = "meilisearch")]
+use anyhow::Context;
 use anyhow::Result;
 use tracing::debug;
 
@@ -154,16 +156,20 @@ impl MeiliBackend {
 
         index
             .set_settings(&settings)
-            .await?
+            .await
+            .context("Failed to set Meilisearch index settings")?
             .wait_for_completion(&self.client, None, None)
-            .await?;
+            .await
+            .context("Meilisearch settings task failed to complete")?;
 
         // Add/replace all documents (primary key = "id")
         index
             .add_or_replace(entries, Some("id"))
-            .await?
+            .await
+            .context("Failed to add documents to Meilisearch index")?
             .wait_for_completion(&self.client, None, None)
-            .await?;
+            .await
+            .context("Meilisearch document indexing task failed to complete")?;
 
         tracing::info!(
             index = %self.index_uid,
@@ -188,7 +194,8 @@ impl MeiliBackend {
             .with_limit(limit)
             .with_attributes_to_retrieve(meilisearch_sdk::search::Selectors::Some(&["id"]))
             .execute::<IdOnly>()
-            .await?;
+            .await
+            .context("Meilisearch search query failed")?;
 
         let ids: Vec<String> = results.hits.into_iter().map(|h| h.result.id).collect();
         debug!(query, hits = ids.len(), "Meilisearch search completed");

@@ -83,25 +83,38 @@ fn render_detail_content(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         return;
     };
 
-    #[cfg_attr(not(feature = "tts"), allow(unused_mut))]
-    let mut lines = app.detail_rendered_lines.clone();
-
-    // Apply TTS highlight to lines of the currently-playing article
+    // Build the lines for the paragraph.  `Paragraph` requires owned `Text`,
+    // so we must clone from the cached `detail_rendered_lines`.
+    //
+    // When TTS highlighting is active, only the spans in the highlight range
+    // are re-styled (clone + bg override).  All other lines are cheap
+    // Arc-backed clones of the cached rendered data.
     #[cfg(feature = "tts")]
-    if let Some((hl_start, hl_end)) = app.tts_highlight_lines() {
+    let highlight_range = app.tts_highlight_lines();
+    #[cfg(not(feature = "tts"))]
+    let highlight_range: Option<(usize, usize)> = None;
+
+    let lines: Vec<Line<'_>> = if let Some((hl_start, hl_end)) = highlight_range {
         let hl_bg = theme.highlight_bg;
-        for (i, line) in lines.iter_mut().enumerate() {
-            if i >= hl_start && i < hl_end {
-                // Re-style each span to add the highlight background
-                let new_spans: Vec<Span<'static>> = line
-                    .spans
-                    .iter()
-                    .map(|span| Span::styled(span.content.to_string(), span.style.bg(hl_bg)))
-                    .collect();
-                *line = Line::from(new_spans);
-            }
-        }
-    }
+        app.detail_rendered_lines
+            .iter()
+            .enumerate()
+            .map(|(i, line)| {
+                if i >= hl_start && i < hl_end {
+                    let new_spans: Vec<Span<'static>> = line
+                        .spans
+                        .iter()
+                        .map(|span| Span::styled(span.content.to_string(), span.style.bg(hl_bg)))
+                        .collect();
+                    Line::from(new_spans)
+                } else {
+                    line.clone()
+                }
+            })
+            .collect()
+    } else {
+        app.detail_rendered_lines.clone()
+    };
 
     #[allow(clippy::cast_possible_truncation)]
     let scroll_y = u16::try_from(app.detail_scroll).unwrap_or(u16::MAX);

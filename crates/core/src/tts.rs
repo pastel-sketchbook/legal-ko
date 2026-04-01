@@ -64,9 +64,11 @@ impl fmt::Display for TtsProfile {
 }
 
 /// Mono channel count for rodio.
+// SAFETY (const): `1` is non-zero, so `unwrap` will never panic.
 const CHANNELS: NonZero<u16> = NonZero::new(1).unwrap();
 
 /// Sample rate for rodio (must match `OUTPUT_SR` = 24000).
+// SAFETY (const): `OUTPUT_SR` is 24000, which is non-zero, so `unwrap` will never panic.
 const SAMPLE_RATE: NonZero<u32> = NonZero::new(OUTPUT_SR).unwrap();
 
 // ── stdout/stderr suppression ───────────────────────────────
@@ -216,7 +218,9 @@ pub fn synthesize(
 
     debug!("Synthesizing {} chars with voice '{speaker}'", text.len());
 
-    let result = tts.synthesize(text, speaker, cfg_scale, None)?;
+    let result = tts
+        .synthesize(text, speaker, cfg_scale, None)
+        .context("TTS synthesis failed")?;
 
     info!(
         "Synthesized {:.1}s audio in {:.1}s (RTF: {:.2})",
@@ -258,7 +262,9 @@ where
         text.len()
     );
 
-    let result = tts.synthesize_streaming(text, speaker, cfg_scale, None, on_chunk)?;
+    let result = tts
+        .synthesize_streaming(text, speaker, cfg_scale, None, on_chunk)
+        .context("TTS streaming synthesis failed")?;
 
     info!(
         "Synthesized {:.1}s audio in {:.1}s (RTF: {:.2})",

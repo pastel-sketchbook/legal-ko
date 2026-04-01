@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use serde_json::json;
 
@@ -134,7 +134,9 @@ async fn main() -> Result<()> {
 }
 
 async fn load_entries() -> Result<Vec<LawEntry>> {
-    let index = client::fetch_metadata().await?;
+    let index = client::fetch_metadata()
+        .await
+        .context("Failed to load law metadata from GitHub")?;
     let mut entries: Vec<LawEntry> = index
         .into_iter()
         .map(|(id, meta)| LawEntry {
@@ -379,7 +381,10 @@ async fn cmd_speak(
     };
 
     // Wait for engine to finish loading before starting synthesis.
-    engine_load.await??;
+    engine_load
+        .await
+        .context("TTS engine loading task panicked")?
+        .context("TTS engine failed to load")?;
 
     let voice = voice.to_string();
     let profile = if fast {

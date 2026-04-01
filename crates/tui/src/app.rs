@@ -30,10 +30,12 @@ use tracing::{error, info, warn};
 
 /// Mono channel count for rodio.
 #[cfg(feature = "tts")]
+// SAFETY (const): `1` is non-zero, so `unwrap` will never panic.
 const CHANNELS: NonZero<u16> = NonZero::new(1).unwrap();
 
 /// Sample rate for rodio (must match `OUTPUT_SR` = 24000).
 #[cfg(feature = "tts")]
+// SAFETY (const): `OUTPUT_SR` is 24000, which is non-zero, so `unwrap` will never panic.
 const SAMPLE_RATE: NonZero<u32> = NonZero::new(OUTPUT_SR).unwrap();
 
 // ── Prebuffer helper ──────────────────────────────────────────
@@ -727,10 +729,14 @@ impl App {
         tokio::spawn(async move {
             match client::fetch_law_content(&path).await {
                 Ok(content) => {
-                    // Cache the result (ignore errors)
-                    if let Err(e) = cache::write_cache(&path, &content) {
-                        warn!("Failed to cache {path}: {e}");
-                    }
+                    // Cache the result in a blocking task (cache uses std::fs)
+                    let cache_path = path.clone();
+                    let cache_content = content.clone();
+                    tokio::task::spawn_blocking(move || {
+                        if let Err(e) = cache::write_cache(&cache_path, &cache_content) {
+                            warn!("Failed to cache {cache_path}: {e}");
+                        }
+                    });
                     let _ = tx.send(Message::LawContentLoaded { id, content });
                 }
                 Err(e) => {
@@ -853,7 +859,11 @@ impl App {
                 return;
             }
         }
-        self.detail_scroll = self.detail_articles.last().unwrap().line_index;
+        self.detail_scroll = self
+            .detail_articles
+            .last()
+            .expect("detail_articles is non-empty (checked above)")
+            .line_index;
     }
 
     /// Jump to a specific article by index in the articles list

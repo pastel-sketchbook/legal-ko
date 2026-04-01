@@ -59,12 +59,18 @@ async fn main() -> Result<()> {
     // Strategy: save a private copy of the terminal fd, permanently point
     // fd 1/2 at /dev/null, and have ratatui write through the private copy.
     #[cfg(feature = "tts")]
+    // SAFETY: `dup` and `dup2` are well-defined POSIX calls on valid standard
+    // file descriptors.  We save private copies of stdout/stderr before
+    // redirecting them to /dev/null.  The saved fds are restored in the cleanup
+    // block at the end of `main`.  All raw fds obtained here are either
+    // consumed by `File::from_raw_fd` (tty_fd) or explicitly closed after
+    // restoration (stdout_backup, stderr_backup).
     let (tty_fd, stdout_backup, stderr_backup) = unsafe {
         use std::os::unix::io::AsRawFd;
         let tty = libc::dup(libc::STDOUT_FILENO);
         let out_bak = libc::dup(libc::STDOUT_FILENO);
         let err_bak = libc::dup(libc::STDERR_FILENO);
-        assert!(tty >= 0, "failed to dup stdout for terminal writer");
+        anyhow::ensure!(tty >= 0, "failed to dup stdout for terminal writer");
 
         // Redirect stdout/stderr → /dev/null
         if let Ok(devnull) = std::fs::OpenOptions::new().write(true).open("/dev/null") {
@@ -108,6 +114,9 @@ async fn main() -> Result<()> {
 
     // TTS: Restore stdout/stderr from backup fds
     #[cfg(feature = "tts")]
+    // SAFETY: `stdout_backup` and `stderr_backup` are valid fds obtained from
+    // `libc::dup` at the start of `main`.  We restore the original stdout/stderr
+    // via `dup2` and then close the backup fds to avoid leaking them.
     unsafe {
         if stdout_backup >= 0 {
             libc::dup2(stdout_backup, libc::STDOUT_FILENO);

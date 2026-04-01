@@ -67,15 +67,19 @@ pub async fn fetch_metadata() -> Result<MetadataIndex> {
         if entry.entry_type != "blob" {
             continue;
         }
-        let Some(rest) = entry.path.strip_prefix("kr/") else {
+        let Some(rel_path) = entry.path.strip_prefix("kr/") else {
             continue;
         };
-        if !rest.ends_with(".md") {
+        if std::path::Path::new(rel_path)
+            .extension()
+            .and_then(|e| e.to_str())
+            != Some("md")
+        {
             continue;
         }
 
         // Expected format: {법령명}/{type}.md  e.g. "민법/법률.md"
-        let Some((dir_name, file_name)) = rest.rsplit_once('/') else {
+        let Some((dir_name, file_name)) = rel_path.rsplit_once('/') else {
             continue;
         };
         let stem = file_name.strip_suffix(".md").unwrap_or(file_name);
