@@ -25,12 +25,16 @@ const LAW_TYPES: &[(&str, &str)] = &[
 ];
 
 /// Build a configured HTTP client with timeouts and User-Agent.
+///
+/// # Errors
+///
+/// Returns an error if the HTTP client cannot be constructed.
 pub fn http_client() -> Result<reqwest::Client> {
     let mut headers = reqwest::header::HeaderMap::new();
-    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
-        if let Ok(auth_val) = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}")) {
-            headers.insert(reqwest::header::AUTHORIZATION, auth_val);
-        }
+    if let Ok(token) = std::env::var("GITHUB_TOKEN")
+        && let Ok(auth_val) = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+    {
+        headers.insert(reqwest::header::AUTHORIZATION, auth_val);
     }
 
     reqwest::Client::builder()
@@ -177,8 +181,12 @@ pub async fn fetch_law_content(client: &reqwest::Client, path: &str) -> Result<S
 ///
 /// Returns an error if both cache read and network fetch fail.
 pub async fn load_law_content(client: &reqwest::Client, path: &str) -> Result<String> {
-    // Try cache first
-    match cache::read_cache(path) {
+    // Try cache first (blocking I/O — run off the async executor)
+    let cache_path = path.to_string();
+    let cached = tokio::task::spawn_blocking(move || cache::read_cache(&cache_path))
+        .await
+        .unwrap_or_else(|_| Ok(None));
+    match cached {
         Ok(Some(content)) => {
             debug!("Loaded {path} from cache");
             return Ok(content);
@@ -192,10 +200,14 @@ pub async fn load_law_content(client: &reqwest::Client, path: &str) -> Result<St
     // Fetch from network
     let content = fetch_law_content(client, path).await?;
 
-    // Cache the result (best-effort)
-    if let Err(e) = cache::write_cache(path, &content) {
-        warn!("Failed to cache {path}: {e}");
-    }
+    // Cache the result (best-effort, blocking I/O)
+    let cache_path = path.to_string();
+    let cache_content = content.clone();
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = cache::write_cache(&cache_path, &cache_content) {
+            warn!("Failed to cache {cache_path}: {e}");
+        }
+    });
 
     Ok(content)
 }

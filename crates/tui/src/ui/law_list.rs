@@ -160,7 +160,9 @@ fn render_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let offset = if app.list_selected < app.list_offset {
         app.list_selected
     } else if app.list_selected >= app.list_offset + visible_height {
-        app.list_selected - visible_height + 1
+        app.list_selected
+            .saturating_sub(visible_height)
+            .saturating_add(1)
     } else {
         app.list_offset
     };

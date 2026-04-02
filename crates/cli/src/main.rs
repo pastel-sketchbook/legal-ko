@@ -108,6 +108,15 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Initialize tracing to stderr; respects RUST_LOG (default: warn).
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .init();
+
     let cli = Cli::parse();
     let client = client::http_client()?;
 
@@ -328,7 +337,7 @@ async fn cmd_articles(client: &reqwest::Client, id: &str, as_json: bool) -> Resu
         if let Some(t) = fm.get("제목") {
             title = t.as_str().to_string();
         }
-        println!("# {} — {}", id, title);
+        println!("# {id} — {title}");
         for a in &articles {
             println!("  L{}: {}", a.line_index, a.label);
         }

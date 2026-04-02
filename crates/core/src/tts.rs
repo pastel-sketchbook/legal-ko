@@ -140,6 +140,7 @@ pub enum TtsState {
 pub type TtsEngineHandle = Arc<Mutex<Option<RealtimeTts>>>;
 
 /// Create an unloaded engine handle.
+#[must_use]
 pub fn new_engine_handle() -> TtsEngineHandle {
     Arc::new(Mutex::new(None))
 }
@@ -153,7 +154,7 @@ pub fn new_engine_handle() -> TtsEngineHandle {
 /// ```sh
 /// LEGAL_KO_ONNX_THREADS=6 legal-ko-cli speak 123456
 /// ```
-pub const ONNX_THREADS_ENV: &str = "LEGAL_KO_ONNX_THREADS";
+pub(crate) const ONNX_THREADS_ENV: &str = "LEGAL_KO_ONNX_THREADS";
 
 /// Load the TTS engine synchronously (call from `spawn_blocking`).
 ///

@@ -1795,6 +1795,7 @@ dependencies = [
  "legal-ko-core",
  "serde_json",
  "tokio",
+ "tracing-subscriber",
 ]
 
 [[package]]

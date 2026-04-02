@@ -18,6 +18,7 @@ fn key_badge<'a>(theme: &Theme, key: &str, desc: &str) -> Vec<Span<'a>> {
 
 /// Build a status bar Line with an optional prefix, badge-style shortcuts,
 /// and the theme name right-aligned.
+#[must_use]
 pub fn status_line<'a>(
     theme: &Theme,
     prefix: &str,
@@ -64,6 +65,7 @@ pub fn status_line<'a>(
 }
 
 /// Title bar style (bg bar with bold title)
+#[must_use]
 pub fn title_bar(theme: &Theme) -> Style {
     Style::default()
         .fg(theme.title)
@@ -72,11 +74,13 @@ pub fn title_bar(theme: &Theme) -> Style {
 }
 
 /// Status / footer bar style
+#[must_use]
 pub fn status_bar(theme: &Theme) -> Style {
     Style::default().fg(theme.fg).bg(theme.panel_bg)
 }
 
 /// Build a status bar Line with a left message and the theme name right-aligned.
+#[must_use]
 pub fn status_message_line<'a>(theme: &Theme, msg: &str, width: u16) -> Line<'a> {
     let left = format!(" {msg}");
     let theme_label = format!(" {} ", theme.name);
@@ -96,6 +100,7 @@ pub fn status_message_line<'a>(theme: &Theme, msg: &str, width: u16) -> Line<'a>
 }
 
 /// Create a centered rect using percentage of the parent area.
+#[must_use]
 pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     let vertical = Layout::vertical([Constraint::Percentage(percent_y)])
         .flex(Flex::Center)

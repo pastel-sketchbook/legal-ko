@@ -81,6 +81,7 @@ impl App {
                 return;
             }
         }
+        // Invariant: `detail_articles` is non-empty (checked by early return at line 75).
         self.detail_scroll = self
             .detail_articles
             .last()

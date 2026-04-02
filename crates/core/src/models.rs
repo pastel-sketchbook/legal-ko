@@ -65,6 +65,7 @@ pub struct LawEntry {
 /// Convert a `MetadataIndex` into a sorted `Vec<LawEntry>`.
 ///
 /// Entries are sorted by title, then by category for deterministic ordering.
+#[must_use]
 pub fn entries_from_index(index: MetadataIndex) -> Vec<LawEntry> {
     let mut entries: Vec<LawEntry> = index
         .into_iter()

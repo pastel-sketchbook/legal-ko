@@ -7,6 +7,7 @@ use legal_ko_core::models::ArticleRef;
 /// Parse markdown content into styled ratatui Lines and extract article references.
 ///
 /// Returns (`rendered_lines`, articles).
+#[must_use]
 pub fn parse_law_markdown(raw: &str, theme: &Theme) -> (Vec<Line<'static>>, Vec<ArticleRef>) {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut articles: Vec<ArticleRef> = Vec::new();

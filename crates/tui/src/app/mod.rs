@@ -31,7 +31,7 @@ use tokio::sync::mpsc;
 use tracing::debug;
 use tracing::{error, info, warn};
 
-// Constants and TTS imports moved to tts.rs// ── View / Mode enums ─────────────────────────────────────────
+// ── View / Mode enums ─────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum View {
@@ -210,6 +210,8 @@ impl App {
         let bookmarks = Bookmarks::load();
         let prefs = Preferences::load();
         let theme_index = theme::theme_index_by_name(&prefs.theme);
+        // Invariant: http_client() only fails if TLS backend or system config is
+        // broken — the application cannot function without an HTTP client.
         let client = client::http_client().expect("Failed to build HTTP client");
 
         Self {

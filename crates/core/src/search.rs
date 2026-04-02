@@ -30,6 +30,7 @@ impl Searcher {
     ///
     /// Returns a disabled searcher if `LEGAL_KO_MEILI_URL` is not set or the
     /// `meilisearch` feature is not enabled.
+    #[must_use]
     pub fn from_env() -> Self {
         #[cfg(feature = "meilisearch")]
         {

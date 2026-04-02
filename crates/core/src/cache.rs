@@ -19,7 +19,7 @@ fn cache_dir() -> Result<PathBuf> {
 fn cache_key(path: &str) -> String {
     let hash = Sha256::digest(path.as_bytes());
     let mut s = String::with_capacity(64);
-    for b in hash.iter() {
+    for b in &hash {
         let _ = write!(s, "{b:02x}");
     }
     s
@@ -34,15 +34,13 @@ pub fn read_cache(path: &str) -> Result<Option<String>> {
     let file = cache_dir()?.join(cache_key(path));
     if file.exists() {
         // Check TTL
-        if let Ok(metadata) = file.metadata() {
-            if let Ok(modified) = metadata.modified() {
-                if let Ok(age) = modified.elapsed() {
-                    if age > CACHE_TTL {
-                        debug!("Cache expired for {path} (age: {}s)", age.as_secs());
-                        return Ok(None);
-                    }
-                }
-            }
+        if let Ok(metadata) = file.metadata()
+            && let Ok(modified) = metadata.modified()
+            && let Ok(age) = modified.elapsed()
+            && age > CACHE_TTL
+        {
+            debug!("Cache expired for {path} (age: {}s)", age.as_secs());
+            return Ok(None);
         }
 
         debug!("Cache hit for {path}");
