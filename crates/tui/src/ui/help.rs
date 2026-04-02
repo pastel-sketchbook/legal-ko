@@ -1,14 +1,16 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Flex, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::theme::Theme;
 
+use super::styles;
+
 /// Render a help overlay popup showing all keybindings
 pub fn render_help(f: &mut Frame, theme: &Theme, area: Rect) {
-    let popup_area = centered_rect(60, 80, area);
+    let popup_area = styles::centered_rect(60, 80, area);
 
     let mut help_lines = vec![
         header_line(theme, "Navigation"),
@@ -85,14 +87,4 @@ fn key_line(theme: &Theme, key: &str, desc: &str) -> Line<'static> {
         ),
         Span::styled(desc.to_string(), Style::default().fg(theme.fg)),
     ])
-}
-
-/// Create a centered rect using percentage of the parent area
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let vertical = Layout::vertical([Constraint::Percentage(percent_y)])
-        .flex(Flex::Center)
-        .split(area);
-    Layout::horizontal([Constraint::Percentage(percent_x)])
-        .flex(Flex::Center)
-        .split(vertical[0])[0]
 }

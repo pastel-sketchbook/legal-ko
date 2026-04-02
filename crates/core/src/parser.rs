@@ -12,7 +12,8 @@ pub fn strip_frontmatter(raw: &str) -> &str {
     if let Some(end) = raw[3..].find("\n---") {
         let after = end + 3 + 4; // skip past \n---
         if after < raw.len() {
-            return &raw[after..];
+            let rest = &raw[after..];
+            return rest.strip_prefix('\n').unwrap_or(rest);
         }
     }
     raw
@@ -50,7 +51,11 @@ pub fn parse_frontmatter(raw: &str) -> HashMap<String, FrontmatterValue> {
 
     for line in block.lines() {
         // List continuation: "- value"
-        if let Some(item) = line.strip_prefix("- ") {
+        let line = line.trim_end_matches('\r');
+        if let Some(item) = line
+            .strip_prefix("- ")
+            .or_else(|| line.strip_prefix("  - "))
+        {
             if current_key.is_some() {
                 current_list.push(strip_yaml_quotes(item.trim()));
             }
@@ -232,8 +237,7 @@ fn strip_markdown_line(line: &str) -> String {
 /// Extract plain text for a specific article by index.
 ///
 /// Returns the article heading and all subsequent lines up to the next
-/// article heading (or the next major heading `#`..`####`), stripped of
-/// markdown formatting.
+/// article heading, stripped of markdown formatting.
 ///
 /// The `article_index` corresponds to the index into the list returned
 /// by [`extract_articles`].
@@ -297,7 +301,7 @@ mod tests {
     #[test]
     fn test_strip_frontmatter() {
         let input = "---\ntitle: test\n---\n# Hello";
-        assert_eq!(strip_frontmatter(input), "\n# Hello");
+        assert_eq!(strip_frontmatter(input), "# Hello");
     }
 
     #[test]
@@ -385,10 +389,76 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_frontmatter_indented_list() {
+        let input = "---\n소관부처:\n  - 법무부\n  - 행정안전부\n---\n# Content";
+        let fm = parse_frontmatter(input);
+        let depts = fm.get("소관부처").unwrap().as_list();
+        assert_eq!(depts, vec!["법무부", "행정안전부"]);
+    }
+
+    #[test]
     fn test_parse_frontmatter_empty() {
         let input = "# No frontmatter";
         let fm = parse_frontmatter(input);
         assert!(fm.is_empty());
+    }
+
+    #[test]
+    fn test_strip_frontmatter_no_trailing_newline() {
+        // Frontmatter immediately followed by content without newline
+        let input = "---\ntitle: test\n---\nHello";
+        assert_eq!(strip_frontmatter(input), "Hello");
+    }
+
+    #[test]
+    fn test_strip_frontmatter_missing_close() {
+        let input = "---\ntitle: test\n# Hello";
+        // No closing ---, returns original
+        assert_eq!(strip_frontmatter(input), input);
+    }
+
+    #[test]
+    fn test_extract_articles_with_frontmatter() {
+        let input = "---\ntitle: test\n---\n##### 제1조 (목적)\nSome text";
+        let articles = extract_articles(input);
+        assert_eq!(articles.len(), 1);
+        assert_eq!(articles[0].label, "제1조 (목적)");
+        assert_eq!(articles[0].line_index, 0);
+    }
+
+    #[test]
+    fn test_extract_article_text_single_article() {
+        // Single article, text extends to end of document
+        let input = "##### 제1조 (목적)\n**①** 이 법은 목적을 정한다.";
+        let text = extract_article_text(input, 0).unwrap();
+        assert!(text.contains("제1조 (목적)"));
+        assert!(text.contains("① 이 법은 목적을 정한다."));
+    }
+
+    #[test]
+    fn test_enrich_entry_from_frontmatter() {
+        let mut entry = crate::models::LawEntry {
+            id: "kr/민법/법률".to_string(),
+            title: "민법".to_string(),
+            category: "법률".to_string(),
+            departments: Vec::new(),
+            enforcement_date: String::new(),
+            status: "시행".to_string(),
+            path: "kr/민법/법률.md".to_string(),
+        };
+        let raw = "---\n제목: 민법\n법령구분: 법률\n소관부처:\n- 법무부\n시행일자: '2026-03-17'\n상태: 시행\n---\n# 민법";
+        enrich_entry_from_frontmatter(&mut entry, raw);
+        assert_eq!(entry.departments, vec!["법무부"]);
+        assert_eq!(entry.enforcement_date, "2026-03-17");
+    }
+
+    #[test]
+    fn test_extract_full_text_no_frontmatter() {
+        let input = "# 법률\n##### 제1조 (목적)\n**①** 텍스트";
+        let text = extract_full_text(input);
+        assert!(text.contains("법률"));
+        assert!(text.contains("제1조 (목적)"));
+        assert!(text.contains("① 텍스트"));
     }
 
     #[test]

@@ -4,7 +4,7 @@ pub mod law_list;
 pub mod styles;
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Flex, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
@@ -95,7 +95,7 @@ enum FilterKind {
 }
 
 fn render_filter_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect, kind: FilterKind) {
-    let popup_area = centered_rect(40, 60, area);
+    let popup_area = styles::centered_rect(40, 60, area);
 
     let (title, items_source, current_filter): (&str, &[String], &Option<String>) = match kind {
         FilterKind::Category => (
@@ -160,13 +160,4 @@ fn render_filter_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect, kind
 
     f.render_widget(Clear, popup_area);
     f.render_widget(list, popup_area);
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let vertical = Layout::vertical([Constraint::Percentage(percent_y)])
-        .flex(Flex::Center)
-        .split(area);
-    Layout::horizontal([Constraint::Percentage(percent_x)])
-        .flex(Flex::Center)
-        .split(vertical[0])[0]
 }

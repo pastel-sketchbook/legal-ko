@@ -1,3 +1,4 @@
+use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
@@ -92,4 +93,14 @@ pub fn status_message_line<'a>(theme: &Theme, msg: &str, width: u16) -> Line<'a>
             Style::default().fg(theme.muted).bg(theme.panel_bg),
         ),
     ])
+}
+
+/// Create a centered rect using percentage of the parent area.
+pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let vertical = Layout::vertical([Constraint::Percentage(percent_y)])
+        .flex(Flex::Center)
+        .split(area);
+    Layout::horizontal([Constraint::Percentage(percent_x)])
+        .flex(Flex::Center)
+        .split(vertical[0])[0]
 }

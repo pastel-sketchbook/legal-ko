@@ -3,11 +3,11 @@ use clap::{Parser, Subcommand};
 use serde_json::json;
 
 use legal_ko_core::bookmarks::Bookmarks;
-use legal_ko_core::models::LawEntry;
+use legal_ko_core::models::{self, LawEntry};
 use legal_ko_core::search::{self, Searcher};
 #[cfg(feature = "tts")]
 use legal_ko_core::tts;
-use legal_ko_core::{cache, client, parser};
+use legal_ko_core::{client, parser, reqwest};
 
 #[derive(Parser)]
 #[command(
@@ -58,7 +58,7 @@ enum Command {
     },
     /// Show a law's full content
     Show {
-        /// Law ID (법령MST number)
+        /// Law ID (e.g. "kr/민법/법률")
         id: String,
 
         /// Output as JSON (includes raw markdown)
@@ -67,7 +67,7 @@ enum Command {
     },
     /// List articles (제X조) in a law
     Articles {
-        /// Law ID (법령MST number)
+        /// Law ID (e.g. "kr/민법/법률")
         id: String,
 
         /// Output as JSON
@@ -85,7 +85,7 @@ enum Command {
     /// Build with --release for smooth playback (debug builds are 10-50x slower).
     #[cfg(feature = "tts")]
     Speak {
-        /// Law ID (법령MST number)
+        /// Law ID (e.g. "kr/민법/법률")
         id: String,
 
         /// Read only a specific article (0-indexed)
@@ -109,6 +109,7 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let client = client::http_client()?;
 
     match cli.command {
         Command::List {
@@ -117,11 +118,11 @@ async fn main() -> Result<()> {
             bookmarks,
             json,
             limit,
-        } => cmd_list(category, department, bookmarks, json, limit).await,
-        Command::Search { query, json, limit } => cmd_search(&query, json, limit).await,
-        Command::Show { id, json } => cmd_show(&id, json).await,
-        Command::Articles { id, json } => cmd_articles(&id, json).await,
-        Command::Bookmarks { json } => cmd_bookmarks(json).await,
+        } => cmd_list(&client, category, department, bookmarks, json, limit).await,
+        Command::Search { query, json, limit } => cmd_search(&client, &query, json, limit).await,
+        Command::Show { id, json } => cmd_show(&client, &id, json).await,
+        Command::Articles { id, json } => cmd_articles(&client, &id, json).await,
+        Command::Bookmarks { json } => cmd_bookmarks(&client, json).await,
         #[cfg(feature = "tts")]
         Command::Speak {
             id,
@@ -129,28 +130,15 @@ async fn main() -> Result<()> {
             voice,
             fast,
             json,
-        } => cmd_speak(&id, article, &voice, fast, json).await,
+        } => cmd_speak(&client, &id, article, &voice, fast, json).await,
     }
 }
 
-async fn load_entries() -> Result<Vec<LawEntry>> {
-    let index = client::fetch_metadata()
+async fn load_entries(client: &reqwest::Client) -> Result<Vec<LawEntry>> {
+    let index = client::fetch_metadata(client)
         .await
         .context("Failed to load law metadata from GitHub")?;
-    let mut entries: Vec<LawEntry> = index
-        .into_iter()
-        .map(|(id, meta)| LawEntry {
-            id,
-            title: meta.title,
-            category: meta.category,
-            departments: meta.departments,
-            enforcement_date: meta.enforcement_date,
-            status: meta.status,
-            path: meta.path,
-        })
-        .collect();
-    entries.sort_by(|a, b| a.title.cmp(&b.title));
-    Ok(entries)
+    Ok(models::entries_from_index(index))
 }
 
 fn apply_filters<'a>(
@@ -213,13 +201,14 @@ fn print_entries(entries: &[&LawEntry], as_json: bool) -> Result<()> {
 }
 
 async fn cmd_list(
+    client: &reqwest::Client,
     category: Option<String>,
     department: Option<String>,
     bookmarks_only: bool,
     as_json: bool,
     limit: Option<usize>,
 ) -> Result<()> {
-    let entries = load_entries().await?;
+    let entries = load_entries(client).await?;
     let bm = Bookmarks::load();
     let mut filtered = apply_filters(
         &entries,
@@ -235,8 +224,13 @@ async fn cmd_list(
     Ok(())
 }
 
-async fn cmd_search(query: &str, as_json: bool, limit: Option<usize>) -> Result<()> {
-    let entries = load_entries().await?;
+async fn cmd_search(
+    client: &reqwest::Client,
+    query: &str,
+    as_json: bool,
+    limit: Option<usize>,
+) -> Result<()> {
+    let entries = load_entries(client).await?;
     let n = limit.unwrap_or(50);
 
     let searcher = Searcher::from_env();
@@ -263,25 +257,24 @@ async fn cmd_search(query: &str, as_json: bool, limit: Option<usize>) -> Result<
     Ok(())
 }
 
-async fn cmd_show(id: &str, as_json: bool) -> Result<()> {
-    let entries = load_entries().await?;
-    let entry = entries
-        .iter()
-        .find(|e| e.id == id)
-        .ok_or_else(|| anyhow::anyhow!("Law not found: {id}"))?;
-
-    // Try cache first, then fetch
-    let content = if let Some(c) = cache::read_cache(&entry.path)? {
-        c
-    } else {
-        let c = client::fetch_law_content(&entry.path).await?;
-        let _ = cache::write_cache(&entry.path, &c);
-        c
-    };
+async fn cmd_show(client: &reqwest::Client, id: &str, as_json: bool) -> Result<()> {
+    let path = format!("{id}.md");
+    let content = client::load_law_content(client, &path).await?;
 
     let stripped = parser::strip_frontmatter(&content);
 
     if as_json {
+        let mut entry = LawEntry {
+            id: id.to_string(),
+            title: String::new(),
+            category: String::new(),
+            departments: Vec::new(),
+            enforcement_date: String::new(),
+            status: String::new(),
+            path,
+        };
+        parser::enrich_entry_from_frontmatter(&mut entry, &content);
+
         let obj = json!({
             "id": entry.id,
             "title": entry.title,
@@ -296,24 +289,24 @@ async fn cmd_show(id: &str, as_json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_articles(id: &str, as_json: bool) -> Result<()> {
-    let entries = load_entries().await?;
-    let entry = entries
-        .iter()
-        .find(|e| e.id == id)
-        .ok_or_else(|| anyhow::anyhow!("Law not found: {id}"))?;
-
-    let content = if let Some(c) = cache::read_cache(&entry.path)? {
-        c
-    } else {
-        let c = client::fetch_law_content(&entry.path).await?;
-        let _ = cache::write_cache(&entry.path, &c);
-        c
-    };
+async fn cmd_articles(client: &reqwest::Client, id: &str, as_json: bool) -> Result<()> {
+    let path = format!("{id}.md");
+    let content = client::load_law_content(client, &path).await?;
 
     let articles = parser::extract_articles(&content);
 
     if as_json {
+        let mut entry = LawEntry {
+            id: id.to_string(),
+            title: String::new(),
+            category: String::new(),
+            departments: Vec::new(),
+            enforcement_date: String::new(),
+            status: String::new(),
+            path,
+        };
+        parser::enrich_entry_from_frontmatter(&mut entry, &content);
+
         let items: Vec<_> = articles
             .iter()
             .map(|a| {
@@ -330,7 +323,12 @@ async fn cmd_articles(id: &str, as_json: bool) -> Result<()> {
         });
         println!("{}", serde_json::to_string_pretty(&obj)?);
     } else {
-        println!("# {} — {}", entry.id, entry.title);
+        let mut title = String::new();
+        let fm = parser::parse_frontmatter(&content);
+        if let Some(t) = fm.get("제목") {
+            title = t.as_str().to_string();
+        }
+        println!("# {} — {}", id, title);
         for a in &articles {
             println!("  L{}: {}", a.line_index, a.label);
         }
@@ -338,9 +336,9 @@ async fn cmd_articles(id: &str, as_json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_bookmarks(as_json: bool) -> Result<()> {
+async fn cmd_bookmarks(client: &reqwest::Client, as_json: bool) -> Result<()> {
     let bm = Bookmarks::load();
-    let entries = load_entries().await?;
+    let entries = load_entries(client).await?;
     let results: Vec<&LawEntry> = entries.iter().filter(|e| bm.is_bookmarked(&e.id)).collect();
     print_entries(&results, as_json)?;
     Ok(())
@@ -349,6 +347,7 @@ async fn cmd_bookmarks(as_json: bool) -> Result<()> {
 #[cfg(feature = "tts")]
 #[allow(clippy::too_many_lines)]
 async fn cmd_speak(
+    client: &reqwest::Client,
     id: &str,
     article: Option<usize>,
     voice: &str,
@@ -365,26 +364,23 @@ async fn cmd_speak(
         tts::with_suppressed_output(|| tts::load_engine(&engine_handle_bg, &project_root))
     });
 
-    // Fetch metadata and law content concurrently with engine loading.
-    let entries = load_entries().await?;
-    let entry = entries
-        .iter()
-        .find(|e| e.id == id)
-        .ok_or_else(|| anyhow::anyhow!("Law not found: {id}"))?;
-
-    let content = if let Some(c) = cache::read_cache(&entry.path)? {
-        c
-    } else {
-        let c = client::fetch_law_content(&entry.path).await?;
-        let _ = cache::write_cache(&entry.path, &c);
-        c
-    };
+    // Fetch law content concurrently with engine loading.
+    let path = format!("{id}.md");
+    let content_future = client::load_law_content(client, &path);
 
     // Wait for engine to finish loading before starting synthesis.
     engine_load
         .await
         .context("TTS engine loading task panicked")?
         .context("TTS engine failed to load")?;
+
+    let content = content_future.await?;
+
+    let mut title = String::new();
+    let fm = parser::parse_frontmatter(&content);
+    if let Some(t) = fm.get("제목") {
+        title = t.as_str().to_string();
+    }
 
     let voice = voice.to_string();
     let profile = if fast {
@@ -410,8 +406,8 @@ async fn cmd_speak(
 
         if as_json {
             let obj = json!({
-                "id": entry.id,
-                "title": entry.title,
+                "id": id,
+                "title": title,
                 "article_index": article,
                 "duration_secs": result.duration_secs,
                 "generation_time_secs": result.generation_time_secs,
@@ -467,8 +463,8 @@ async fn cmd_speak(
 
         if as_json {
             let obj = json!({
-                "id": entry.id,
-                "title": entry.title,
+                "id": id,
+                "title": title,
                 "segments": stats.segments,
                 "duration_secs": stats.duration_secs,
                 "generation_time_secs": stats.generation_time_secs,

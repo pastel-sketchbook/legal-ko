@@ -2,7 +2,10 @@ use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::fmt::Write;
 use std::path::PathBuf;
+use std::time::Duration;
 use tracing::debug;
+
+const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Get the cache directory: ~/.cache/legal-ko/
 fn cache_dir() -> Result<PathBuf> {
@@ -15,10 +18,11 @@ fn cache_dir() -> Result<PathBuf> {
 /// Generate a cache key from a file path
 fn cache_key(path: &str) -> String {
     let hash = Sha256::digest(path.as_bytes());
-    hash.iter().fold(String::new(), |mut s, b| {
+    let mut s = String::with_capacity(64);
+    for b in hash.iter() {
         let _ = write!(s, "{b:02x}");
-        s
-    })
+    }
+    s
 }
 
 /// Try to read cached content for a given path.
@@ -29,6 +33,18 @@ fn cache_key(path: &str) -> String {
 pub fn read_cache(path: &str) -> Result<Option<String>> {
     let file = cache_dir()?.join(cache_key(path));
     if file.exists() {
+        // Check TTL
+        if let Ok(metadata) = file.metadata() {
+            if let Ok(modified) = metadata.modified() {
+                if let Ok(age) = modified.elapsed() {
+                    if age > CACHE_TTL {
+                        debug!("Cache expired for {path} (age: {}s)", age.as_secs());
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+
         debug!("Cache hit for {path}");
         let content = std::fs::read_to_string(&file)
             .with_context(|| format!("Failed to read cache file {}", file.display()))?;
@@ -51,8 +67,11 @@ pub fn write_cache(path: &str, content: &str) -> Result<()> {
         .with_context(|| format!("Failed to create cache dir {}", dir.display()))?;
 
     let file = dir.join(cache_key(path));
-    std::fs::write(&file, content)
-        .with_context(|| format!("Failed to write cache file {}", file.display()))?;
+    let tmp = file.with_extension("tmp");
+    std::fs::write(&tmp, content)
+        .with_context(|| format!("Failed to write temp cache file {}", tmp.display()))?;
+    std::fs::rename(&tmp, &file)
+        .with_context(|| format!("Failed to rename cache file {}", file.display()))?;
 
     debug!("Cached content for {path}");
     Ok(())

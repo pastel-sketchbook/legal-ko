@@ -1,5 +1,5 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Flex, Layout, Margin, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
@@ -202,7 +202,7 @@ fn render_detail_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
 
 /// Render the article list popup
 pub fn render_article_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
-    let popup_area = centered_rect(50, 70, area);
+    let popup_area = styles::centered_rect(50, 70, area);
 
     let items: Vec<ListItem> = app
         .detail_articles
@@ -236,14 +236,4 @@ pub fn render_article_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect)
     };
     f.render_widget(Clear, clear_area);
     f.render_widget(list, popup_area);
-}
-
-/// Create a centered rect
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let vertical = Layout::vertical([Constraint::Percentage(percent_y)])
-        .flex(Flex::Center)
-        .split(area);
-    Layout::horizontal([Constraint::Percentage(percent_x)])
-        .flex(Flex::Center)
-        .split(vertical[0])[0]
 }

@@ -9,7 +9,12 @@ pub const DEFAULT_THEME: &str = "Default";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Preferences {
     /// Theme name (must match a name in the TUI's `theme::THEMES`).
+    #[serde(default = "default_theme")]
     pub theme: String,
+}
+
+fn default_theme() -> String {
+    DEFAULT_THEME.to_string()
 }
 
 impl Default for Preferences {
@@ -23,10 +28,7 @@ impl Default for Preferences {
 impl Preferences {
     /// Path to preferences file: ~/.config/legal-ko/preferences.json
     fn path() -> Result<PathBuf> {
-        let dir = dirs::config_dir()
-            .context("Cannot determine config directory")?
-            .join("legal-ko");
-        Ok(dir.join("preferences.json"))
+        Ok(crate::config::config_dir()?.join("preferences.json"))
     }
 
     /// Load preferences from disk, falling back to defaults on any error.
@@ -42,16 +44,33 @@ impl Preferences {
 
     fn try_load() -> Result<Self> {
         let path = Self::path()?;
-        if !path.exists() {
-            debug!("No preferences file at {}", path.display());
-            return Ok(Self::default());
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                debug!("No preferences file at {}", path.display());
+                return Ok(Self::default());
+            }
+            Err(e) => {
+                return Err(
+                    anyhow::anyhow!(e).context(format!("Failed to read {}", path.display()))
+                );
+            }
+        };
+        match serde_json::from_str::<Self>(&content) {
+            Ok(prefs) => {
+                debug!("Loaded preferences: theme={}", prefs.theme);
+                Ok(prefs)
+            }
+            Err(e) => {
+                let bak = path.with_extension("json.bak");
+                warn!(
+                    "Corrupt preferences.json, renaming to {}: {e}",
+                    bak.display()
+                );
+                let _ = std::fs::rename(&path, &bak);
+                Ok(Self::default())
+            }
         }
-        let content = std::fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read {}", path.display()))?;
-        let prefs: Self =
-            serde_json::from_str(&content).context("Failed to parse preferences.json")?;
-        debug!("Loaded preferences: theme={}", prefs.theme);
-        Ok(prefs)
     }
 
     /// Save preferences to disk.
@@ -68,8 +87,11 @@ impl Preferences {
         }
         let content =
             serde_json::to_string_pretty(self).context("Failed to serialize preferences")?;
-        std::fs::write(&path, content)
-            .with_context(|| format!("Failed to write {}", path.display()))?;
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, &content)
+            .with_context(|| format!("Failed to write {}", tmp.display()))?;
+        std::fs::rename(&tmp, &path)
+            .with_context(|| format!("Failed to rename {}", path.display()))?;
         debug!("Saved preferences to {}", path.display());
         Ok(())
     }
