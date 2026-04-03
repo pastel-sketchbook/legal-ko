@@ -219,6 +219,9 @@ pub struct App {
     /// When set, the event loop should suspend the TUI and run this agent
     /// in the foreground (fallback for terminals without split support).
     pub suspend_agent: Option<SuspendRequest>,
+    /// Deferred article jump: when a `navigate` command triggers an auto-open,
+    /// the article prefix is stashed here and executed once content loads.
+    pub pending_navigate_article: Option<String>,
 }
 
 impl App {
@@ -305,6 +308,7 @@ impl App {
             installed_agents,
             last_agent_index,
             suspend_agent: None,
+            pending_navigate_article: None,
         }
     }
 
@@ -367,9 +371,11 @@ impl App {
 
     /// Navigate to a law (and optionally an article) based on the current view.
     ///
-    /// - **List view**: finds the law by ID in the filtered list and selects it.
+    /// - **List view**: selects the law, auto-opens it, and (if an article is
+    ///   specified) stashes the article for a deferred jump once content loads.
     /// - **Detail view, same law**: jumps to the matching article (prefix match).
-    /// - **Detail view, different law**: returns to list and selects the law.
+    /// - **Detail view, different law**: returns to list, selects the law,
+    ///   auto-opens it, and stashes the article for deferred jump.
     fn handle_navigate(&mut self, law_id: &str, article: Option<&str>) {
         match self.view {
             View::Detail => {
@@ -393,13 +399,17 @@ impl App {
                     }
                     // No article specified + same law → nothing to do.
                 } else {
-                    // Different law — go back to list and select it.
+                    // Different law — go back to list, select, and auto-open.
                     self.go_back();
                     self.select_law_by_id(law_id);
+                    self.pending_navigate_article = article.map(String::from);
+                    self.open_selected();
                 }
             }
             View::List => {
                 self.select_law_by_id(law_id);
+                self.pending_navigate_article = article.map(String::from);
+                self.open_selected();
             }
             View::Loading => {
                 self.status_message = Some("Still loading — navigate ignored".to_string());
@@ -522,10 +532,21 @@ impl App {
         } else if std::env::var("GHOSTTY_RESOURCES_DIR").is_ok() {
             // Ghostty on macOS: use AppleScript to split the focused terminal
             // and run the agent in the new pane via a surface configuration.
+            //
+            // Ghostty surfaces run via `exec -l <cmd>` inside a bash shell
+            // with --noprofile --norc.  This causes two problems:
+            //   1. No user PATH — scripts that call other binaries (e.g. amp
+            //      calling `node`) fail because the dependency isn't found.
+            //   2. `exec -l` prepends `-` to argv[0], causing binaries to
+            //      see a bogus flag (e.g. `-/opt/homebrew/bin/copilot`).
+            //
+            // Fix: wrap in `/bin/zsh -l -c 'exec <agent>'`.  The login shell
+            // sources the user's profile (fixes PATH), and our inner `exec`
+            // runs the binary cleanly without the `-` prefix mangling.
             let script = format!(
                 r#"tell application "Ghostty"
     set cfg to new surface configuration
-    set command of cfg to "{agent_bin}"
+    set command of cfg to "/bin/zsh -l -c 'exec {agent_bin}'"
     set t to focused terminal of selected tab of front window
     split t direction right with configuration cfg
 end tell"#
@@ -839,5 +860,20 @@ end tell"#
         self.detail_scroll = 0;
         self.view = View::Detail;
         self.status_message = None;
+
+        // Execute deferred article jump from a navigate command.
+        if let Some(art_query) = self.pending_navigate_article.take() {
+            if let Some((idx, art)) = self
+                .detail_articles
+                .iter()
+                .enumerate()
+                .find(|(_, a)| a.label.starts_with(&art_query))
+            {
+                self.detail_scroll = art.line_index;
+                self.status_message = Some(format!("→ {}", self.detail_articles[idx].label));
+            } else {
+                self.status_message = Some(format!("Article not found: {art_query}"));
+            }
+        }
     }
 }

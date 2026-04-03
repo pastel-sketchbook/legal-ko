@@ -283,61 +283,43 @@ legal-ko-cli articles "kr/주택임대차보호법/법률" --json
 
 ### Navigating the TUI
 
-After finding relevant results, use `legal-ko-cli navigate` to move the TUI's
-focus to the law or article. The behaviour is **context-aware** — it adapts
-based on the TUI's current view.
+After finding relevant results, use `legal-ko-cli navigate` to **open the law
+and jump to the article directly** in the TUI. The command is fully
+context-aware — it handles every view state automatically:
 
-**Read context first**, then navigate accordingly:
+- **List view** → selects the law, opens it, and jumps to the article (if specified).
+- **Detail view (same law)** → jumps to the article immediately.
+- **Detail view (different law)** → goes back to list, opens the target law, and
+  jumps to the article.
 
-```bash
-# 1. Always read context first to know what view the TUI is on
-legal-ko-cli context --json
-```
-
-**If TUI is on list view** — navigate scrolls to and highlights the law:
-
-```bash
-# Scroll to 주택임대차보호법 in the list
-legal-ko-cli navigate "kr/주택임대차보호법/법률"
-```
-
-**If TUI is on detail view (same law)** — navigate jumps to the article:
+> **You do NOT need to read context first.** Just navigate — the TUI figures out
+> the right action based on its current state.
 
 ```bash
-# Jump to 제3조 within the currently viewed law
+# Open 주택임대차보호법 and jump to 제3조 — works from any view
 legal-ko-cli navigate "kr/주택임대차보호법/법률" --article "제3조"
-```
 
-**If TUI is on detail view (different law)** — navigate returns to list and
-highlights the target law:
-
-```bash
-# TUI is viewing 민법 but we want to point to 주택임대차보호법
-legal-ko-cli navigate "kr/주택임대차보호법/법률"
+# Open a law without targeting a specific article
+legal-ko-cli navigate "kr/민법/법률"
 ```
 
 **Article matching:** The `--article` value is matched as a **prefix** against
 article labels. Use short prefixes like `"제3조"` to match `"제3조 (대항력 등)"`.
 Use longer strings for disambiguation when multiple articles share a prefix.
 
-**Workflow pattern for OpenCode:**
+**Workflow pattern:**
 
 ```bash
-# 1. Read what the user is looking at
-legal-ko-cli context --json
-
-# 2. Search for relevant laws
+# 1. Search for relevant laws
 legal-ko-cli search "임대차" --json --limit 20
 
-# 3. Show the most relevant law
+# 2. Read the most relevant law
 legal-ko-cli show "kr/주택임대차보호법/법률" --json
 
-# 4. Get its articles
+# 3. Get its articles
 legal-ko-cli articles "kr/주택임대차보호법/법률" --json
 
-# 5. Navigate the TUI to the relevant result
-#    - On list view: scrolls to the law
-#    - On detail view: jumps to the article
+# 4. Open the law and jump to the relevant article in the TUI
 legal-ko-cli navigate "kr/주택임대차보호법/법률" --article "제3조"
 ```
 
