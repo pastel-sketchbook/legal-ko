@@ -16,7 +16,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use tracing::info;
 
-use app::{App, InputMode, Popup, View};
+use app::{App, InputMode, Popup, SuspendRequest, View};
 
 /// Terminal writer type when TTS is enabled: a buffered File wrapping a dup'd terminal fd.
 /// This lets us permanently redirect stdout/stderr to /dev/null (to suppress ONNX
@@ -107,7 +107,10 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Run app
-    let result = run_app(&mut terminal).await;
+    #[cfg(feature = "tts")]
+    let result = run_app(&mut terminal, (stdout_backup, stderr_backup)).await;
+    #[cfg(not(feature = "tts"))]
+    let result = run_app(&mut terminal, (-1, -1)).await;
 
     // Restore terminal
     disable_raw_mode()?;
@@ -139,7 +142,10 @@ async fn main() -> Result<()> {
 }
 
 #[allow(clippy::unused_async)]
-async fn run_app(terminal: &mut Terminal<CrosstermBackend<TermWriter>>) -> Result<()> {
+async fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<TermWriter>>,
+    _fd_backup: (i32, i32),
+) -> Result<()> {
     let mut app = App::new();
     app.start_loading();
 
@@ -169,10 +175,75 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<TermWriter>>) -> Resul
             handle_key_event(&mut app, key, terminal.size()?.height as usize);
         }
 
+        // ── Suspend-and-resume fallback ──────────────────────
+        //
+        // When the user opens an AI agent in a terminal without split
+        // support, open_agent_split() sets suspend_agent instead of
+        // spawning a split pane.  We leave the alternate screen, run
+        // the agent as a blocking child, and resume the TUI on exit.
+        if let Some(req) = app.suspend_agent.take() {
+            suspend_and_run(terminal, &req, _fd_backup)?;
+            app.status_message = Some(format!("{} exited — TUI resumed", req.agent_name));
+        }
+
         if app.should_quit {
             break;
         }
     }
+
+    Ok(())
+}
+
+/// Temporarily leave the TUI, run an agent binary in the foreground, then resume.
+fn suspend_and_run(
+    terminal: &mut Terminal<CrosstermBackend<TermWriter>>,
+    req: &SuspendRequest,
+    _fd_backup: (i32, i32),
+) -> Result<()> {
+    // Leave TUI mode
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+
+    // TTS: temporarily restore real stdout/stderr so the agent can use them
+    #[cfg(feature = "tts")]
+    // SAFETY: _fd_backup fds are valid copies saved at the start of main().
+    // We temporarily restore them so the child process inherits usable
+    // stdout/stderr, then redirect back to /dev/null after the child exits.
+    unsafe {
+        if _fd_backup.0 >= 0 {
+            libc::dup2(_fd_backup.0, libc::STDOUT_FILENO);
+        }
+        if _fd_backup.1 >= 0 {
+            libc::dup2(_fd_backup.1, libc::STDERR_FILENO);
+        }
+    }
+
+    // Run the agent as a blocking child process
+    let status = std::process::Command::new(&req.binary_path).status();
+    match &status {
+        Ok(s) => info!(agent = req.agent_name, exit_code = ?s.code(), "Agent exited"),
+        Err(e) => info!(agent = req.agent_name, error = %e, "Failed to run agent"),
+    }
+
+    // TTS: redirect stdout/stderr back to /dev/null
+    #[cfg(feature = "tts")]
+    // SAFETY: We re-redirect stdout/stderr to /dev/null so ONNX Runtime
+    // background threads don't pollute the restored TUI.
+    unsafe {
+        if let Ok(devnull) = std::fs::OpenOptions::new().write(true).open("/dev/null") {
+            use std::os::unix::io::AsRawFd;
+            let null_fd = devnull.as_raw_fd();
+            libc::dup2(null_fd, libc::STDOUT_FILENO);
+            libc::dup2(null_fd, libc::STDERR_FILENO);
+        }
+    }
+
+    // Re-enter TUI mode
+    enable_raw_mode()?;
+    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    terminal.hide_cursor()?;
+    terminal.clear()?;
 
     Ok(())
 }

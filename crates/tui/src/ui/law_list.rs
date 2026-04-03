@@ -237,8 +237,6 @@ fn render_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             ("/", "search"),
             ("c", "category"),
             ("d", "department"),
-            ("b", "bookmarks"),
-            ("B", "bookmark"),
             #[cfg(feature = "tts")]
             ("T", "tts profile"),
             ("t", "theme"),

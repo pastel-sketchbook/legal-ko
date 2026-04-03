@@ -101,6 +101,19 @@ pub enum Message {
     TtsSynthesisError(String),
 }
 
+// ── Suspend request (agent in foreground) ─────────────────────
+
+/// Request to suspend the TUI and run an agent in the foreground.
+///
+/// Used as a fallback when the terminal doesn't support split panes
+/// (e.g. Rio, plain Terminal.app). The event loop detects a pending
+/// request, leaves alternate screen / raw mode, runs the agent as a
+/// blocking child process, and re-enters the TUI when it exits.
+pub struct SuspendRequest {
+    pub binary_path: String,
+    pub agent_name: String,
+}
+
 // ── App state ─────────────────────────────────────────────────
 
 #[allow(clippy::struct_excessive_bools)]
@@ -203,6 +216,9 @@ pub struct App {
     pub installed_agents: Vec<&'static AiAgent>,
     /// Index of the last-used agent in `AGENTS` (persisted in preferences).
     pub last_agent_index: Option<usize>,
+    /// When set, the event loop should suspend the TUI and run this agent
+    /// in the foreground (fallback for terminals without split support).
+    pub suspend_agent: Option<SuspendRequest>,
 }
 
 impl App {
@@ -288,6 +304,7 @@ impl App {
             meili_search_query: None,
             installed_agents,
             last_agent_index,
+            suspend_agent: None,
         }
     }
 
@@ -427,11 +444,12 @@ impl App {
         }
     }
 
-    /// Open an AI agent instance in a split pane to the right.
+    /// Open an AI agent — either in a split pane or via suspend-and-resume.
     ///
     /// Detects the running terminal (tmux, WezTerm, Zellij, Ghostty) and
-    /// spawns a right-side split with the given agent binary.  Shows an error
-    /// in the status bar when no supported terminal is detected.
+    /// spawns a right-side split with the given agent binary.  When no
+    /// supported terminal is detected, sets `suspend_agent` so the event
+    /// loop can suspend the TUI and run the agent in the foreground.
     pub fn open_agent_split(&mut self, agent: &AiAgent) {
         use std::process::Command;
 
@@ -462,6 +480,20 @@ impl App {
                 return;
             }
         };
+
+        // Remember this agent as the last-used choice (before attempting split).
+        if let Some(idx) = AGENTS.iter().position(|a| a.name == agent.name) {
+            self.last_agent_index = Some(idx);
+            let prefs = Preferences {
+                theme: self.theme().name.to_string(),
+                agent: Some(agent.name.to_string()),
+            };
+            tokio::task::spawn_blocking(move || {
+                if let Err(e) = prefs.save() {
+                    warn!(error = %e, "Failed to save agent preference");
+                }
+            });
+        }
 
         let result = if std::env::var("TMUX").is_ok() {
             // -l 60%: new pane (agent) gets 60% width, TUI keeps 40%
@@ -500,24 +532,14 @@ end tell"#
             );
             Command::new("osascript").args(["-e", &script]).spawn()
         } else {
-            self.status_message =
-                Some("No supported terminal (tmux/WezTerm/Zellij/Ghostty)".to_string());
+            // No supported split terminal — request suspend-and-resume fallback.
+            self.suspend_agent = Some(SuspendRequest {
+                binary_path: agent_bin,
+                agent_name: agent.name.to_string(),
+            });
+            self.status_message = Some(format!("Launching {}…", agent.name));
             return;
         };
-
-        // Remember this agent as the last-used choice.
-        if let Some(idx) = AGENTS.iter().position(|a| a.name == agent.name) {
-            self.last_agent_index = Some(idx);
-            let prefs = Preferences {
-                theme: self.theme().name.to_string(),
-                agent: Some(agent.name.to_string()),
-            };
-            tokio::task::spawn_blocking(move || {
-                if let Err(e) = prefs.save() {
-                    warn!(error = %e, "Failed to save agent preference");
-                }
-            });
-        }
 
         match result {
             Ok(_) => {
@@ -563,7 +585,6 @@ end tell"#
             Message::MetadataLoaded(index) => {
                 self.load_metadata(index);
                 self.view = View::List;
-                self.status_message = Some(format!("Loaded {} laws", self.all_laws.len()));
                 // Start Meilisearch warmup in background
                 if self.searcher.is_enabled() {
                     let searcher = Arc::clone(&self.searcher);
