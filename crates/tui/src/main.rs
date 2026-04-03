@@ -152,9 +152,12 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<TermWriter>>) -> Resul
             app.handle_message(msg);
         }
 
-        // Check if TTS playback finished
+        // Check for TTS playback finished
         #[cfg(feature = "tts")]
         app.check_tts_playback();
+
+        // Check for external commands (e.g. navigate from OpenCode)
+        app.poll_command();
 
         // Advance animation tick
         app.tick = app.tick.wrapping_add(1);
@@ -178,12 +181,14 @@ fn handle_key_event(app: &mut App, key: KeyEvent, terminal_height: usize) {
     // Popups have priority
     if app.popup != Popup::None {
         handle_popup_key(app, key);
+        app.sync_context();
         return;
     }
 
     // Search mode has priority
     if app.input_mode == InputMode::Search {
         handle_search_key(app, key);
+        app.sync_context();
         return;
     }
 
@@ -192,6 +197,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent, terminal_height: usize) {
         View::List => handle_list_key(app, key, terminal_height),
         View::Detail => handle_detail_key(app, key, terminal_height),
     }
+    app.sync_context();
 }
 
 fn handle_loading_key(app: &mut App, key: KeyEvent) {
@@ -227,6 +233,7 @@ fn handle_list_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         KeyCode::Char('t') => app.next_theme(),
         #[cfg(feature = "tts")]
         KeyCode::Char('T') => app.toggle_tts_profile(),
+        KeyCode::Char('o') => app.open_opencode_split(),
         KeyCode::Char('?') => app.popup = Popup::Help,
         KeyCode::Esc => {
             if app.search_query.is_empty() {
@@ -269,6 +276,7 @@ fn handle_detail_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         KeyCode::Char('R') => app.speak_full(),
         #[cfg(feature = "tts")]
         KeyCode::Char('s') => app.stop_tts(),
+        KeyCode::Char('o') => app.open_opencode_split(),
         KeyCode::Char('?') => app.popup = Popup::Help,
         _ => {}
     }

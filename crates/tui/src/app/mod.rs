@@ -268,6 +268,117 @@ impl App {
         &theme::THEMES[self.theme_index]
     }
 
+    /// Write the current browsing context to `~/.cache/legal-ko/context.json`.
+    ///
+    /// Called after every key event so that `legal-ko-cli context` (and by
+    /// extension OpenCode in the adjacent split) can read what the user is
+    /// currently looking at.
+    pub fn sync_context(&self) {
+        use legal_ko_core::context::{Snapshot, build_and_write};
+
+        let view_str = match self.view {
+            View::Loading => "loading",
+            View::List => "list",
+            View::Detail => "detail",
+        };
+
+        let snap = Snapshot {
+            view: view_str,
+            selected_entry: self.selected_entry(),
+            search_query: &self.search_query,
+            category_filter: self.category_filter.as_deref(),
+            department_filter: self.department_filter.as_deref(),
+            bookmarks_only: self.bookmarks_only,
+            total_laws: self.all_laws.len(),
+            filtered_count: self.filtered_indices.len(),
+            detail_entry: self.detail.as_ref().map(|d| &d.entry),
+            detail_articles: &self.detail_articles,
+            detail_scroll: self.detail_scroll,
+            detail_lines_count: self.detail_lines_count,
+        };
+
+        if let Err(e) = build_and_write(&snap) {
+            warn!(error = %e, "Failed to write context.json");
+        }
+    }
+
+    /// Poll for an external command (e.g. from `legal-ko-cli navigate`).
+    ///
+    /// Called every event-loop tick (~50ms). If a command file exists it is
+    /// atomically consumed and dispatched.
+    pub fn poll_command(&mut self) {
+        use legal_ko_core::context::take_command;
+
+        if let Some(cmd) = take_command() {
+            match cmd.action.as_str() {
+                "navigate" => self.handle_navigate(&cmd.law_id, cmd.article.as_deref()),
+                other => {
+                    warn!(action = other, "Unknown command action");
+                    self.status_message = Some(format!("Unknown command: {other}"));
+                }
+            }
+        }
+    }
+
+    /// Navigate to a law (and optionally an article) based on the current view.
+    ///
+    /// - **List view**: finds the law by ID in the filtered list and selects it.
+    /// - **Detail view, same law**: jumps to the matching article (prefix match).
+    /// - **Detail view, different law**: returns to list and selects the law.
+    fn handle_navigate(&mut self, law_id: &str, article: Option<&str>) {
+        match self.view {
+            View::Detail => {
+                let same_law = self.detail.as_ref().is_some_and(|d| d.entry.id == law_id);
+
+                if same_law {
+                    if let Some(art_query) = article {
+                        // Find the article whose label starts with the query string.
+                        if let Some((idx, art)) = self
+                            .detail_articles
+                            .iter()
+                            .enumerate()
+                            .find(|(_, a)| a.label.starts_with(art_query))
+                        {
+                            self.detail_scroll = art.line_index;
+                            self.status_message =
+                                Some(format!("→ {}", self.detail_articles[idx].label));
+                        } else {
+                            self.status_message = Some(format!("Article not found: {art_query}"));
+                        }
+                    }
+                    // No article specified + same law → nothing to do.
+                } else {
+                    // Different law — go back to list and select it.
+                    self.go_back();
+                    self.select_law_by_id(law_id);
+                }
+            }
+            View::List => {
+                self.select_law_by_id(law_id);
+            }
+            View::Loading => {
+                self.status_message = Some("Still loading — navigate ignored".to_string());
+            }
+        }
+    }
+
+    /// Find a law by ID in the current filtered list and select it.
+    fn select_law_by_id(&mut self, law_id: &str) {
+        if let Some(pos) = self
+            .filtered_indices
+            .iter()
+            .position(|&i| self.all_laws[i].id == law_id)
+        {
+            self.list_selected = pos;
+            self.status_message = Some(format!(
+                "→ {}",
+                self.all_laws[self.filtered_indices[pos]].title
+            ));
+        } else {
+            self.status_message = Some(format!("Law not in current list: {law_id}"));
+        }
+    }
+
     /// Cycle to the next theme. Saves preference to disk.
     pub fn next_theme(&mut self) {
         self.theme_index = (self.theme_index + 1) % theme::THEMES.len();
@@ -284,6 +395,91 @@ impl App {
             let (lines, _) = crate::parser::parse_law_markdown(&detail.raw_markdown, self.theme());
             self.detail_lines_count = lines.len();
             self.detail_rendered_lines = lines;
+        }
+    }
+
+    /// Open an OpenCode instance in a split pane to the right.
+    ///
+    /// Detects the running terminal (tmux, WezTerm, Zellij, Ghostty) and
+    /// spawns a right-side split with `opencode`.  Shows an error in the
+    /// status bar when no supported terminal is detected.
+    pub fn open_opencode_split(&mut self) {
+        use std::process::Command;
+
+        // Resolve absolute path to `opencode` so it works even in shells
+        // that don't source the user's profile (e.g. Ghostty surface command).
+        // If opencode is not installed, show a helpful message and bail out.
+        let opencode_bin = match Command::new("which")
+            .arg("opencode")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| {
+                let s = String::from_utf8(o.stdout).ok()?;
+                let trimmed = s.trim().to_string();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed)
+                }
+            }) {
+            Some(path) => path,
+            None => {
+                self.status_message =
+                    Some("opencode not found — please install opencode first".to_string());
+                warn!("opencode binary not found in PATH");
+                return;
+            }
+        };
+
+        let result = if std::env::var("TMUX").is_ok() {
+            // -l 60%: new pane (opencode) gets 60% width, TUI keeps 40%
+            Command::new("tmux")
+                .args(["split-window", "-h", "-l", "60%", &opencode_bin])
+                .spawn()
+        } else if std::env::var("WEZTERM_PANE").is_ok()
+            || std::env::var("WEZTERM_EXECUTABLE").is_ok()
+        {
+            // --percent 60: new pane gets 60% width
+            Command::new("wezterm")
+                .args([
+                    "cli",
+                    "split-pane",
+                    "--right",
+                    "--percent",
+                    "60",
+                    "--",
+                    &opencode_bin,
+                ])
+                .spawn()
+        } else if std::env::var("ZELLIJ").is_ok() {
+            Command::new("zellij")
+                .args(["action", "new-pane", "-d", "right", "--", &opencode_bin])
+                .spawn()
+        } else if std::env::var("GHOSTTY_RESOURCES_DIR").is_ok() {
+            // Ghostty on macOS: use AppleScript to split the focused terminal
+            // and run opencode in the new pane via a surface configuration.
+            let script = format!(
+                r#"tell application "Ghostty"
+    set cfg to new surface configuration
+    set command of cfg to "{opencode_bin}"
+    set t to focused terminal of selected tab of front window
+    split t direction right with configuration cfg
+end tell"#
+            );
+            Command::new("osascript").args(["-e", &script]).spawn()
+        } else {
+            self.status_message =
+                Some("No supported terminal (tmux/WezTerm/Zellij/Ghostty)".to_string());
+            return;
+        };
+
+        match result {
+            Ok(_) => self.status_message = Some("Opened OpenCode split".to_string()),
+            Err(e) => {
+                self.status_message = Some(format!("Failed to open split: {e}"));
+                warn!(error = %e, "Failed to open OpenCode split pane");
+            }
         }
     }
 

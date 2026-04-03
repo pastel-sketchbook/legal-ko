@@ -191,6 +191,8 @@ then pick the most relevant results.
 | `legal-ko-cli show <id>` | Read full law text | `--json` |
 | `legal-ko-cli articles <id>` | List articles in a law | `--json` |
 | `legal-ko-cli bookmarks` | List bookmarked laws | `--json` |
+| `legal-ko-cli context` | Read the TUI's current browsing state | `--json` |
+| `legal-ko-cli navigate <id>` | Send a navigate command to the TUI | `--article`, `--json` |
 
 **Law ID format:** `kr/{법령명}/{유형}` — e.g., `kr/민법/법률`, `kr/형법/법률`,
 `kr/주택임대차보호법/법률`
@@ -198,6 +200,144 @@ then pick the most relevant results.
 **Category values:** `법률`, `대통령령`, `부령`
 
 > **Always use `--json`** for structured output that's easier to parse.
+
+## OpenCode Integration (TUI Context)
+
+The TUI writes a context snapshot to `~/.cache/legal-ko/context.json` on every
+navigation event. When running as an OpenCode agent alongside the TUI, use
+`legal-ko-cli context --json` to read the user's current browsing state and
+respond in the context of what they are looking at.
+
+### Prerequisites
+
+- The TUI (`legal-ko`) must be running — the context file is only written while
+  the TUI is active.
+- OpenCode must be installed on the system. The TUI's `o` key opens an OpenCode
+  split pane in the current terminal (tmux, WezTerm, Zellij, or Ghostty). If
+  `opencode` is not found on `$PATH`, the TUI shows a status message asking the
+  user to install it first. No split is opened.
+
+### Context JSON Structure
+
+```json
+{
+  "view": "detail",
+  "timestamp": "2026-04-03T12:00:00Z",
+  "selected_law": {
+    "id": "kr/주택임대차보호법/법률",
+    "title": "주택임대차보호법",
+    "category": "법률",
+    "departments": ["법무부"]
+  },
+  "filters": {
+    "search_query": "임대차",
+    "category": null,
+    "department": null,
+    "bookmarks_only": false,
+    "total_laws": 6200,
+    "filtered_count": 15
+  },
+  "detail": {
+    "law_id": "kr/주택임대차보호법/법률",
+    "law_title": "주택임대차보호법",
+    "current_article": {
+      "index": 2,
+      "label": "제3조 (대항력 등)"
+    },
+    "total_articles": 18,
+    "scroll_position": 45,
+    "total_lines": 320
+  }
+}
+```
+
+| Field | Present When | Description |
+|-------|-------------|-------------|
+| `view` | Always | `"loading"`, `"list"`, or `"detail"` |
+| `timestamp` | Always | ISO 8601 time of last update |
+| `selected_law` | List or detail view | Law currently highlighted/open |
+| `filters` | List or detail view | Active search query, category, department filters |
+| `detail` | Detail view only | Scroll position, current article, total lines |
+| `detail.current_article` | When scrolled past an article heading | Article the user is reading |
+
+### Using Context in Searches
+
+When the context is available, use it to **skip phases** in the search workflow:
+
+1. **User is on detail view** — `detail.law_id` tells you which law they're
+   reading. Skip straight to Phase 4/5 (show + articles) for that law.
+2. **User has a search query** — `filters.search_query` tells you what they
+   searched for. Use it as a starting point for Phase 2.
+3. **User is on a specific article** — `detail.current_article.label` tells you
+   exactly which article they're reading. Quote it directly in your response.
+
+```bash
+# Read current context
+legal-ko-cli context --json
+
+# If they're viewing a law, fetch its articles directly
+legal-ko-cli articles "kr/주택임대차보호법/법률" --json
+```
+
+### Navigating the TUI
+
+After finding relevant results, use `legal-ko-cli navigate` to move the TUI's
+focus to the law or article. The behaviour is **context-aware** — it adapts
+based on the TUI's current view.
+
+**Read context first**, then navigate accordingly:
+
+```bash
+# 1. Always read context first to know what view the TUI is on
+legal-ko-cli context --json
+```
+
+**If TUI is on list view** — navigate scrolls to and highlights the law:
+
+```bash
+# Scroll to 주택임대차보호법 in the list
+legal-ko-cli navigate "kr/주택임대차보호법/법률"
+```
+
+**If TUI is on detail view (same law)** — navigate jumps to the article:
+
+```bash
+# Jump to 제3조 within the currently viewed law
+legal-ko-cli navigate "kr/주택임대차보호법/법률" --article "제3조"
+```
+
+**If TUI is on detail view (different law)** — navigate returns to list and
+highlights the target law:
+
+```bash
+# TUI is viewing 민법 but we want to point to 주택임대차보호법
+legal-ko-cli navigate "kr/주택임대차보호법/법률"
+```
+
+**Article matching:** The `--article` value is matched as a **prefix** against
+article labels. Use short prefixes like `"제3조"` to match `"제3조 (대항력 등)"`.
+Use longer strings for disambiguation when multiple articles share a prefix.
+
+**Workflow pattern for OpenCode:**
+
+```bash
+# 1. Read what the user is looking at
+legal-ko-cli context --json
+
+# 2. Search for relevant laws
+legal-ko-cli search "임대차" --json --limit 20
+
+# 3. Show the most relevant law
+legal-ko-cli show "kr/주택임대차보호법/법률" --json
+
+# 4. Get its articles
+legal-ko-cli articles "kr/주택임대차보호법/법률" --json
+
+# 5. Navigate the TUI to the relevant result
+#    - On list view: scrolls to the law
+#    - On detail view: jumps to the article
+legal-ko-cli navigate "kr/주택임대차보호법/법률" --article "제3조"
+```
 
 ## Error Handling
 

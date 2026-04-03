@@ -10,6 +10,7 @@ tts = ["dep:rodio", "dep:libc", "dep:vibe-rust"]
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
 dirs.workspace = true
 reqwest.workspace = true
 serde.workspace = true

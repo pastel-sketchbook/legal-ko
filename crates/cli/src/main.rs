@@ -80,6 +80,28 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Show the current TUI browsing context (for OpenCode integration)
+    Context {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Send a navigate command to the TUI (for OpenCode integration).
+    ///
+    /// On list view the TUI scrolls to the law. On detail view it jumps
+    /// to the specified article within the currently viewed law.
+    Navigate {
+        /// Law ID (e.g. "kr/민법/법률")
+        id: String,
+
+        /// Article label to jump to in detail view (e.g. "제3조")
+        #[arg(long)]
+        article: Option<String>,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Read a law aloud using TTS (`VibeVoice`).
     ///
     /// Build with --release for smooth playback (debug builds are 10-50x slower).
@@ -132,6 +154,8 @@ async fn main() -> Result<()> {
         Command::Show { id, json } => cmd_show(&client, &id, json).await,
         Command::Articles { id, json } => cmd_articles(&client, &id, json).await,
         Command::Bookmarks { json } => cmd_bookmarks(&client, json).await,
+        Command::Context { json } => cmd_context(json),
+        Command::Navigate { id, article, json } => cmd_navigate(&id, article, json),
         #[cfg(feature = "tts")]
         Command::Speak {
             id,
@@ -141,6 +165,29 @@ async fn main() -> Result<()> {
             json,
         } => cmd_speak(&client, &id, article, &voice, fast, json).await,
     }
+}
+
+fn cmd_navigate(id: &str, article: Option<String>, as_json: bool) -> Result<()> {
+    use legal_ko_core::context::{TuiCommand, write_command};
+
+    let cmd = TuiCommand {
+        action: "navigate".to_string(),
+        law_id: id.to_string(),
+        article,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    write_command(&cmd)?;
+
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&cmd)?);
+    } else {
+        print!("navigate → {}", cmd.law_id);
+        if let Some(ref art) = cmd.article {
+            print!(" (article: {art})");
+        }
+        println!();
+    }
+    Ok(())
 }
 
 async fn load_entries(client: &reqwest::Client) -> Result<Vec<LawEntry>> {
@@ -350,6 +397,42 @@ async fn cmd_bookmarks(client: &reqwest::Client, as_json: bool) -> Result<()> {
     let entries = load_entries(client).await?;
     let results: Vec<&LawEntry> = entries.iter().filter(|e| bm.is_bookmarked(&e.id)).collect();
     print_entries(&results, as_json)?;
+    Ok(())
+}
+
+fn cmd_context(as_json: bool) -> Result<()> {
+    let ctx = legal_ko_core::context::read_context()
+        .context("No TUI context found — is legal-ko running?")?;
+
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&ctx)?);
+    } else {
+        println!("view: {}", ctx.view);
+        println!("timestamp: {}", ctx.timestamp);
+        if let Some(ref law) = ctx.selected_law {
+            println!("selected: {} — {}", law.id, law.title);
+        }
+        if let Some(ref f) = ctx.filters {
+            if !f.search_query.is_empty() {
+                println!("search: {}", f.search_query);
+            }
+            if let Some(ref c) = f.category {
+                println!("category: {c}");
+            }
+            if let Some(ref d) = f.department {
+                println!("department: {d}");
+            }
+            println!("laws: {}/{}", f.filtered_count, f.total_laws);
+        }
+        if let Some(ref d) = ctx.detail {
+            println!("detail: {} — {}", d.law_id, d.law_title);
+            println!("scroll: {}/{}", d.scroll_position, d.total_lines);
+            if let Some(ref art) = d.current_article {
+                println!("article: [{}] {}", art.index, art.label);
+            }
+            println!("articles: {}", d.total_articles);
+        }
+    }
     Ok(())
 }
 

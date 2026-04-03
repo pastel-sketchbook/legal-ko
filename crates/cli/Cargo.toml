@@ -15,6 +15,7 @@ tts = ["legal-ko-core/tts"]
 [dependencies]
 legal-ko-core = { path = "../core" }
 anyhow.workspace = true
+chrono.workspace = true
 clap.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
