@@ -36,7 +36,7 @@ impl Preferences {
         match Self::try_load() {
             Ok(p) => p,
             Err(e) => {
-                warn!("Failed to load preferences: {e}");
+                warn!(error = %e, "Failed to load preferences");
                 Self::default()
             }
         }
@@ -47,7 +47,7 @@ impl Preferences {
         let content = match std::fs::read_to_string(&path) {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                debug!("No preferences file at {}", path.display());
+                debug!(path = %path.display(), "No preferences file found");
                 return Ok(Self::default());
             }
             Err(e) => {
@@ -58,14 +58,15 @@ impl Preferences {
         };
         match serde_json::from_str::<Self>(&content) {
             Ok(prefs) => {
-                debug!("Loaded preferences: theme={}", prefs.theme);
+                debug!(theme = %prefs.theme, "Loaded preferences");
                 Ok(prefs)
             }
             Err(e) => {
                 let bak = path.with_extension("json.bak");
                 warn!(
-                    "Corrupt preferences.json, renaming to {}: {e}",
-                    bak.display()
+                    backup = %bak.display(),
+                    error = %e,
+                    "Corrupt preferences.json, renaming",
                 );
                 let _ = std::fs::rename(&path, &bak);
                 Ok(Self::default())
@@ -92,7 +93,7 @@ impl Preferences {
             .with_context(|| format!("Failed to write {}", tmp.display()))?;
         std::fs::rename(&tmp, &path)
             .with_context(|| format!("Failed to rename {}", path.display()))?;
-        debug!("Saved preferences to {}", path.display());
+        debug!(path = %path.display(), "Saved preferences");
         Ok(())
     }
 }

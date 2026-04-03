@@ -25,7 +25,7 @@ use crate::theme::{self, Theme};
 
 // Constants and TTS imports moved to tts.rs
 #[cfg(feature = "tts")]
-use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player};
+use rodio::{MixerDeviceSink, Player};
 use tokio::sync::mpsc;
 #[cfg(feature = "tts")]
 use tracing::debug;
@@ -72,13 +72,6 @@ pub enum Message {
     TtsEngineLoaded,
     #[cfg(feature = "tts")]
     TtsEngineError(String),
-    /// Batch synthesis produced audio ready for playback.
-    #[cfg(feature = "tts")]
-    #[allow(dead_code)]
-    TtsBatchReady {
-        articles_audio: Vec<Vec<f32>>,
-        article_indices: Vec<usize>,
-    },
     /// Streaming playback started (prebuffer flushed).
     #[cfg(feature = "tts")]
     TtsPlaybackStarted,
@@ -281,9 +274,11 @@ impl App {
         let prefs = Preferences {
             theme: self.theme().name.to_string(),
         };
-        if let Err(e) = prefs.save() {
-            warn!("Failed to save theme preference: {e}");
-        }
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = prefs.save() {
+                warn!(error = %e, "Failed to save theme preference");
+            }
+        });
         // Re-render cached lines with the new theme
         if let Some(ref detail) = self.detail {
             let (lines, _) = crate::parser::parse_law_markdown(&detail.raw_markdown, self.theme());
@@ -345,12 +340,12 @@ impl App {
             }
             Message::MetadataError(err) => {
                 self.status_message = Some(format!("Error: {err}"));
-                error!("Failed to load metadata: {err}");
+                error!(error = %err, "Failed to load metadata");
             }
             Message::LawContentLoaded { id, content } => {
                 // Discard stale responses from a previous selection
                 if self.pending_detail_id.as_deref() != Some(&id) {
-                    info!("Discarding stale law content for {id}");
+                    info!(id, "Discarding stale law content");
                     return;
                 }
                 self.on_law_content_loaded(&id, &content);
@@ -365,7 +360,7 @@ impl App {
                 }
                 self.detail_loading = false;
                 self.status_message = Some(format!("Error loading {id}: {error}"));
-                error!("Failed to load law {id}: {error}");
+                error!(id, error, "Failed to load law");
             }
             #[cfg(feature = "tts")]
             Message::TtsEngineLoaded => {
@@ -385,7 +380,7 @@ impl App {
             Message::TtsEngineError(err) => {
                 self.tts_state = TtsState::Error;
                 self.status_message = Some(format!("TTS error: {err}"));
-                error!("TTS engine load failed: {err}");
+                error!(error = %err, "TTS engine load failed");
             }
             #[cfg(feature = "tts")]
             Message::TtsSynthesisDone => {
@@ -407,42 +402,6 @@ impl App {
                 }
             }
             #[cfg(feature = "tts")]
-            Message::TtsBatchReady {
-                articles_audio,
-                article_indices,
-            } => {
-                // Enqueue batch-synthesized articles for gapless playback
-                debug!("TTS batch ready: {} articles", articles_audio.len());
-                for idx in &article_indices {
-                    self.tts_article_queue.push_back(*idx);
-                }
-                // If we have a player, append audio; otherwise start fresh
-                if let Some(ref player) = self.tts_player {
-                    for samples in articles_audio {
-                        let source = rodio::buffer::SamplesBuffer::new(
-                            tts::CHANNELS,
-                            tts::SAMPLE_RATE,
-                            samples,
-                        );
-                        player.append(source);
-                    }
-                } else if let Ok(sink) = DeviceSinkBuilder::open_default_sink() {
-                    let player = Player::connect_new(sink.mixer());
-                    for samples in &articles_audio {
-                        let source = rodio::buffer::SamplesBuffer::new(
-                            tts::CHANNELS,
-                            tts::SAMPLE_RATE,
-                            samples.clone(),
-                        );
-                        player.append(source);
-                    }
-                    self.tts_device_sink = Some(sink);
-                    self.tts_player = Some(Arc::new(player));
-                }
-                self.tts_state = TtsState::Playing;
-                self.status_message = Some("Playing...".to_string());
-            }
-            #[cfg(feature = "tts")]
             Message::TtsSynthesisError(err) => {
                 self.tts_state = TtsState::Ready;
                 self.tts_player = None;
@@ -451,7 +410,7 @@ impl App {
                 self.tts_article_queue.clear();
                 self.tts_buffering = false;
                 self.status_message = Some(format!("TTS error: {err}"));
-                error!("TTS synthesis failed: {err}");
+                error!(error = %err, "TTS synthesis failed");
             }
             #[cfg(feature = "tts")]
             Message::TtsPlaybackStarted => {
@@ -480,7 +439,7 @@ impl App {
                 }
             }
             Message::MeiliError(err) => {
-                warn!("Meilisearch warmup failed: {err}");
+                warn!(error = %err, "Meilisearch warmup failed");
             }
             Message::MeiliSearchResults { seq, ids } => {
                 if seq == self.search_seq {
@@ -591,7 +550,7 @@ impl App {
 
         let entry = self.all_laws.iter().find(|e| e.id == id).cloned();
         let Some(mut entry) = entry else {
-            warn!("Law {id} not found in entries");
+            warn!(id, "Law not found in entries");
             self.detail_loading = false;
             return;
         };

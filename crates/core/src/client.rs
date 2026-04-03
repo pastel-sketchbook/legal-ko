@@ -72,7 +72,7 @@ pub async fn fetch_metadata(client: &reqwest::Client) -> Result<MetadataIndex> {
         {
             Ok(r) => break r,
             Err(e) if retries > 0 => {
-                warn!("GitHub API fetch failed, retrying in 2s: {e}");
+                warn!(error = %e, "GitHub API fetch failed, retrying in 2s");
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 retries -= 1;
             }
@@ -140,10 +140,7 @@ pub async fn fetch_metadata(client: &reqwest::Client) -> Result<MetadataIndex> {
         index.insert(id, meta);
     }
 
-    info!(
-        "Built metadata index with {} law entries from tree",
-        index.len()
-    );
+    info!(count = index.len(), "Built metadata index from tree");
     Ok(index)
 }
 
@@ -154,7 +151,7 @@ pub async fn fetch_metadata(client: &reqwest::Client) -> Result<MetadataIndex> {
 /// Returns an error if the HTTP request fails or the response body cannot be read.
 pub async fn fetch_law_content(client: &reqwest::Client, path: &str) -> Result<String> {
     let url = format!("{BASE_URL}/{path}");
-    debug!("Fetching law content from {url}");
+    debug!(url, "Fetching law content");
 
     let resp = client
         .get(&url)
@@ -188,12 +185,12 @@ pub async fn load_law_content(client: &reqwest::Client, path: &str) -> Result<St
         .unwrap_or_else(|_| Ok(None));
     match cached {
         Ok(Some(content)) => {
-            debug!("Loaded {path} from cache");
+            debug!(path, "Loaded from cache");
             return Ok(content);
         }
         Ok(None) => {} // cache miss
         Err(e) => {
-            warn!("Cache read error for {path}: {e}");
+            warn!(path, error = %e, "Cache read error");
         }
     }
 
@@ -205,7 +202,7 @@ pub async fn load_law_content(client: &reqwest::Client, path: &str) -> Result<St
     let cache_content = content.clone();
     tokio::task::spawn_blocking(move || {
         if let Err(e) = cache::write_cache(&cache_path, &cache_content) {
-            warn!("Failed to cache {cache_path}: {e}");
+            warn!(path = %cache_path, error = %e, "Failed to cache");
         }
     });
 

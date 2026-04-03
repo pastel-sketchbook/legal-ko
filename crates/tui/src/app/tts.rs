@@ -31,8 +31,13 @@ struct PrebufferStreamer {
 
 impl PrebufferStreamer {
     fn new(player: Arc<Player>, tx: mpsc::UnboundedSender<Message>, prebuffer_secs: f64) -> Self {
+        let prebuffer_val = f64::from(OUTPUT_SR) * prebuffer_secs;
+        debug_assert!(
+            prebuffer_val >= 0.0 && prebuffer_val.is_finite(),
+            "prebuffer must be non-negative and finite, got {prebuffer_val}"
+        );
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let prebuffer_threshold = (f64::from(OUTPUT_SR) * prebuffer_secs) as usize;
+        let prebuffer_threshold = prebuffer_val as usize;
         Self {
             player,
             tx,
@@ -399,7 +404,10 @@ impl App {
                                         });
                                     }
 
-                                    info!("Batch article 1/{total} synthesized (streaming)");
+                                    info!(
+                                        segment = 1,
+                                        total, "Batch article synthesized (streaming)"
+                                    );
                                 }
                                 Err(e) => {
                                     let _ = tx.send(Message::TtsSynthesisError(format!("{e:#}")));
@@ -445,7 +453,7 @@ impl App {
                                         });
                                     }
 
-                                    info!("Batch article {}/{total} synthesized", i + 1);
+                                    info!(segment = i + 1, total, "Batch article synthesized");
                                 }
                                 Err(e) => {
                                     let _ = tx.send(Message::TtsSynthesisError(format!("{e:#}")));
@@ -461,7 +469,7 @@ impl App {
             Err(e) => {
                 self.tts_state = TtsState::Ready;
                 self.status_message = Some(format!("Audio error: {e:#}"));
-                error!("Failed to open audio output: {e:#}");
+                error!(error = %e, "Failed to open audio output");
             }
         }
     }

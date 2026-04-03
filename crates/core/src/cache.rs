@@ -39,16 +39,16 @@ pub fn read_cache(path: &str) -> Result<Option<String>> {
             && let Ok(age) = modified.elapsed()
             && age > CACHE_TTL
         {
-            debug!("Cache expired for {path} (age: {}s)", age.as_secs());
+            debug!(path, age_secs = age.as_secs(), "Cache expired");
             return Ok(None);
         }
 
-        debug!("Cache hit for {path}");
+        debug!(path, "Cache hit");
         let content = std::fs::read_to_string(&file)
             .with_context(|| format!("Failed to read cache file {}", file.display()))?;
         Ok(Some(content))
     } else {
-        debug!("Cache miss for {path}");
+        debug!(path, "Cache miss");
         Ok(None)
     }
 }
@@ -71,6 +71,6 @@ pub fn write_cache(path: &str, content: &str) -> Result<()> {
     std::fs::rename(&tmp, &file)
         .with_context(|| format!("Failed to rename cache file {}", file.display()))?;
 
-    debug!("Cached content for {path}");
+    debug!(path, "Cached content");
     Ok(())
 }

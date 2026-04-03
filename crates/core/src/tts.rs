@@ -178,10 +178,10 @@ pub fn load_engine(handle: &TtsEngineHandle, project_root: &Path) -> Result<()> 
     };
 
     info!(
-        "Loading VibeVoice TTS (device={}, attn={}, threads={})",
-        config.device,
-        config.attn_impl,
-        intra_threads.map_or("default".to_string(), |n| n.to_string()),
+        device = %config.device,
+        attn = %config.attn_impl,
+        threads = %intra_threads.map_or("default".to_string(), |n| n.to_string()),
+        "Loading VibeVoice TTS",
     );
 
     let tts =
@@ -217,15 +217,17 @@ pub fn synthesize(
         .as_mut()
         .context("TTS engine not loaded — call load_engine first")?;
 
-    debug!("Synthesizing {} chars with voice '{speaker}'", text.len());
+    debug!(chars = text.len(), speaker, "Synthesizing");
 
     let result = tts
         .synthesize(text, speaker, cfg_scale, None)
         .context("TTS synthesis failed")?;
 
     info!(
-        "Synthesized {:.1}s audio in {:.1}s (RTF: {:.2})",
-        result.duration_secs, result.generation_time_secs, result.rtf
+        duration_secs = format!("{:.1}", result.duration_secs),
+        generation_secs = format!("{:.1}", result.generation_time_secs),
+        rtf = format!("{:.2}", result.rtf),
+        "Synthesized audio",
     );
 
     Ok(result)
@@ -258,18 +260,17 @@ where
         .as_mut()
         .context("TTS engine not loaded — call load_engine first")?;
 
-    debug!(
-        "Synthesizing (streaming) {} chars with voice '{speaker}'",
-        text.len()
-    );
+    debug!(chars = text.len(), speaker, "Synthesizing (streaming)",);
 
     let result = tts
         .synthesize_streaming(text, speaker, cfg_scale, None, on_chunk)
         .context("TTS streaming synthesis failed")?;
 
     info!(
-        "Synthesized {:.1}s audio in {:.1}s (RTF: {:.2})",
-        result.duration_secs, result.generation_time_secs, result.rtf
+        duration_secs = format!("{:.1}", result.duration_secs),
+        generation_secs = format!("{:.1}", result.generation_time_secs),
+        rtf = format!("{:.2}", result.rtf),
+        "Synthesized audio (streaming)",
     );
 
     Ok(result)
@@ -406,10 +407,11 @@ pub fn synthesize_and_play_segments_with_handle(
         synthesized += 1;
 
         info!(
-            "Segment {}/{total} synthesized ({:.1}s audio in {:.1}s)",
-            i + 1,
-            result.duration_secs,
-            result.generation_time_secs,
+            segment = i + 1,
+            total,
+            duration_secs = format!("{:.1}", result.duration_secs),
+            generation_secs = format!("{:.1}", result.generation_time_secs),
+            "Segment synthesized",
         );
     }
 
@@ -473,8 +475,13 @@ pub fn synthesize_and_play_with_handle(
 
     let prebuffer_secs = profile.prebuffer_secs();
     let cfg_scale = profile.cfg_scale();
+    let prebuffer_val = f64::from(OUTPUT_SR) * prebuffer_secs;
+    debug_assert!(
+        prebuffer_val >= 0.0 && prebuffer_val.is_finite(),
+        "prebuffer must be non-negative and finite, got {prebuffer_val}"
+    );
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let prebuffer_threshold = (f64::from(OUTPUT_SR) * prebuffer_secs) as usize;
+    let prebuffer_threshold = prebuffer_val as usize;
     let mut prebuffer: Vec<f32> = Vec::with_capacity(prebuffer_threshold + 48_000);
     let mut flushed = false;
 
@@ -493,7 +500,10 @@ pub fn synthesize_and_play_with_handle(
                 flushed = true;
                 #[allow(clippy::cast_precision_loss)]
                 let threshold_secs = prebuffer_threshold as f64 / f64::from(OUTPUT_SR);
-                debug!("Pre-buffer flushed ({threshold_secs:.1}s), playback started");
+                debug!(
+                    threshold_secs = format!("{threshold_secs:.1}"),
+                    "Pre-buffer flushed, playback started"
+                );
             }
         }
     })?;

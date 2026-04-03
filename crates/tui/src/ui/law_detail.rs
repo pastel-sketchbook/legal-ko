@@ -83,12 +83,13 @@ fn render_detail_content(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         return;
     };
 
-    // Build the lines for the paragraph.  `Paragraph` requires owned `Text`,
-    // so we must clone from the cached `detail_rendered_lines`.
+    // Build lines for the paragraph by borrowing span content from the
+    // cached `detail_rendered_lines`.  `Paragraph` requires owned `Text`,
+    // but individual spans can use `Cow::Borrowed` to avoid deep-copying
+    // the string data every frame.
     //
-    // When TTS highlighting is active, only the spans in the highlight range
-    // are re-styled (clone + bg override).  All other lines are cheap
-    // Arc-backed clones of the cached rendered data.
+    // When TTS highlighting is active, highlighted spans get a bg override
+    // (still borrowed content, only the style changes).
     #[cfg(feature = "tts")]
     let highlight_range = app.tts_highlight_lines();
     #[cfg(not(feature = "tts"))]
@@ -100,20 +101,38 @@ fn render_detail_content(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             .iter()
             .enumerate()
             .map(|(i, line)| {
-                if i >= hl_start && i < hl_end {
-                    let new_spans: Vec<Span<'static>> = line
-                        .spans
-                        .iter()
-                        .map(|span| Span::styled(span.content.to_string(), span.style.bg(hl_bg)))
-                        .collect();
-                    Line::from(new_spans)
-                } else {
-                    line.clone()
-                }
+                let spans: Vec<Span<'_>> = line
+                    .spans
+                    .iter()
+                    .map(|span| {
+                        let style = if i >= hl_start && i < hl_end {
+                            span.style.bg(hl_bg)
+                        } else {
+                            span.style
+                        };
+                        Span::styled(std::borrow::Cow::Borrowed(span.content.as_ref()), style)
+                    })
+                    .collect();
+                Line::from(spans)
             })
             .collect()
     } else {
-        app.detail_rendered_lines.clone()
+        app.detail_rendered_lines
+            .iter()
+            .map(|line| {
+                let spans: Vec<Span<'_>> = line
+                    .spans
+                    .iter()
+                    .map(|span| {
+                        Span::styled(
+                            std::borrow::Cow::Borrowed(span.content.as_ref()),
+                            span.style,
+                        )
+                    })
+                    .collect();
+                Line::from(spans)
+            })
+            .collect()
     };
 
     #[allow(clippy::cast_possible_truncation)]

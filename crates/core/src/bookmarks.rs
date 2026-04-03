@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use tracing::{debug, warn};
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Bookmarks {
     /// Set of bookmarked law IDs (path-derived, e.g. "kr/민법/법률")
     #[serde(default)]
@@ -22,7 +22,7 @@ impl Bookmarks {
         match Self::try_load() {
             Ok(b) => b,
             Err(e) => {
-                warn!("Failed to load bookmarks: {e}");
+                warn!(error = %e, "Failed to load bookmarks");
                 Self::default()
             }
         }
@@ -33,7 +33,7 @@ impl Bookmarks {
         let content = match std::fs::read_to_string(&path) {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                debug!("No bookmarks file at {}", path.display());
+                debug!(path = %path.display(), "No bookmarks file found");
                 return Ok(Self::default());
             }
             Err(e) => {
@@ -44,13 +44,13 @@ impl Bookmarks {
         };
         match serde_json::from_str::<Self>(&content) {
             Ok(bookmarks) => {
-                debug!("Loaded {} bookmarks", bookmarks.ids.len());
+                debug!(count = bookmarks.ids.len(), "Loaded bookmarks");
                 Ok(bookmarks)
             }
             Err(e) => {
                 // Rename corrupt file so it's not silently overwritten on next save
                 let bak = path.with_extension("json.bak");
-                warn!("Corrupt bookmarks.json, renaming to {}: {e}", bak.display());
+                warn!(backup = %bak.display(), error = %e, "Corrupt bookmarks.json, renaming");
                 let _ = std::fs::rename(&path, &bak);
                 Ok(Self::default())
             }
@@ -76,7 +76,7 @@ impl Bookmarks {
             .with_context(|| format!("Failed to write {}", tmp.display()))?;
         std::fs::rename(&tmp, &path)
             .with_context(|| format!("Failed to rename {}", path.display()))?;
-        debug!("Saved {} bookmarks to {}", self.ids.len(), path.display());
+        debug!(count = self.ids.len(), path = %path.display(), "Saved bookmarks");
         Ok(())
     }
 

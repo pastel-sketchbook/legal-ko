@@ -77,9 +77,12 @@ impl App {
 
         if let Some(id) = id {
             let added = self.bookmarks.toggle(&id);
-            if let Err(e) = self.bookmarks.save() {
-                warn!("Failed to save bookmarks: {e}");
-            }
+            let bookmarks_snapshot = self.bookmarks.clone();
+            tokio::task::spawn_blocking(move || {
+                if let Err(e) = bookmarks_snapshot.save() {
+                    warn!(error = %e, "Failed to save bookmarks");
+                }
+            });
             self.status_message = Some(if added {
                 "Bookmarked".to_string()
             } else {

@@ -174,8 +174,8 @@ impl MeiliBackend {
 
         tracing::info!(
             index = %self.index_uid,
-            "Meilisearch indexing complete ({} documents)",
-            entries.len()
+            count = entries.len(),
+            "Meilisearch indexing complete",
         );
         Ok(())
     }
