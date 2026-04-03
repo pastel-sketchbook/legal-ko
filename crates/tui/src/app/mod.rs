@@ -17,6 +17,7 @@ use legal_ko_core::preferences::Preferences;
 use legal_ko_core::search::Searcher;
 #[cfg(feature = "tts")]
 use legal_ko_core::tts::{TtsEngineHandle, TtsProfile, TtsState, new_engine_handle};
+use legal_ko_core::{AGENTS, AiAgent};
 use legal_ko_core::{client, parser, reqwest};
 
 use ratatui::text::Line;
@@ -53,6 +54,7 @@ pub enum Popup {
     CategoryFilter,
     DepartmentFilter,
     ArticleList,
+    AgentPicker,
 }
 
 // ── Messages (background → main) ─────────────────────────────
@@ -195,6 +197,12 @@ pub struct App {
     pub meili_search_ids: Option<Vec<String>>,
     /// The query string that produced `meili_search_ids`.
     pub meili_search_query: Option<String>,
+
+    // AI Agent
+    /// Installed agents detected on `$PATH` at startup.
+    pub installed_agents: Vec<&'static AiAgent>,
+    /// Index of the last-used agent in `AGENTS` (persisted in preferences).
+    pub last_agent_index: Option<usize>,
 }
 
 impl App {
@@ -206,6 +214,24 @@ impl App {
         // Invariant: http_client() only fails if TLS backend or system config is
         // broken — the application cannot function without an HTTP client.
         let client = client::http_client().expect("Failed to build HTTP client");
+
+        // Detect which AI agents are installed on $PATH.
+        let installed_agents: Vec<&'static AiAgent> = AGENTS
+            .iter()
+            .filter(|agent| {
+                std::process::Command::new("which")
+                    .arg(agent.binary)
+                    .output()
+                    .ok()
+                    .is_some_and(|o| o.status.success())
+            })
+            .collect();
+
+        // Restore last-used agent from preferences.
+        let last_agent_index = prefs
+            .agent
+            .as_ref()
+            .and_then(|name| AGENTS.iter().position(|a| a.name == name));
 
         Self {
             view: View::Loading,
@@ -260,6 +286,8 @@ impl App {
             search_seq: 0,
             meili_search_ids: None,
             meili_search_query: None,
+            installed_agents,
+            last_agent_index,
         }
     }
 
@@ -384,6 +412,7 @@ impl App {
         self.theme_index = (self.theme_index + 1) % theme::THEMES.len();
         let prefs = Preferences {
             theme: self.theme().name.to_string(),
+            agent: self.last_agent_index.map(|i| AGENTS[i].name.to_string()),
         };
         tokio::task::spawn_blocking(move || {
             if let Err(e) = prefs.save() {
@@ -398,19 +427,19 @@ impl App {
         }
     }
 
-    /// Open an OpenCode instance in a split pane to the right.
+    /// Open an AI agent instance in a split pane to the right.
     ///
     /// Detects the running terminal (tmux, WezTerm, Zellij, Ghostty) and
-    /// spawns a right-side split with `opencode`.  Shows an error in the
-    /// status bar when no supported terminal is detected.
-    pub fn open_opencode_split(&mut self) {
+    /// spawns a right-side split with the given agent binary.  Shows an error
+    /// in the status bar when no supported terminal is detected.
+    pub fn open_agent_split(&mut self, agent: &AiAgent) {
         use std::process::Command;
 
-        // Resolve absolute path to `opencode` so it works even in shells
-        // that don't source the user's profile (e.g. Ghostty surface command).
-        // If opencode is not installed, show a helpful message and bail out.
-        let opencode_bin = match Command::new("which")
-            .arg("opencode")
+        // Resolve absolute path to the agent binary so it works even in
+        // shells that don't source the user's profile (e.g. Ghostty surface
+        // command).  If the binary is not installed, show a helpful message.
+        let agent_bin = match Command::new("which")
+            .arg(agent.binary)
             .output()
             .ok()
             .filter(|o| o.status.success())
@@ -425,17 +454,19 @@ impl App {
             }) {
             Some(path) => path,
             None => {
-                self.status_message =
-                    Some("opencode not found — please install opencode first".to_string());
-                warn!("opencode binary not found in PATH");
+                self.status_message = Some(format!(
+                    "{} not found — please install {} first",
+                    agent.binary, agent.name
+                ));
+                warn!(binary = agent.binary, "Agent binary not found in PATH");
                 return;
             }
         };
 
         let result = if std::env::var("TMUX").is_ok() {
-            // -l 60%: new pane (opencode) gets 60% width, TUI keeps 40%
+            // -l 60%: new pane (agent) gets 60% width, TUI keeps 40%
             Command::new("tmux")
-                .args(["split-window", "-h", "-l", "60%", &opencode_bin])
+                .args(["split-window", "-h", "-l", "60%", &agent_bin])
                 .spawn()
         } else if std::env::var("WEZTERM_PANE").is_ok()
             || std::env::var("WEZTERM_EXECUTABLE").is_ok()
@@ -449,20 +480,20 @@ impl App {
                     "--percent",
                     "60",
                     "--",
-                    &opencode_bin,
+                    &agent_bin,
                 ])
                 .spawn()
         } else if std::env::var("ZELLIJ").is_ok() {
             Command::new("zellij")
-                .args(["action", "new-pane", "-d", "right", "--", &opencode_bin])
+                .args(["action", "new-pane", "-d", "right", "--", &agent_bin])
                 .spawn()
         } else if std::env::var("GHOSTTY_RESOURCES_DIR").is_ok() {
             // Ghostty on macOS: use AppleScript to split the focused terminal
-            // and run opencode in the new pane via a surface configuration.
+            // and run the agent in the new pane via a surface configuration.
             let script = format!(
                 r#"tell application "Ghostty"
     set cfg to new surface configuration
-    set command of cfg to "{opencode_bin}"
+    set command of cfg to "{agent_bin}"
     set t to focused terminal of selected tab of front window
     split t direction right with configuration cfg
 end tell"#
@@ -474,11 +505,27 @@ end tell"#
             return;
         };
 
+        // Remember this agent as the last-used choice.
+        if let Some(idx) = AGENTS.iter().position(|a| a.name == agent.name) {
+            self.last_agent_index = Some(idx);
+            let prefs = Preferences {
+                theme: self.theme().name.to_string(),
+                agent: Some(agent.name.to_string()),
+            };
+            tokio::task::spawn_blocking(move || {
+                if let Err(e) = prefs.save() {
+                    warn!(error = %e, "Failed to save agent preference");
+                }
+            });
+        }
+
         match result {
-            Ok(_) => self.status_message = Some("Opened OpenCode split".to_string()),
+            Ok(_) => {
+                self.status_message = Some(format!("Opened {} split", agent.name));
+            }
             Err(e) => {
                 self.status_message = Some(format!("Failed to open split: {e}"));
-                warn!(error = %e, "Failed to open OpenCode split pane");
+                warn!(error = %e, agent = agent.name, "Failed to open agent split pane");
             }
         }
     }

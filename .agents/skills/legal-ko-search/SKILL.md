@@ -212,10 +212,10 @@ respond in the context of what they are looking at.
 
 - The TUI (`legal-ko`) must be running — the context file is only written while
   the TUI is active.
-- OpenCode must be installed on the system. The TUI's `o` key opens an OpenCode
-  split pane in the current terminal (tmux, WezTerm, Zellij, or Ghostty). If
-  `opencode` is not found on `$PATH`, the TUI shows a status message asking the
-  user to install it first. No split is opened.
+- At least one supported AI agent must be installed. The TUI's `o` key opens an
+  agent picker popup (OpenCode, Gemini CLI, GitHub Copilot CLI, Amp). Only
+  agents found on `$PATH` appear in the picker. The last-used choice is
+  persisted. Split panes use tmux, WezTerm, Zellij, or Ghostty.
 
 ### Context JSON Structure
 

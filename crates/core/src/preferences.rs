@@ -11,6 +11,10 @@ pub struct Preferences {
     /// Theme name (must match a name in the TUI's `theme::THEMES`).
     #[serde(default = "default_theme")]
     pub theme: String,
+
+    /// Last-used AI agent name (e.g. "OpenCode").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 fn default_theme() -> String {
@@ -21,6 +25,7 @@ impl Default for Preferences {
     fn default() -> Self {
         Self {
             theme: DEFAULT_THEME.to_string(),
+            agent: None,
         }
     }
 }

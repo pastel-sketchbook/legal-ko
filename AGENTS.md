@@ -15,7 +15,7 @@ Use `cargo` for all build/test/run tasks.
 
 | Crate | Type | Binary | Purpose |
 |-------|------|--------|---------|
-| `legal-ko-core` | lib | — | Shared logic: models, HTTP client, caching, parser, bookmarks, preferences |
+| `legal-ko-core` | lib | — | Shared logic: models, HTTP client, caching, parser, bookmarks, context, preferences, AI agent definitions |
 | `legal-ko-tui` | bin | `legal-ko` | Human-facing ratatui TUI |
 | `legal-ko-cli` | bin | `legal-ko-cli` | LLM-facing CLI with `--json` output |
 
@@ -51,27 +51,31 @@ Workspace deps: `ratatui`, `crossterm`, `tokio` (full), `reqwest` (json),
 ```
 crates/
   core/src/
-    lib.rs          — re-exports all modules
+    lib.rs          — re-exports all modules, AiAgent struct + AGENTS constant
     models.rs       — LawEntry, LawDetail, ArticleRef, MetadataIndex, MetadataEntry
     client.rs       — HTTP client (fetch metadata.json, fetch law markdown files)
     parser.rs       — YAML frontmatter stripping, article extraction (no ratatui dep)
     cache.rs        — Disk cache at ~/.cache/legal-ko/ (SHA256 keyed)
     bookmarks.rs    — Persist bookmarks to ~/.config/legal-ko/bookmarks.json
-    preferences.rs  — Theme preference persistence to ~/.config/legal-ko/preferences.json
+    context.rs      — TUI↔Agent context (TuiContext, TuiCommand, read/write/take)
+    preferences.rs  — Theme & agent preference persistence to ~/.config/legal-ko/preferences.json
     search.rs       — Meilisearch integration (feature-gated), naive fallback search
   tui/src/
     main.rs         — entry point, terminal setup, tokio runtime, event loop
-    app.rs          — App state machine (View, InputMode, Popup), Message handling
+    app/
+      mod.rs        — App state machine (View, InputMode, Popup), Message handling, agent split, context sync
+      navigation.rs — List/detail/article navigation methods
+      filters.rs    — Category/department/bookmark filter logic
     theme.rs        — 14 semantic themes (7 dark + 7 light), Theme struct, THEMES array
     parser.rs       — markdown→ratatui Lines with theme colors, inline bold parsing
     ui/
-      mod.rs        — Main render dispatcher, filter popups
+      mod.rs        — Main render dispatcher, filter popups, agent picker popup
       law_list.rs   — Searchable list view with bookmark indicators, unicode column alignment
       law_detail.rs — Scrollable rendered markdown with article navigation
       styles.rs     — Badge-style key hints, status bar helpers
       help.rs       — Keybinding overlay popup
   cli/src/
-    main.rs         — clap subcommands: list, search, show, articles, bookmarks, speak (all with --json)
+    main.rs         — clap subcommands: list, search, show, articles, bookmarks, context, navigate, speak (all with --json)
 ```
 
 ## CLI Subcommands
@@ -81,6 +85,8 @@ crates/
 - `legal-ko-cli show <id> [--json]`
 - `legal-ko-cli articles <id> [--json]`
 - `legal-ko-cli bookmarks [--json]`
+- `legal-ko-cli context [--json]`
+- `legal-ko-cli navigate <id> [--article X] [--json]`
 - `legal-ko-cli speak <id> [--article N] [--voice X] [--json]`
 
 ## Key Design Decisions

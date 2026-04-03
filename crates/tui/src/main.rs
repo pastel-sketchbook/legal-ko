@@ -233,7 +233,7 @@ fn handle_list_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         KeyCode::Char('t') => app.next_theme(),
         #[cfg(feature = "tts")]
         KeyCode::Char('T') => app.toggle_tts_profile(),
-        KeyCode::Char('o') => app.open_opencode_split(),
+        KeyCode::Char('o') => app.open_agent_picker(),
         KeyCode::Char('?') => app.popup = Popup::Help,
         KeyCode::Esc => {
             if app.search_query.is_empty() {
@@ -276,7 +276,7 @@ fn handle_detail_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         KeyCode::Char('R') => app.speak_full(),
         #[cfg(feature = "tts")]
         KeyCode::Char('s') => app.stop_tts(),
-        KeyCode::Char('o') => app.open_opencode_split(),
+        KeyCode::Char('o') => app.open_agent_picker(),
         KeyCode::Char('?') => app.popup = Popup::Help,
         _ => {}
     }

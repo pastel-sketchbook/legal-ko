@@ -52,6 +52,7 @@ pub fn render_help(f: &mut Frame, theme: &Theme, area: Rect) {
         key_line(theme, "b", "Show bookmarks only"),
         Line::from(""),
         header_line(theme, "Other"),
+        key_line(theme, "o", "Open AI agent split"),
         key_line(theme, "t", "Cycle theme"),
         key_line(theme, "?", "Toggle this help"),
         key_line(theme, "q", "Quit"),

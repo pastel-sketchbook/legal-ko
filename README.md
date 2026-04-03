@@ -53,6 +53,7 @@ legal-ko        # or: task run
 | `B` | Toggle bookmark |
 | `b` | Bookmarks only |
 | `t` | Cycle theme |
+| `o` | Open AI agent split pane |
 | `?` | Help |
 | `Esc` / `q` | Back / quit |
 
@@ -93,6 +94,8 @@ legal-ko-cli bookmarks --json
 | `show <id>` | Full law content (markdown, frontmatter stripped) |
 | `articles <id>` | List articles (제X조) with line indices |
 | `bookmarks` | List bookmarked laws |
+| `context` | Current TUI browsing state (for OpenCode integration) |
+| `navigate <id>` | Send navigate command to TUI (`--article` for article jump) |
 | `speak <id>` | TTS playback (requires `--features tts`) |
 
 Law IDs follow the path format: `kr/{법령명}/{유형}` (e.g., `kr/형법/법률`)
@@ -109,18 +112,54 @@ commands, reads law content, and cites specific articles — with a mandatory
 disclaimer that results are not legal advice. See
 [SKILL.md](.agents/skills/legal-ko-search/SKILL.md) for the full workflow.
 
+## AI Agent Integration
+
+The TUI has bidirectional communication with AI coding agents for
+AI-assisted law browsing. Supported agents:
+
+| Agent | Binary |
+|-------|--------|
+| [OpenCode](https://opencode.ai) | `opencode` |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `gemini` |
+| [GitHub Copilot CLI](https://docs.github.com/en/copilot) | `copilot` |
+| [Amp](https://amp.dev) | `amp` |
+
+**Open a split:** Press `o` in the TUI to open the agent picker popup. Only
+agents found on `$PATH` are listed. If only one agent is installed, it opens
+directly (no popup). The last-used choice is persisted across sessions.
+
+Split panes use a 40:60 ratio (TUI gets 40%, agent gets 60%) and support
+tmux, WezTerm, Zellij, and Ghostty.
+
+**TUI → OpenCode (context):** The TUI writes its browsing state to
+`~/.cache/legal-ko/context.json` on every navigation event. OpenCode reads it
+via `legal-ko-cli context --json` to understand what the user is looking at.
+
+**OpenCode → TUI (navigate):** OpenCode sends navigation commands via
+`legal-ko-cli navigate`, and the TUI picks them up on the next tick (~50ms).
+Behaviour is context-aware:
+
+```bash
+# On list view: scrolls to and highlights the law
+legal-ko-cli navigate "kr/주택임대차보호법/법률"
+
+# On detail view: jumps to the article (prefix match)
+legal-ko-cli navigate "kr/주택임대차보호법/법률" --article "제3조"
+```
+
 ## Architecture
 
 ```
 crates/
-  core/     lib    — models, HTTP client, cache, parser, bookmarks, search
+  core/     lib    — models, HTTP client, cache, parser, bookmarks, context, search
   tui/      bin    — ratatui terminal UI (legal-ko)
   cli/      bin    — clap CLI with --json (legal-ko-cli)
 ```
 
 - **Data source**: GitHub API (legalize-kr/legalize-kr)
 - **Caching**: `~/.cache/legal-ko/` (SHA256-keyed, per law file)
-- **Config**: `~/.config/legal-ko/` (bookmarks, theme preference)
+- **Context**: `~/.cache/legal-ko/context.json` (TUI→OpenCode), `command.json` (OpenCode→TUI)
+- **Config**: `~/.config/legal-ko/` (bookmarks, theme & agent preferences)
 - **Search**: Optional [Meilisearch](https://www.meilisearch.com/) backend
   (`meilisearch` feature), falls back to title substring matching
 

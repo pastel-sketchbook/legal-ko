@@ -12,6 +12,8 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use crate::app::{App, Popup, View};
 use crate::theme::Theme;
 
+use legal_ko_core::AGENTS;
+
 /// Minimum terminal size (cols, rows)
 const MIN_WIDTH: u16 = 40;
 const MIN_HEIGHT: u16 = 10;
@@ -51,6 +53,7 @@ pub fn render(f: &mut Frame, app: &App) {
                 Popup::DepartmentFilter => {
                     render_filter_popup(f, app, theme, area, FilterKind::Department);
                 }
+                Popup::AgentPicker => render_agent_picker(f, app, theme, area),
                 Popup::None | Popup::ArticleList => {}
             }
         }
@@ -59,6 +62,7 @@ pub fn render(f: &mut Frame, app: &App) {
             match app.popup {
                 Popup::Help => help::render_help(f, theme, area),
                 Popup::ArticleList => law_detail::render_article_popup(f, app, theme, area),
+                Popup::AgentPicker => render_agent_picker(f, app, theme, area),
                 Popup::None | Popup::CategoryFilter | Popup::DepartmentFilter => {}
             }
         }
@@ -153,6 +157,51 @@ fn render_filter_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect, kind
 
     let block = Block::default()
         .title(title)
+        .borders(Borders::ALL)
+        .style(Style::default().fg(theme.accent).bg(theme.panel_bg));
+
+    let list = List::new(items).block(block);
+
+    f.render_widget(Clear, popup_area);
+    f.render_widget(list, popup_area);
+}
+
+fn render_agent_picker(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
+    let popup_area = styles::centered_rect(35, 30, area);
+
+    let last_agent_name = app.last_agent_index.map(|i| AGENTS[i].name);
+
+    let items: Vec<ListItem> = app
+        .installed_agents
+        .iter()
+        .enumerate()
+        .map(|(i, agent)| {
+            let is_selected = i == app.popup_selected;
+            let is_last_used = last_agent_name == Some(agent.name);
+
+            let style = if is_selected {
+                Style::default()
+                    .fg(theme.highlight_fg)
+                    .bg(theme.highlight_bg)
+                    .add_modifier(Modifier::BOLD)
+            } else if is_last_used {
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.fg)
+            };
+
+            let marker = if is_last_used { " *" } else { "" };
+            ListItem::new(Line::from(Span::styled(
+                format!("  {}{marker}", agent.name),
+                style,
+            )))
+        })
+        .collect();
+
+    let block = Block::default()
+        .title(" AI Agent ")
         .borders(Borders::ALL)
         .style(Style::default().fg(theme.accent).bg(theme.panel_bg));
 

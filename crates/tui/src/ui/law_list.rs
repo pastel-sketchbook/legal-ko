@@ -242,7 +242,7 @@ fn render_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             #[cfg(feature = "tts")]
             ("T", "tts profile"),
             ("t", "theme"),
-            ("o", "opencode"),
+            ("o", "AI agent"),
             ("q", "quit"),
             ("?", "help"),
         ];

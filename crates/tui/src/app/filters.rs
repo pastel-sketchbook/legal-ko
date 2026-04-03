@@ -1,4 +1,5 @@
 use super::{App, InputMode, Popup, View};
+use legal_ko_core::AGENTS;
 use tracing::warn;
 
 impl App {
@@ -146,6 +147,38 @@ impl App {
         }
     }
 
+    /// Open the AI agent picker popup.
+    ///
+    /// If no agents are installed, shows a status message instead.
+    /// If only one agent is installed, opens it directly (no popup).
+    /// Pre-selects the last-used agent when available.
+    pub fn open_agent_picker(&mut self) {
+        if self.installed_agents.is_empty() {
+            self.status_message = Some("No AI agents installed".to_string());
+            return;
+        }
+
+        // Only one agent installed — skip the popup, open directly.
+        if self.installed_agents.len() == 1 {
+            let agent = self.installed_agents[0];
+            self.open_agent_split(agent);
+            return;
+        }
+
+        self.popup = Popup::AgentPicker;
+
+        // Pre-select the last-used agent if it's in the installed list.
+        self.popup_selected = self
+            .last_agent_index
+            .and_then(|idx| {
+                let agent = &AGENTS[idx];
+                self.installed_agents
+                    .iter()
+                    .position(|a| a.name == agent.name)
+            })
+            .unwrap_or(0);
+    }
+
     pub fn close_popup(&mut self) {
         self.popup = Popup::None;
     }
@@ -187,6 +220,12 @@ impl App {
                 self.jump_to_article(self.popup_selected);
                 self.close_popup();
             }
+            Popup::AgentPicker => {
+                if let Some(&agent) = self.installed_agents.get(self.popup_selected) {
+                    self.close_popup();
+                    self.open_agent_split(agent);
+                }
+            }
             _ => {}
         }
     }
@@ -196,6 +235,7 @@ impl App {
             Popup::CategoryFilter => self.categories.len() + 1,
             Popup::DepartmentFilter => self.departments.len() + 1,
             Popup::ArticleList => self.detail_articles.len(),
+            Popup::AgentPicker => self.installed_agents.len(),
             _ => 0,
         }
     }

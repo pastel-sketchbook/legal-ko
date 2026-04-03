@@ -209,7 +209,7 @@ fn render_detail_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         }
         pairs.push(("B", "bookmark"));
         pairs.push(("t", "theme"));
-        pairs.push(("o", "opencode"));
+        pairs.push(("o", "AI agent"));
         pairs.push(("Esc", "back"));
         pairs.push(("?", "help"));
 
