@@ -23,7 +23,7 @@ using `legal-ko-cli`.
 
 | What | Answer |
 |------|--------|
-| **Tool** | `legal-ko-cli` (must be on `$PATH` — see Install below) |
+| **Tool** | `legal-ko-cli` (installed to `~/bin` via `task install`) |
 | **Data source** | All Korean laws from [legalize-kr](https://github.com/legalize-kr/legalize-kr) |
 | **Search method** | Title substring match (naive) or Meilisearch if configured |
 | **Output** | Law titles, IDs, article citations with excerpts |
@@ -33,11 +33,11 @@ using `legal-ko-cli`.
 
 ```bash
 # From the legal-ko workspace root
-cargo build -p legal-ko-cli --release
-cp target/release/legal-ko-cli ~/bin/legal-ko-cli
+task install
 ```
 
-Verify: `legal-ko-cli list --limit 1 --json` should return a JSON array.
+This builds release binaries and copies `legal-ko` (TUI) and `legal-ko-cli`
+to `~/bin`. Verify: `legal-ko-cli list --limit 1 --json` should return a JSON array.
 
 ## When to Use
 
@@ -215,7 +215,9 @@ respond in the context of what they are looking at.
 - At least one supported AI agent must be installed. The TUI's `o` key opens an
   agent picker popup (OpenCode, Gemini CLI, GitHub Copilot CLI, Amp). Only
   agents found on `$PATH` appear in the picker. The last-used choice is
-  persisted. Split panes use tmux, WezTerm, Zellij, or Ghostty.
+  persisted. Split panes use tmux, WezTerm, Zellij, or Ghostty. On terminals
+  without split support, the TUI suspends itself, runs the agent in the
+  foreground, and resumes when the agent exits.
 
 ### Context JSON Structure
 
@@ -343,7 +345,7 @@ legal-ko-cli navigate "kr/주택임대차보호법/법률" --article "제3조"
 
 | Error | Cause | Resolution |
 |-------|-------|------------|
-| `command not found: legal-ko-cli` | CLI not installed | Build with `cargo build -p legal-ko-cli --release` and copy to `$PATH` |
+| `command not found: legal-ko-cli` | CLI not installed | Run `task install` from the workspace root |
 | Empty search results | Search term too specific or no matching law titles | Try shorter/broader keywords, check topic map |
 | `HTTP 404` on `show` | Invalid law ID | Verify ID from `search` or `list` output first |
 | `HTTP 403 rate limit` | GitHub API rate limit hit | Wait a minute and retry; metadata fetch is unauthenticated |
