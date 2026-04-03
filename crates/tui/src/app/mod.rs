@@ -354,11 +354,19 @@ impl App {
     /// Poll for an external command (e.g. from `legal-ko-cli navigate`).
     ///
     /// Called every event-loop tick (~50ms). If a command file exists it is
-    /// atomically consumed and dispatched.
-    pub fn poll_command(&mut self) {
+    /// atomically consumed and dispatched.  Returns `true` when a command was
+    /// processed (so the caller can update context).
+    pub fn poll_command(&mut self) -> bool {
         use legal_ko_core::context::take_command;
 
         if let Some(cmd) = take_command() {
+            info!(
+                action = cmd.action,
+                law_id = cmd.law_id,
+                article = ?cmd.article,
+                view = ?self.view,
+                "Received external command"
+            );
             match cmd.action.as_str() {
                 "navigate" => self.handle_navigate(&cmd.law_id, cmd.article.as_deref()),
                 other => {
@@ -366,6 +374,9 @@ impl App {
                     self.status_message = Some(format!("Unknown command: {other}"));
                 }
             }
+            true
+        } else {
+            false
         }
     }
 
@@ -377,9 +388,19 @@ impl App {
     /// - **Detail view, different law**: returns to list, selects the law,
     ///   auto-opens it, and stashes the article for deferred jump.
     fn handle_navigate(&mut self, law_id: &str, article: Option<&str>) {
+        info!(
+            law_id,
+            article = ?article,
+            view = ?self.view,
+            filtered_count = self.filtered_indices.len(),
+            list_selected = self.list_selected,
+            "handle_navigate start"
+        );
+
         match self.view {
             View::Detail => {
                 let same_law = self.detail.as_ref().is_some_and(|d| d.entry.id == law_id);
+                info!(same_law, "Detail view navigate");
 
                 if same_law {
                     if let Some(art_query) = article {
@@ -393,8 +414,10 @@ impl App {
                             self.detail_scroll = art.line_index;
                             self.status_message =
                                 Some(format!("→ {}", self.detail_articles[idx].label));
+                            info!(article_idx = idx, label = %art.label, "Jumped to article");
                         } else {
                             self.status_message = Some(format!("Article not found: {art_query}"));
+                            warn!(art_query, "Article not found in detail view");
                         }
                     }
                     // No article specified + same law → nothing to do.
@@ -410,8 +433,14 @@ impl App {
                 self.select_law_by_id(law_id);
                 self.pending_navigate_article = article.map(String::from);
                 self.open_selected();
+                info!(
+                    list_selected = self.list_selected,
+                    detail_loading = self.detail_loading,
+                    "List view navigate → open_selected"
+                );
             }
             View::Loading => {
+                warn!(law_id, "Navigate ignored — still loading metadata");
                 self.status_message = Some("Still loading — navigate ignored".to_string());
             }
         }
@@ -425,11 +454,29 @@ impl App {
             .position(|&i| self.all_laws[i].id == law_id)
         {
             self.list_selected = pos;
+            info!(
+                law_id,
+                pos,
+                title = %self.all_laws[self.filtered_indices[pos]].title,
+                "select_law_by_id: found"
+            );
             self.status_message = Some(format!(
                 "→ {}",
                 self.all_laws[self.filtered_indices[pos]].title
             ));
         } else {
+            // Check if the law exists at all (just not in filtered list)
+            let exists_in_all = self.all_laws.iter().any(|e| e.id == law_id);
+            warn!(
+                law_id,
+                exists_in_all,
+                filtered_count = self.filtered_indices.len(),
+                has_category_filter = self.category_filter.is_some(),
+                has_dept_filter = self.department_filter.is_some(),
+                bookmarks_only = self.bookmarks_only,
+                search_query = %self.search_query,
+                "select_law_by_id: not in filtered list"
+            );
             self.status_message = Some(format!("Law not in current list: {law_id}"));
         }
     }

@@ -7,6 +7,7 @@ use anyhow::{Context as _, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use tracing::{debug, warn};
 
 use crate::models::{ArticleRef, LawEntry};
 
@@ -244,14 +245,37 @@ pub fn write_command(cmd: &TuiCommand) -> Result<()> {
     std::fs::write(&tmp, &json).with_context(|| format!("Failed to write {}", tmp.display()))?;
     std::fs::rename(&tmp, &path)
         .with_context(|| format!("Failed to rename to {}", path.display()))?;
+    debug!(
+        action = cmd.action,
+        law_id = cmd.law_id,
+        path = %path.display(),
+        "write_command: wrote command file"
+    );
     Ok(())
 }
 
 /// Read and remove the pending command file (returns `None` if absent).
 pub fn take_command() -> Option<TuiCommand> {
     let path = command_path().ok()?;
-    let json = std::fs::read_to_string(&path).ok()?;
+    let json = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return None, // No command file — normal case, don't log
+    };
     // Remove first so a crash doesn't re-process the same command.
     let _ = std::fs::remove_file(&path);
-    serde_json::from_str(&json).ok()
+    match serde_json::from_str::<TuiCommand>(&json) {
+        Ok(cmd) => {
+            debug!(
+                action = cmd.action,
+                law_id = cmd.law_id,
+                article = ?cmd.article,
+                "take_command: consumed command file"
+            );
+            Some(cmd)
+        }
+        Err(e) => {
+            warn!(error = %e, "take_command: failed to parse command.json");
+            None
+        }
+    }
 }

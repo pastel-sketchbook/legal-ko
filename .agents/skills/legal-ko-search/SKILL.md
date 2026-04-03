@@ -407,3 +407,28 @@ legal-ko-cli articles "kr/저작권법/법률" --json
 
 Focus on Chapter 2 (저작권), particularly provisions on
 reproduction rights and remedies for infringement.
+
+## Debugging Navigate IPC
+
+If `legal-ko-cli navigate` doesn't seem to affect the TUI, check the log file:
+
+```bash
+# TUI logs (debug level) — shows command consumption and navigation decisions
+tail -f ~/Library/Caches/legal-ko/legal-ko.log
+
+# Key log messages to look for:
+# "take_command: consumed command file"  — TUI saw the command
+# "Received external command"            — poll_command dispatched it
+# "handle_navigate start"               — navigation logic entered
+# "select_law_by_id: found"             — law found in filtered list
+# "select_law_by_id: not in filtered list" — law ID not in current filter (likely cause of "no response")
+```
+
+**Common causes:**
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| TUI doesn't react | Law ID not in filtered list (active category/dept/bookmark/search filter) | Clear filters first, or use the exact ID from `legal-ko-cli list --json` |
+| TUI doesn't react | Navigate arrived during Loading view | Wait for metadata to finish loading |
+| Article not found | Article prefix doesn't match any label | Use `legal-ko-cli articles <id> --json` to see exact labels |
+| Command file lingers | TUI not running | Start `legal-ko` first; `rm ~/Library/Caches/legal-ko/command.json` to clean up |

@@ -163,7 +163,9 @@ async fn run_app(
         app.check_tts_playback();
 
         // Check for external commands (e.g. navigate from OpenCode)
-        app.poll_command();
+        if app.poll_command() {
+            app.sync_context();
+        }
 
         // Advance animation tick
         app.tick = app.tick.wrapping_add(1);
