@@ -12,9 +12,7 @@ impl App {
     }
 
     pub fn list_move_up(&mut self) {
-        if self.list_selected > 0 {
-            self.list_selected -= 1;
-        }
+        self.list_selected = self.list_selected.saturating_sub(1);
     }
 
     pub fn list_page_down(&mut self, page_size: usize) {

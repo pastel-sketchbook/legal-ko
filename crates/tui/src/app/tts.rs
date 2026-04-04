@@ -11,7 +11,9 @@ use legal_ko_core::tts::{self, OUTPUT_SR, TtsState};
 
 use super::{App, Message};
 
+// SAFETY (const): literal 1 is always non-zero.
 pub const CHANNELS: NonZero<u16> = NonZero::new(1).unwrap();
+// SAFETY (const): OUTPUT_SR is a non-zero compile-time constant (24 000).
 pub const SAMPLE_RATE: NonZero<u32> = NonZero::new(tts::OUTPUT_SR).unwrap();
 
 // ── Prebuffer helper ──────────────────────────────────────────

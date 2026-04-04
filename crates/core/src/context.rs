@@ -108,6 +108,11 @@ pub struct Snapshot<'a> {
 // ── Builder ──────────────────────────────────────────────────
 
 /// Build a [`TuiContext`] from the given snapshot and write it to disk.
+///
+/// # Errors
+///
+/// Returns an error if the context file cannot be written (e.g. missing
+/// cache directory or I/O failure).
 pub fn build_and_write(snap: &Snapshot<'_>) -> Result<()> {
     let selected_law = snap.selected_entry.map(|e| SelectedLaw {
         id: e.id.clone(),
@@ -178,6 +183,11 @@ fn context_path() -> Result<PathBuf> {
 }
 
 /// Write the context snapshot to disk (synchronous, atomic via rename).
+///
+/// # Errors
+///
+/// Returns an error if the cache directory cannot be created, serialization
+/// fails, or the file write/rename fails.
 pub fn write_context(ctx: &TuiContext) -> Result<()> {
     let path = context_path()?;
     if let Some(parent) = path.parent() {
@@ -193,6 +203,11 @@ pub fn write_context(ctx: &TuiContext) -> Result<()> {
 }
 
 /// Read the current context from disk.
+///
+/// # Errors
+///
+/// Returns an error if the context file does not exist, cannot be read,
+/// or contains invalid JSON.
 pub fn read_context() -> Result<TuiContext> {
     let path = context_path()?;
     let json = std::fs::read_to_string(&path)
@@ -234,6 +249,11 @@ fn command_path() -> Result<PathBuf> {
 }
 
 /// Write a command for the TUI to consume (atomic via rename).
+///
+/// # Errors
+///
+/// Returns an error if the cache directory cannot be created, serialization
+/// fails, or the file write/rename fails.
 pub fn write_command(cmd: &TuiCommand) -> Result<()> {
     let path = command_path()?;
     if let Some(parent) = path.parent() {
@@ -257,9 +277,8 @@ pub fn write_command(cmd: &TuiCommand) -> Result<()> {
 /// Read and remove the pending command file (returns `None` if absent).
 pub fn take_command() -> Option<TuiCommand> {
     let path = command_path().ok()?;
-    let json = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(_) => return None, // No command file — normal case, don't log
+    let Ok(json) = std::fs::read_to_string(&path) else {
+        return None; // No command file — normal case, don't log
     };
     // Remove first so a crash doesn't re-process the same command.
     let _ = std::fs::remove_file(&path);

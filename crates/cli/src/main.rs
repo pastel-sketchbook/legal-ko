@@ -80,13 +80,13 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Show the current TUI browsing context (for OpenCode integration)
+    /// Show the current TUI browsing context (for `OpenCode` integration)
     Context {
         /// Output as JSON
         #[arg(long)]
         json: bool,
     },
-    /// Send a navigate command to the TUI (for OpenCode integration).
+    /// Send a navigate command to the TUI (for `OpenCode` integration).
     ///
     /// On list view the TUI scrolls to the law. On detail view it jumps
     /// to the specified article within the currently viewed law.

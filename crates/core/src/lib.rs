@@ -18,7 +18,7 @@ pub use reqwest;
 /// An AI coding agent that can be opened in a terminal split pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AiAgent {
-    /// Human-readable display name (e.g. "OpenCode").
+    /// Human-readable display name (e.g. `"OpenCode"`).
     pub name: &'static str,
     /// Binary name on `$PATH` (e.g. "opencode").
     pub binary: &'static str,

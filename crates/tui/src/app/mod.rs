@@ -320,7 +320,7 @@ impl App {
     /// Write the current browsing context to `~/.cache/legal-ko/context.json`.
     ///
     /// Called after every key event so that `legal-ko-cli context` (and by
-    /// extension OpenCode in the adjacent split) can read what the user is
+    /// extension `OpenCode` in the adjacent split) can read what the user is
     /// currently looking at.
     pub fn sync_context(&self) {
         use legal_ko_core::context::{Snapshot, build_and_write};
@@ -538,7 +538,7 @@ impl App {
 
     /// Open an AI agent — either in a split pane or via suspend-and-resume.
     ///
-    /// Detects the running terminal (tmux, WezTerm, Zellij, Ghostty) and
+    /// Detects the running terminal (tmux, `WezTerm`, Zellij, Ghostty) and
     /// spawns a right-side split with the given agent binary.  When no
     /// supported terminal is detected, sets `suspend_agent` so the event
     /// loop can suspend the TUI and run the agent in the foreground.
@@ -548,7 +548,7 @@ impl App {
         // Resolve absolute path to the agent binary so it works even in
         // shells that don't source the user's profile (e.g. Ghostty surface
         // command).  If the binary is not installed, show a helpful message.
-        let agent_bin = match Command::new("which")
+        let Some(agent_bin) = Command::new("which")
             .arg(agent.binary)
             .output()
             .ok()
@@ -561,16 +561,14 @@ impl App {
                 } else {
                     Some(trimmed)
                 }
-            }) {
-            Some(path) => path,
-            None => {
-                self.status_message = Some(format!(
-                    "{} not found — please install {} first",
-                    agent.binary, agent.name
-                ));
-                warn!(binary = agent.binary, "Agent binary not found in PATH");
-                return;
-            }
+            })
+        else {
+            self.status_message = Some(format!(
+                "{} not found — please install {} first",
+                agent.binary, agent.name
+            ));
+            warn!(binary = agent.binary, "Agent binary not found in PATH");
+            return;
         };
 
         // Remember this agent as the last-used choice (before attempting split).

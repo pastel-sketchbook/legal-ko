@@ -12,7 +12,7 @@ pub struct Preferences {
     #[serde(default = "default_theme")]
     pub theme: String,
 
-    /// Last-used AI agent name (e.g. "OpenCode").
+    /// Last-used AI agent name (e.g. `"OpenCode"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
 }

@@ -194,7 +194,7 @@ cargo build --workspace --release --features tts
 ## Development
 
 ```bash
-task check:all   # typos + fmt check + clippy + tests
+task check:all    # typos + fmt check + clippy + tests
 task test         # cargo test --workspace
 task clippy       # cargo clippy --workspace
 task fmt          # cargo fmt --all

@@ -239,7 +239,7 @@ fn source_line_to_wrapped_offset(lines: &[Line<'_>], source_line: usize, width: 
             wrapped += 1;
         } else {
             // Ceiling division: number of visual rows this source line occupies.
-            wrapped += (line_width + w - 1) / w;
+            wrapped += line_width.div_ceil(w);
         }
     }
 
@@ -277,7 +277,7 @@ pub fn render_article_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect)
     let clear_area = Rect {
         x: popup_area.x.saturating_sub(1),
         y: popup_area.y,
-        width: popup_area.width + 2,
+        width: popup_area.width.saturating_add(2),
         height: popup_area.height,
     };
     f.render_widget(Clear, clear_area);

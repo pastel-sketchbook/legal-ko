@@ -103,6 +103,7 @@ async fn main() -> Result<()> {
 
     // Setup terminal
     enable_raw_mode()?;
+    install_panic_hook();
     let mut tty_write = tty_write;
     execute!(tty_write, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(tty_write);
@@ -150,7 +151,7 @@ async fn main() -> Result<()> {
 #[allow(clippy::unused_async)]
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<TermWriter>>,
-    _fd_backup: (i32, i32),
+    fd_backup: (i32, i32),
 ) -> Result<()> {
     let mut app = App::new();
     app.start_loading();
@@ -190,7 +191,7 @@ async fn run_app(
         // spawning a split pane.  We leave the alternate screen, run
         // the agent as a blocking child, and resume the TUI on exit.
         if let Some(req) = app.suspend_agent.take() {
-            suspend_and_run(terminal, &req, _fd_backup)?;
+            suspend_and_run(terminal, &req, fd_backup)?;
             app.status_message = Some(format!("{} exited — TUI resumed", req.agent_name));
         }
 
@@ -265,6 +266,12 @@ fn suspend_and_run(
 }
 
 fn handle_key_event(app: &mut App, key: KeyEvent, terminal_height: usize) {
+    // Ctrl+C always quits immediately, regardless of view or input mode.
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        app.should_quit = true;
+        return;
+    }
+
     // Popups have priority
     if app.popup != Popup::None {
         handle_popup_key(app, key);
@@ -395,4 +402,27 @@ fn handle_popup_key(app: &mut App, key: KeyEvent) {
         KeyCode::Enter => app.popup_select(),
         _ => {}
     }
+}
+
+/// Install a panic hook that restores the terminal before printing the panic.
+///
+/// Without this, a panic while raw mode is active leaves the terminal in a
+/// corrupted state (no echo, no line buffering, alternate screen still active).
+/// Writing directly to `/dev/tty` ensures the escape sequences reach the real
+/// terminal even when stdout/stderr are redirected (e.g. TTS `/dev/null` suppression).
+fn install_panic_hook() {
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        // Best-effort terminal restoration — ignore errors since we're already panicking.
+        let _ = disable_raw_mode();
+        if let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
+            let _ = execute!(
+                tty,
+                crossterm::cursor::Show,
+                LeaveAlternateScreen,
+                DisableMouseCapture
+            );
+        }
+        original_hook(panic_info);
+    }));
 }

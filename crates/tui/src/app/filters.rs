@@ -191,9 +191,7 @@ impl App {
     }
 
     pub fn popup_move_up(&mut self) {
-        if self.popup_selected > 0 {
-            self.popup_selected -= 1;
-        }
+        self.popup_selected = self.popup_selected.saturating_sub(1);
     }
 
     pub fn popup_select(&mut self) {
@@ -202,7 +200,10 @@ impl App {
                 if self.popup_selected == 0 {
                     self.category_filter = None;
                 } else {
-                    self.category_filter = self.categories.get(self.popup_selected - 1).cloned();
+                    self.category_filter = self
+                        .categories
+                        .get(self.popup_selected.saturating_sub(1))
+                        .cloned();
                 }
                 self.apply_filters();
                 self.close_popup();
@@ -211,7 +212,10 @@ impl App {
                 if self.popup_selected == 0 {
                     self.department_filter = None;
                 } else {
-                    self.department_filter = self.departments.get(self.popup_selected - 1).cloned();
+                    self.department_filter = self
+                        .departments
+                        .get(self.popup_selected.saturating_sub(1))
+                        .cloned();
                 }
                 self.apply_filters();
                 self.close_popup();
