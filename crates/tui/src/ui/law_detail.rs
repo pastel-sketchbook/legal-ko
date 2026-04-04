@@ -135,8 +135,7 @@ fn render_detail_content(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             .collect()
     };
 
-    #[allow(clippy::cast_possible_truncation)]
-    let scroll_y = u16::try_from(app.detail_scroll).unwrap_or(u16::MAX);
+    let scroll_y = source_line_to_wrapped_offset(&lines, app.detail_scroll, area.width);
     let paragraph = Paragraph::new(lines)
         .scroll((scroll_y, 0))
         .wrap(Wrap { trim: false });
@@ -218,6 +217,33 @@ fn render_detail_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
 
     let bar = Paragraph::new(content).style(styles::status_bar(theme));
     f.render_widget(bar, area);
+}
+
+/// Convert a source-line index into a wrapped-line offset.
+///
+/// `Paragraph::scroll((y, 0))` with `Wrap` counts **wrapped** lines, not source
+/// lines.  When the terminal is narrow (e.g. tmux split), long lines wrap into
+/// multiple rendered lines, so source-line N can be much further down than
+/// wrapped-line N.  This function sums the wrapped line counts for all source
+/// lines before `source_line` to produce the correct scroll offset.
+fn source_line_to_wrapped_offset(lines: &[Line<'_>], source_line: usize, width: u16) -> u16 {
+    let w = width as usize;
+    if w == 0 {
+        return u16::try_from(source_line).unwrap_or(u16::MAX);
+    }
+
+    let mut wrapped: usize = 0;
+    for line in lines.iter().take(source_line) {
+        let line_width = line.width();
+        if line_width <= w {
+            wrapped += 1;
+        } else {
+            // Ceiling division: number of visual rows this source line occupies.
+            wrapped += (line_width + w - 1) / w;
+        }
+    }
+
+    u16::try_from(wrapped).unwrap_or(u16::MAX)
 }
 
 /// Render the article list popup

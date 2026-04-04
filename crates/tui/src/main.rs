@@ -7,7 +7,9 @@ use std::io::BufWriter;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -102,7 +104,7 @@ async fn main() -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut tty_write = tty_write;
-    execute!(tty_write, EnterAlternateScreen)?;
+    execute!(tty_write, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(tty_write);
     let mut terminal = Terminal::new(backend)?;
 
@@ -114,7 +116,11 @@ async fn main() -> Result<()> {
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
     drop(terminal);
 
@@ -204,7 +210,11 @@ fn suspend_and_run(
 ) -> Result<()> {
     // Leave TUI mode
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     // TTS: temporarily restore real stdout/stderr so the agent can use them
@@ -243,7 +253,11 @@ fn suspend_and_run(
 
     // Re-enter TUI mode
     enable_raw_mode()?;
-    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        EnterAlternateScreen,
+        EnableMouseCapture
+    )?;
     terminal.hide_cursor()?;
     terminal.clear()?;
 

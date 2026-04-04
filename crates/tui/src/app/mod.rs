@@ -422,14 +422,16 @@ impl App {
                     }
                     // No article specified + same law → nothing to do.
                 } else {
-                    // Different law — go back to list, select, and auto-open.
+                    // Different law — go back to list, clear filters, select, and auto-open.
                     self.go_back();
+                    self.clear_filters_for_navigate();
                     self.select_law_by_id(law_id);
                     self.pending_navigate_article = article.map(String::from);
                     self.open_selected();
                 }
             }
             View::List => {
+                self.clear_filters_for_navigate();
                 self.select_law_by_id(law_id);
                 self.pending_navigate_article = article.map(String::from);
                 self.open_selected();
@@ -446,6 +448,36 @@ impl App {
         }
     }
 
+    /// Clear all active filters so that the full law list is available.
+    ///
+    /// Called before `select_law_by_id` during external navigate commands so
+    /// that the target law can always be found regardless of what filters the
+    /// user previously set.
+    fn clear_filters_for_navigate(&mut self) {
+        let had_filters = !self.search_query.is_empty()
+            || self.category_filter.is_some()
+            || self.department_filter.is_some()
+            || self.bookmarks_only;
+
+        if had_filters {
+            info!(
+                search_query = %self.search_query,
+                category = ?self.category_filter,
+                department = ?self.department_filter,
+                bookmarks_only = self.bookmarks_only,
+                "clear_filters_for_navigate: clearing active filters"
+            );
+            self.search_query.clear();
+            self.category_filter = None;
+            self.department_filter = None;
+            self.bookmarks_only = false;
+            self.meili_search_ids = None;
+            self.meili_search_query = None;
+            self.input_mode = InputMode::Normal;
+            self.apply_filters();
+        }
+    }
+
     /// Find a law by ID in the current filtered list and select it.
     fn select_law_by_id(&mut self, law_id: &str) {
         if let Some(pos) = self
@@ -454,6 +486,9 @@ impl App {
             .position(|&i| self.all_laws[i].id == law_id)
         {
             self.list_selected = pos;
+            // Update list_offset so the viewport scrolls to show the selected law.
+            // Place the selected item roughly in the upper third of the viewport.
+            self.list_offset = pos.saturating_sub(3);
             info!(
                 law_id,
                 pos,
