@@ -50,6 +50,7 @@ legal-ko        # or: task run
 | `d` | Filter by department |
 | `n` / `p` | Next / previous article (제X조) |
 | `a` | Article list popup |
+| `E` | Export law to `.md` file |
 | `B` | Toggle bookmark |
 | `b` | Bookmarks only |
 | `t` | Cycle theme |

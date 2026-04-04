@@ -14,6 +14,9 @@ use crate::theme::Theme;
 
 use legal_ko_core::AGENTS;
 
+/// Application version, embedded at compile time from the workspace VERSION file.
+const VERSION: &str = include_str!("../../../../VERSION").trim_ascii();
+
 /// Minimum terminal size (cols, rows)
 const MIN_WIDTH: u16 = 40;
 const MIN_HEIGHT: u16 = 10;
@@ -70,10 +73,9 @@ pub fn render(f: &mut Frame, app: &App) {
 }
 
 fn render_loading(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
-    let msg = if let Some(ref err) = app.status_message {
-        err.clone()
-    } else {
-        "Loading metadata...".to_string()
+    let msg = match app.status_message {
+        Some(ref err) => err.as_str(),
+        None => "Loading metadata...",
     };
 
     let paragraph = Paragraph::new(msg)
@@ -117,18 +119,8 @@ fn render_filter_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect, kind
     let mut items: Vec<ListItem> = Vec::new();
 
     // "All" option
-    let all_style = if app.popup_selected == 0 {
-        Style::default()
-            .fg(theme.highlight_fg)
-            .bg(theme.highlight_bg)
-            .add_modifier(Modifier::BOLD)
-    } else if current_filter.is_none() {
-        Style::default()
-            .fg(theme.accent)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme.fg)
-    };
+    let all_style =
+        styles::list_item_style(theme, app.popup_selected == 0, current_filter.is_none());
     items.push(ListItem::new(Line::from(Span::styled(
         "  All (전체)".to_string(),
         all_style,
@@ -137,18 +129,7 @@ fn render_filter_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect, kind
     for (i, item) in items_source.iter().enumerate() {
         let is_selected = app.popup_selected == i + 1;
         let is_active = current_filter.as_ref() == Some(item);
-        let style = if is_selected {
-            Style::default()
-                .fg(theme.highlight_fg)
-                .bg(theme.highlight_bg)
-                .add_modifier(Modifier::BOLD)
-        } else if is_active {
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.fg)
-        };
+        let style = styles::list_item_style(theme, is_selected, is_active);
         items.push(ListItem::new(Line::from(Span::styled(
             format!("  {item}"),
             style,
@@ -179,18 +160,7 @@ fn render_agent_picker(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             let is_selected = i == app.popup_selected;
             let is_last_used = last_agent_name == Some(agent.name);
 
-            let style = if is_selected {
-                Style::default()
-                    .fg(theme.highlight_fg)
-                    .bg(theme.highlight_bg)
-                    .add_modifier(Modifier::BOLD)
-            } else if is_last_used {
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme.fg)
-            };
+            let style = styles::list_item_style(theme, is_selected, is_last_used);
 
             let marker = if is_last_used { " *" } else { "" };
             ListItem::new(Line::from(Span::styled(

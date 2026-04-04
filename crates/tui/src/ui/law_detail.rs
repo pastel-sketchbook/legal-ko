@@ -10,6 +10,7 @@ use legal_ko_core::tts::TtsState;
 use crate::app::App;
 use crate::theme::Theme;
 
+use super::VERSION;
 use super::styles;
 
 pub fn render_law_detail(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
@@ -49,7 +50,7 @@ fn render_detail_title(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
 
     let title_style = styles::title_bar(theme);
 
-    let line = Line::from(vec![
+    let mut parts = vec![
         Span::styled(format!(" {title}"), title_style),
         Span::styled(
             bookmark_marker.to_string(),
@@ -58,8 +59,12 @@ fn render_detail_title(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
                 .bg(theme.panel_bg)
                 .add_modifier(Modifier::BOLD),
         ),
-    ]);
+    ];
 
+    // Right-align version label
+    styles::push_version_label(&mut parts, theme, VERSION, area.width);
+
+    let line = Line::from(parts);
     let bar = Paragraph::new(line).style(title_style);
     f.render_widget(bar, area);
 }
@@ -255,14 +260,7 @@ pub fn render_article_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect)
         .iter()
         .enumerate()
         .map(|(i, art)| {
-            let style = if i == app.popup_selected {
-                Style::default()
-                    .fg(theme.highlight_fg)
-                    .bg(theme.highlight_bg)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme.fg)
-            };
+            let style = styles::list_item_style(theme, i == app.popup_selected, false);
             ListItem::new(Line::from(Span::styled(format!("  {}", art.label), style)))
         })
         .collect();

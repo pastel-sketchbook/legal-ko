@@ -516,6 +516,35 @@ impl App {
         }
     }
 
+    /// Export the currently viewed law to a markdown file in the working directory.
+    ///
+    /// The file is named `{title} ({category}).md` to avoid collisions when
+    /// the same law name has multiple types (법률, 시행령, etc.).
+    pub fn export_law(&mut self) {
+        let Some(ref detail) = self.detail else {
+            self.status_message = Some("No law open to export".to_string());
+            return;
+        };
+
+        let title = &detail.entry.title;
+        let category = &detail.entry.category;
+        // Sanitise filename: replace path separators with underscores
+        let safe_title = title.replace(['/', '\\'], "_");
+        let safe_cat = category.replace(['/', '\\'], "_");
+        let filename = format!("{safe_title} ({safe_cat}).md");
+
+        let content = detail.raw_markdown.clone();
+        let fname_display = filename.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = std::fs::write(&filename, content) {
+                warn!(error = %e, filename, "Failed to export law");
+            }
+        });
+
+        self.status_message = Some(format!("Exported → {fname_display}"));
+        info!(file = %fname_display, "Law exported to file");
+    }
+
     /// Cycle to the next theme. Saves preference to disk.
     pub fn next_theme(&mut self) {
         self.theme_index = (self.theme_index + 1) % theme::THEMES.len();

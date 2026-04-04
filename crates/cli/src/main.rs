@@ -507,9 +507,11 @@ async fn cmd_speak(
             });
             println!("{}", serde_json::to_string_pretty(&obj)?);
         } else {
-            eprintln!(
-                "Spoke {:.1}s of audio in {:.1}s (RTF: {:.2})",
-                result.duration_secs, result.generation_time_secs, result.rtf
+            tracing::info!(
+                duration_secs = format!("{:.1}", result.duration_secs),
+                generation_time_secs = format!("{:.1}", result.generation_time_secs),
+                rtf = format!("{:.2}", result.rtf),
+                "TTS complete"
             );
         }
     } else {
@@ -539,7 +541,7 @@ async fn cmd_speak(
         }
 
         let n_segments = segments.len();
-        eprintln!("Synthesizing {n_segments} article(s)...");
+        tracing::info!(segments = n_segments, "Synthesizing articles");
 
         let stats = tokio::task::spawn_blocking(move || {
             tts::with_suppressed_output(|| {
@@ -564,9 +566,12 @@ async fn cmd_speak(
             });
             println!("{}", serde_json::to_string_pretty(&obj)?);
         } else {
-            eprintln!(
-                "Spoke {:.1}s of audio ({} articles) in {:.1}s (RTF: {:.2})",
-                stats.duration_secs, stats.segments, stats.generation_time_secs, stats.rtf
+            tracing::info!(
+                segments = stats.segments,
+                duration_secs = format!("{:.1}", stats.duration_secs),
+                generation_time_secs = format!("{:.1}", stats.generation_time_secs),
+                rtf = format!("{:.2}", stats.rtf),
+                "TTS complete"
             );
         }
     }

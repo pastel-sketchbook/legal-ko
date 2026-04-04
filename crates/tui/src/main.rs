@@ -370,6 +370,7 @@ fn handle_detail_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         KeyCode::Char('R') => app.speak_full(),
         #[cfg(feature = "tts")]
         KeyCode::Char('s') => app.stop_tts(),
+        KeyCode::Char('E') => app.export_law(),
         KeyCode::Char('o') => app.open_agent_picker(),
         KeyCode::Char('?') => app.popup = Popup::Help,
         _ => {}

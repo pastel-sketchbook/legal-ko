@@ -3,39 +3,12 @@ use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
-use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, InputMode};
 use crate::theme::Theme;
 
+use super::VERSION;
 use super::styles;
-
-/// Pad or truncate `s` so its display width is exactly `target_width`.
-fn pad_to_width(s: &str, target_width: usize) -> String {
-    let w = UnicodeWidthStr::width(s);
-    if w >= target_width {
-        // Truncate to fit
-        let mut result = String::new();
-        let mut current = 0;
-        for ch in s.chars() {
-            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-            if current + cw > target_width {
-                break;
-            }
-            result.push(ch);
-            current += cw;
-        }
-        // Fill remaining with spaces (e.g. if a double-width char was skipped)
-        while current < target_width {
-            result.push(' ');
-            current += 1;
-        }
-        result
-    } else {
-        let padding = target_width - w;
-        format!("{s}{}", " ".repeat(padding))
-    }
-}
 
 pub fn render_law_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let chunks = Layout::vertical([
@@ -97,6 +70,9 @@ fn render_title_bar(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         ));
     }
 
+    // Right-align version label
+    styles::push_version_label(&mut parts, theme, VERSION, area.width);
+
     let line = Line::from(parts);
     let bar = Paragraph::new(line).style(title_style);
     f.render_widget(bar, area);
@@ -111,7 +87,7 @@ fn render_search_bar(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
                     .fg(theme.search)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(app.search_query.clone(), Style::default().fg(theme.search)),
+            Span::styled(app.search_query.as_str(), Style::default().fg(theme.search)),
             Span::styled("\u{258c}", Style::default().fg(theme.search)),
         ])
     } else if app.search_query.is_empty() {
@@ -119,7 +95,7 @@ fn render_search_bar(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     } else {
         Line::from(vec![
             Span::styled(" / ", Style::default().fg(theme.muted)),
-            Span::styled(app.search_query.clone(), Style::default().fg(theme.fg)),
+            Span::styled(app.search_query.as_str(), Style::default().fg(theme.fg)),
         ])
     };
 
@@ -180,18 +156,11 @@ fn render_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
 
             let bookmark_marker = if is_bookmarked { "\u{2605} " } else { "  " };
 
-            let title_col = pad_to_width(&entry.title, title_w);
+            let title_col = styles::pad_to_width(&entry.title, title_w);
             let cat_text = format!("[{}]", entry.category);
-            let cat_col = pad_to_width(&cat_text, cat_w);
+            let cat_col = styles::pad_to_width(&cat_text, cat_w);
 
-            let title_style = if is_selected {
-                Style::default()
-                    .fg(theme.highlight_fg)
-                    .bg(theme.highlight_bg)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme.fg)
-            };
+            let title_style = styles::list_item_style(theme, is_selected, false);
 
             let mut spans = vec![
                 Span::styled(
@@ -205,7 +174,7 @@ fn render_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
 
             if show_dept {
                 let dept_text = entry.departments.join(", ");
-                let dept_col = pad_to_width(&dept_text, dept_w);
+                let dept_col = styles::pad_to_width(&dept_text, dept_w);
                 spans.push(Span::styled(" ", Style::default()));
                 spans.push(Span::styled(
                     dept_col,

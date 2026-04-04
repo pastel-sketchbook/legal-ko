@@ -33,6 +33,7 @@ pub fn render_help(f: &mut Frame, theme: &Theme, area: Rect) {
         key_line(theme, "n", "Next article (\u{c81c}X\u{c870})"),
         key_line(theme, "p", "Previous article"),
         key_line(theme, "a", "Article list popup"),
+        key_line(theme, "E", "Export law to .md file"),
         Line::from(""),
     ];
 
