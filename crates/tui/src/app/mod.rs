@@ -907,7 +907,7 @@ end tell"#
 
         tokio::spawn(async move {
             let tx_batch = tx.clone();
-            let final_cache = enrichment::fetch_and_enrich(&client, &entries, &cache, |batch| {
+            let final_cache = enrichment::fetch_and_enrich(&client, &entries, cache, |batch| {
                 let _ = tx_batch.send(Message::EnrichmentBatch(batch));
             })
             .await;

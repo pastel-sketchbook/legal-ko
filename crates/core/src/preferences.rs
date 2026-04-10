@@ -37,6 +37,7 @@ impl Preferences {
     }
 
     /// Load preferences from disk, falling back to defaults on any error.
+    #[must_use]
     pub fn load() -> Self {
         match Self::try_load() {
             Ok(p) => p,

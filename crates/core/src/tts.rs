@@ -83,6 +83,7 @@ const SAMPLE_RATE: NonZero<u32> = NonZero::new(OUTPUT_SR).unwrap();
 ///
 /// Callers should wrap the **entire** blocking task (not just individual calls)
 /// so that deferred output from background threads is also suppressed.
+#[must_use]
 pub fn with_suppressed_output<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,

@@ -31,6 +31,7 @@ const CONCURRENCY: usize = 50;
 /// Apply cached enrichment data to entries in-place.
 ///
 /// Returns the number of entries that were enriched.
+#[must_use]
 pub fn apply_cache(entries: &mut [LawEntry], cache: &EnrichmentCache) -> usize {
     let mut count = 0;
     for entry in entries.iter_mut() {
@@ -75,7 +76,7 @@ pub struct EnrichedEntry {
 pub async fn fetch_and_enrich(
     client: &reqwest::Client,
     entries: &[LawEntry],
-    existing_cache: &EnrichmentCache,
+    existing_cache: EnrichmentCache,
     mut on_batch: impl FnMut(Vec<EnrichedEntry>),
 ) -> EnrichmentCache {
     // Find entries that need enrichment
@@ -91,8 +92,8 @@ pub async fn fetch_and_enrich(
         "Starting batch enrichment"
     );
 
-    // Start with existing cache
-    let mut cache = existing_cache.clone();
+    // Start with existing cache (taken by value, no clone needed)
+    let mut cache = existing_cache;
 
     if needs_fetch.is_empty() {
         return cache;
@@ -111,7 +112,9 @@ pub async fn fetch_and_enrich(
             let id = entry.id.clone();
 
             handles.push(tokio::spawn(async move {
-                let _permit = sem.acquire().await.unwrap();
+                let Ok(_permit) = sem.acquire().await else {
+                    return None; // Semaphore closed — skip gracefully
+                };
                 match client::fetch_frontmatter(&client, &path).await {
                     Ok(raw) => {
                         let fm = parser::parse_frontmatter(&raw);
@@ -119,7 +122,9 @@ pub async fn fetch_and_enrich(
                             category: fm
                                 .get("법령구분")
                                 .map_or_else(String::new, |v| v.as_str().to_string()),
-                            departments: fm.get("소관부처").map_or_else(Vec::new, |v| v.as_list()),
+                            departments: fm
+                                .get("소관부처")
+                                .map_or_else(Vec::new, super::parser::FrontmatterValue::as_list),
                             promulgation_date: fm
                                 .get("공포일자")
                                 .map_or_else(String::new, |v| v.as_str().to_string()),

@@ -203,10 +203,10 @@ async fn load_entries(client: &reqwest::Client) -> Result<Vec<LawEntry>> {
 
     // Apply cached enrichment, then batch-fetch any missing entries
     let cache = enrichment::load_cache();
-    enrichment::apply_cache(&mut entries, &cache);
-    let final_cache = enrichment::fetch_and_enrich(client, &entries, &cache, |_batch| {}).await;
+    let _ = enrichment::apply_cache(&mut entries, &cache);
+    let final_cache = enrichment::fetch_and_enrich(client, &entries, cache, |_batch| {}).await;
     // Apply the freshly fetched data to entries
-    enrichment::apply_cache(&mut entries, &final_cache);
+    let _ = enrichment::apply_cache(&mut entries, &final_cache);
     // Save cache to disk (best-effort)
     tokio::task::spawn_blocking(move || enrichment::save_cache(&final_cache));
 

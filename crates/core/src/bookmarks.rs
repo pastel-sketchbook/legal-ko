@@ -18,6 +18,7 @@ impl Bookmarks {
     }
 
     /// Load bookmarks from disk. Returns empty set if file doesn't exist.
+    #[must_use]
     pub fn load() -> Self {
         match Self::try_load() {
             Ok(b) => b,
