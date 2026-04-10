@@ -28,6 +28,7 @@ pub fn render_help(f: &mut Frame, theme: &Theme, area: Rect) {
         key_line(theme, "Esc", "Clear search"),
         key_line(theme, "c", "Filter by category"),
         key_line(theme, "d", "Filter by department"),
+        key_line(theme, "S", "Toggle sort (title / date)"),
         Line::from(""),
         header_line(theme, "Detail View"),
         key_line(theme, "n", "Next article (\u{c81c}X\u{c870})"),

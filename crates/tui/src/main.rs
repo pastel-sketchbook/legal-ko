@@ -324,6 +324,7 @@ fn handle_list_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         KeyCode::Char('d') => app.open_department_filter(),
         KeyCode::Char('B') => app.toggle_bookmark(),
         KeyCode::Char('b') => app.toggle_bookmarks_only(),
+        KeyCode::Char('S') => app.toggle_sort(),
         KeyCode::Char('t') => app.next_theme(),
         #[cfg(feature = "tts")]
         KeyCode::Char('T') => app.toggle_tts_profile(),

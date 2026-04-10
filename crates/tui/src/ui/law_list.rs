@@ -126,11 +126,18 @@ fn render_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         .iter()
         .any(|&idx| !app.all_laws[idx].departments.is_empty());
 
+    // Adaptive date column: only show when at least one filtered entry has a date
+    let show_date = app
+        .filtered_indices
+        .iter()
+        .any(|&idx| !app.all_laws[idx].promulgation_date.is_empty());
+
     let bookmark_w: usize = 2;
     let cat_w: usize = 14; // fits brackets + longest category (e.g. "[대통령령]" = 10 display width)
     let dept_w: usize = if show_dept { 16 } else { 0 };
-    let gaps: usize = 1 + usize::from(show_dept); // 1 gap before cat, 1 before dept (if shown)
-    let title_w = total_width.saturating_sub(bookmark_w + cat_w + dept_w + gaps);
+    let date_w: usize = if show_date { 10 } else { 0 }; // YYYY-MM-DD
+    let gaps: usize = 1 + usize::from(show_dept) + usize::from(show_date);
+    let title_w = total_width.saturating_sub(bookmark_w + cat_w + dept_w + date_w + gaps);
 
     // Calculate the offset so the selected item is visible
     let offset = if app.list_selected < app.list_offset {
@@ -182,6 +189,12 @@ fn render_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
                 ));
             }
 
+            if show_date {
+                let date_col = styles::pad_to_width(&entry.promulgation_date, date_w);
+                spans.push(Span::styled(" ", Style::default()));
+                spans.push(Span::styled(date_col, Style::default().fg(theme.date)));
+            }
+
             ListItem::new(Line::from(spans))
         })
         .collect();
@@ -206,6 +219,7 @@ fn render_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             ("/", "search"),
             ("c", "category"),
             ("d", "department"),
+            ("S", "sort"),
             #[cfg(feature = "tts")]
             ("T", "tts profile"),
             ("t", "theme"),

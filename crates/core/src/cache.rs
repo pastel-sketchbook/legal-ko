@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -72,5 +74,83 @@ pub fn write_cache(path: &str, content: &str) -> Result<()> {
         .with_context(|| format!("Failed to rename cache file {}", file.display()))?;
 
     debug!(path, "Cached content");
+    Ok(())
+}
+
+// ── Enrichment metadata cache ────────────────────────────────
+
+/// TTL for the enrichment cache file (7 days).
+const ENRICHMENT_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// Cached metadata fields extracted from YAML frontmatter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnrichedMeta {
+    pub category: String,
+    pub departments: Vec<String>,
+    pub promulgation_date: String,
+    pub enforcement_date: String,
+    pub status: String,
+}
+
+/// The full enrichment cache: law ID → extracted metadata.
+pub type EnrichmentCache = HashMap<String, EnrichedMeta>;
+
+/// Path to the enrichment cache file.
+fn enrichment_cache_path() -> Result<PathBuf> {
+    Ok(cache_dir()?.join("enriched.json"))
+}
+
+/// Read the enrichment cache from disk.
+///
+/// Returns an empty map if the file doesn't exist or has expired.
+///
+/// # Errors
+///
+/// Returns an error if the file exists but cannot be read or parsed.
+pub fn read_enrichment_cache() -> Result<EnrichmentCache> {
+    let path = enrichment_cache_path()?;
+    if !path.exists() {
+        debug!("Enrichment cache not found");
+        return Ok(HashMap::new());
+    }
+
+    // Check TTL
+    if let Ok(metadata) = path.metadata()
+        && let Ok(modified) = metadata.modified()
+        && let Ok(age) = modified.elapsed()
+        && age > ENRICHMENT_TTL
+    {
+        debug!(age_secs = age.as_secs(), "Enrichment cache expired");
+        return Ok(HashMap::new());
+    }
+
+    let content = std::fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read enrichment cache {}", path.display()))?;
+    let cache: EnrichmentCache =
+        serde_json::from_str(&content).with_context(|| "Failed to parse enrichment cache JSON")?;
+    debug!(entries = cache.len(), "Loaded enrichment cache");
+    Ok(cache)
+}
+
+/// Write the enrichment cache to disk (atomic rename).
+///
+/// # Errors
+///
+/// Returns an error if the cache directory cannot be created or the file
+/// cannot be written.
+pub fn write_enrichment_cache(cache: &EnrichmentCache) -> Result<()> {
+    let dir = cache_dir()?;
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("Failed to create cache dir {}", dir.display()))?;
+
+    let path = enrichment_cache_path()?;
+    let tmp = path.with_extension("tmp");
+    let json = serde_json::to_string(cache).context("Failed to serialize enrichment cache")?;
+    std::fs::write(&tmp, json)
+        .with_context(|| format!("Failed to write temp enrichment cache {}", tmp.display()))?;
+    std::fs::rename(&tmp, &path)
+        .with_context(|| format!("Failed to rename enrichment cache {}", path.display()))?;
+
+    debug!(entries = cache.len(), "Wrote enrichment cache");
     Ok(())
 }

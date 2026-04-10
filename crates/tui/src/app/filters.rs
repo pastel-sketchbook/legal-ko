@@ -1,5 +1,6 @@
 use super::{App, InputMode, Popup, View};
 use legal_ko_core::AGENTS;
+use legal_ko_core::models;
 use tracing::warn;
 
 impl App {
@@ -232,6 +233,15 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    // ── Sort ───────────────────────────────────────────────────
+
+    pub fn toggle_sort(&mut self) {
+        self.sort_order = self.sort_order.next();
+        models::sort_entries(&mut self.all_laws, self.sort_order);
+        self.apply_filters();
+        self.status_message = Some(format!("Sort: {}", self.sort_order.label()));
     }
 
     fn popup_items_count(&self) -> usize {

@@ -22,6 +22,36 @@ pub struct GitTreeResponse {
 
 // ── Law metadata types ───────────────────────────────────────
 
+/// Sort order for law entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortOrder {
+    /// Sort by title (Korean alphabetical), then category.
+    #[default]
+    Title,
+    /// Sort by promulgation date (newest first), then title.
+    PromulgationDate,
+}
+
+impl SortOrder {
+    /// Cycle to the next sort order.
+    #[must_use]
+    pub fn next(self) -> Self {
+        match self {
+            SortOrder::Title => SortOrder::PromulgationDate,
+            SortOrder::PromulgationDate => SortOrder::Title,
+        }
+    }
+
+    /// Human-readable label for the current sort order.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            SortOrder::Title => "title",
+            SortOrder::PromulgationDate => "promulgation date",
+        }
+    }
+}
+
 /// Metadata entry for a single law file.
 ///
 /// In the old repo layout this was deserialized directly from `metadata.json`.
@@ -54,7 +84,9 @@ pub struct LawEntry {
     pub category: String,
     /// Departments (소관부처)
     pub departments: Vec<String>,
-    /// Enforcement date
+    /// Promulgation date (공포일자)
+    pub promulgation_date: String,
+    /// Enforcement date (시행일자)
     pub enforcement_date: String,
     /// Status (시행/폐지)
     pub status: String,
@@ -74,17 +106,43 @@ pub fn entries_from_index(index: MetadataIndex) -> Vec<LawEntry> {
             title: meta.title,
             category: meta.category,
             departments: meta.departments,
+            promulgation_date: meta.promulgation_date,
             enforcement_date: meta.enforcement_date,
             status: meta.status,
             path: meta.path,
         })
         .collect();
-    entries.sort_by(|a, b| {
-        a.title
-            .cmp(&b.title)
-            .then_with(|| a.category.cmp(&b.category))
-    });
+    sort_entries(&mut entries, SortOrder::Title);
     entries
+}
+
+/// Sort entries in-place according to the given sort order.
+pub fn sort_entries(entries: &mut [LawEntry], order: SortOrder) {
+    match order {
+        SortOrder::Title => {
+            entries.sort_by(|a, b| {
+                a.title
+                    .cmp(&b.title)
+                    .then_with(|| a.category.cmp(&b.category))
+            });
+        }
+        SortOrder::PromulgationDate => {
+            entries.sort_by(|a, b| {
+                // Descending date (newest first); empty dates sort last.
+                let da = if a.promulgation_date.is_empty() {
+                    ""
+                } else {
+                    &a.promulgation_date
+                };
+                let db = if b.promulgation_date.is_empty() {
+                    ""
+                } else {
+                    &b.promulgation_date
+                };
+                db.cmp(da).then_with(|| a.title.cmp(&b.title))
+            });
+        }
+    }
 }
 
 /// A reference to an article (제X조) within a law document

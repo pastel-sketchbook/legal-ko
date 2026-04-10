@@ -3,6 +3,7 @@ use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use unicode_width::UnicodeWidthStr;
 
 #[cfg(feature = "tts")]
 use legal_ko_core::tts::TtsState;
@@ -61,8 +62,60 @@ fn render_detail_title(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         ),
     ];
 
-    // Right-align version label
-    styles::push_version_label(&mut parts, theme, VERSION, area.width);
+    // Build right-side metadata: department · date  vX.Y.Z
+    let mut right_parts: Vec<Span<'static>> = Vec::new();
+
+    if let Some(ref detail) = app.detail {
+        let dept = detail.entry.departments.join(", ");
+        let date = &detail.entry.promulgation_date;
+
+        if !dept.is_empty() {
+            right_parts.push(Span::styled(
+                dept,
+                Style::default().fg(theme.department).bg(theme.panel_bg),
+            ));
+        }
+        if !date.is_empty() {
+            if !right_parts.is_empty() {
+                right_parts.push(Span::styled(
+                    " · ",
+                    Style::default().fg(theme.muted).bg(theme.panel_bg),
+                ));
+            }
+            right_parts.push(Span::styled(
+                date.clone(),
+                Style::default().fg(theme.date).bg(theme.panel_bg),
+            ));
+        }
+    }
+
+    let version_label = format!(" v{VERSION} ");
+
+    // Measure widths for right-alignment
+    let left_width: usize = parts.iter().map(|s| s.content.width()).sum();
+    let meta_width: usize = right_parts.iter().map(|s| s.content.width()).sum();
+    let version_width = UnicodeWidthStr::width(version_label.as_str());
+    // Add 2 for the space before metadata and space before version
+    let right_total = meta_width + version_width + if meta_width > 0 { 2 } else { 0 };
+    let total = area.width as usize;
+    let gap = total.saturating_sub(left_width + right_total);
+
+    if gap > 0 {
+        parts.push(Span::styled(
+            " ".repeat(gap),
+            Style::default().bg(theme.panel_bg),
+        ));
+    }
+
+    if !right_parts.is_empty() {
+        parts.extend(right_parts);
+        parts.push(Span::styled(" ", Style::default().bg(theme.panel_bg)));
+    }
+
+    parts.push(Span::styled(
+        version_label,
+        Style::default().fg(theme.muted).bg(theme.panel_bg),
+    ));
 
     let line = Line::from(parts);
     let bar = Paragraph::new(line).style(title_style);

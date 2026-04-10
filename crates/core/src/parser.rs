@@ -180,6 +180,12 @@ pub fn enrich_entry_from_frontmatter(entry: &mut crate::models::LawEntry, raw: &
             entry.departments = list;
         }
     }
+    if let Some(v) = fm.get("공포일자") {
+        let s = v.as_str();
+        if !s.is_empty() {
+            entry.promulgation_date = s.to_string();
+        }
+    }
     if let Some(v) = fm.get("시행일자") {
         let s = v.as_str();
         if !s.is_empty() {
@@ -444,13 +450,15 @@ mod tests {
             title: "민법".to_string(),
             category: "법률".to_string(),
             departments: Vec::new(),
+            promulgation_date: String::new(),
             enforcement_date: String::new(),
             status: "시행".to_string(),
             path: "kr/민법/법률.md".to_string(),
         };
-        let raw = "---\n제목: 민법\n법령구분: 법률\n소관부처:\n- 법무부\n시행일자: '2026-03-17'\n상태: 시행\n---\n# 민법";
+        let raw = "---\n제목: 민법\n법령구분: 법률\n소관부처:\n- 법무부\n공포일자: '2026-03-17'\n시행일자: '2026-03-17'\n상태: 시행\n---\n# 민법";
         enrich_entry_from_frontmatter(&mut entry, raw);
         assert_eq!(entry.departments, vec!["법무부"]);
+        assert_eq!(entry.promulgation_date, "2026-03-17");
         assert_eq!(entry.enforcement_date, "2026-03-17");
     }
 

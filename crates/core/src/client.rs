@@ -172,6 +172,36 @@ pub async fn fetch_law_content(client: &reqwest::Client, path: &str) -> Result<S
     Ok(content)
 }
 
+/// Fetch only the YAML frontmatter from a law file (first 1024 bytes).
+///
+/// Uses an HTTP `Range` header to minimize bandwidth. Returns the raw bytes
+/// as a UTF-8 string (possibly truncated mid-line, which is fine for our
+/// frontmatter parser).
+///
+/// # Errors
+///
+/// Returns an error if the HTTP request fails or the response body cannot be read.
+pub async fn fetch_frontmatter(client: &reqwest::Client, path: &str) -> Result<String> {
+    let url = format!("{BASE_URL}/{path}");
+
+    let resp = client
+        .get(&url)
+        .header("Range", "bytes=0-1023")
+        .send()
+        .await
+        .with_context(|| format!("Failed to fetch frontmatter for {path}"))?;
+
+    let status = resp.status();
+    // 200 (full content) or 206 (partial) are both acceptable.
+    if !status.is_success() && status.as_u16() != 206 {
+        anyhow::bail!("{path} frontmatter returned HTTP {status}");
+    }
+
+    resp.text()
+        .await
+        .with_context(|| format!("Failed to read frontmatter body of {path}"))
+}
+
 /// Load law content: try cache first, then fetch from GitHub and cache the result.
 ///
 /// # Errors

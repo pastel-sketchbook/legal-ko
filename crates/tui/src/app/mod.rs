@@ -12,7 +12,9 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use legal_ko_core::bookmarks::Bookmarks;
-use legal_ko_core::models::{self, ArticleRef, LawDetail, LawEntry, MetadataIndex};
+use legal_ko_core::cache::EnrichmentCache;
+use legal_ko_core::enrichment::{self, EnrichedEntry};
+use legal_ko_core::models::{self, ArticleRef, LawDetail, LawEntry, MetadataIndex, SortOrder};
 use legal_ko_core::preferences::Preferences;
 use legal_ko_core::search::Searcher;
 #[cfg(feature = "tts")]
@@ -89,6 +91,10 @@ pub enum Message {
         seq: u64,
         ids: Vec<String>,
     },
+    /// A batch of entries has been enriched with frontmatter metadata.
+    EnrichmentBatch(Vec<EnrichedEntry>),
+    /// All enrichment is complete; cache has been saved.
+    EnrichmentDone,
     /// All synthesis and playback for a batch session is done.
     #[cfg(feature = "tts")]
     TtsSynthesisDone,
@@ -137,6 +143,9 @@ pub struct App {
     pub category_filter: Option<String>,
     pub department_filter: Option<String>,
     pub bookmarks_only: bool,
+
+    // Sort order
+    pub sort_order: SortOrder,
 
     // Available filter options
     pub categories: Vec<String>,
@@ -266,6 +275,7 @@ impl App {
             category_filter: None,
             department_filter: None,
             bookmarks_only: false,
+            sort_order: SortOrder::default(),
             categories: Vec::new(),
             departments: Vec::new(),
             popup_selected: 0,
@@ -842,11 +852,27 @@ end tell"#
                     self.apply_filters();
                 }
             }
+            Message::EnrichmentBatch(batch) => {
+                self.apply_enrichment_batch(&batch);
+            }
+            Message::EnrichmentDone => {
+                info!("Enrichment complete");
+                self.rebuild_filter_options();
+            }
         }
     }
 
     fn load_metadata(&mut self, index: MetadataIndex) {
-        let entries = models::entries_from_index(index);
+        let mut entries = models::entries_from_index(index);
+
+        // Apply cached enrichment data immediately (fast, no I/O)
+        let cache = enrichment::load_cache();
+        let cached_count = enrichment::apply_cache(&mut entries, &cache);
+        if cached_count > 0 {
+            info!(cached_count, "Applied cached enrichment");
+            // Re-sort with enriched data
+            models::sort_entries(&mut entries, self.sort_order);
+        }
 
         // Extract unique categories and departments
         let mut cat_set: HashSet<String> = HashSet::new();
@@ -867,6 +893,82 @@ end tell"#
         self.categories = categories;
         self.departments = departments;
         self.apply_filters();
+
+        // Start batch enrichment in background for un-cached entries
+        self.start_enrichment(cache);
+    }
+
+    /// Spawn a background task that fetches frontmatter for all un-cached
+    /// entries and sends progressive `EnrichmentBatch` messages.
+    fn start_enrichment(&self, cache: EnrichmentCache) {
+        let client = self.client.clone();
+        let entries = self.all_laws.clone();
+        let tx = self.msg_tx.clone();
+
+        tokio::spawn(async move {
+            let tx_batch = tx.clone();
+            let final_cache = enrichment::fetch_and_enrich(&client, &entries, &cache, |batch| {
+                let _ = tx_batch.send(Message::EnrichmentBatch(batch));
+            })
+            .await;
+
+            // Save updated cache to disk (blocking I/O)
+            let cache_snapshot = final_cache;
+            tokio::task::spawn_blocking(move || {
+                enrichment::save_cache(&cache_snapshot);
+            });
+
+            let _ = tx.send(Message::EnrichmentDone);
+        });
+    }
+
+    /// Apply a batch of enriched entries to the master list and re-filter.
+    fn apply_enrichment_batch(&mut self, batch: &[EnrichedEntry]) {
+        for enriched in batch {
+            if let Some(entry) = self.all_laws.iter_mut().find(|e| e.id == enriched.id) {
+                if !enriched.meta.category.is_empty() {
+                    entry.category.clone_from(&enriched.meta.category);
+                }
+                if !enriched.meta.departments.is_empty() {
+                    entry.departments.clone_from(&enriched.meta.departments);
+                }
+                if !enriched.meta.promulgation_date.is_empty() {
+                    entry
+                        .promulgation_date
+                        .clone_from(&enriched.meta.promulgation_date);
+                }
+                if !enriched.meta.enforcement_date.is_empty() {
+                    entry
+                        .enforcement_date
+                        .clone_from(&enriched.meta.enforcement_date);
+                }
+                if !enriched.meta.status.is_empty() {
+                    entry.status.clone_from(&enriched.meta.status);
+                }
+            }
+        }
+
+        // Re-sort and re-filter with new data
+        models::sort_entries(&mut self.all_laws, self.sort_order);
+        self.apply_filters();
+    }
+
+    /// Rebuild the category and department filter options from current data.
+    fn rebuild_filter_options(&mut self) {
+        let mut cat_set: HashSet<String> = HashSet::new();
+        let mut dept_set: HashSet<String> = HashSet::new();
+        for entry in &self.all_laws {
+            cat_set.insert(entry.category.clone());
+            for dept in &entry.departments {
+                dept_set.insert(dept.clone());
+            }
+        }
+        let mut categories: Vec<String> = cat_set.into_iter().collect();
+        categories.sort();
+        let mut departments: Vec<String> = dept_set.into_iter().collect();
+        departments.sort();
+        self.categories = categories;
+        self.departments = departments;
     }
 
     /// Check category, department, and bookmark filters (excludes search query).

@@ -3,11 +3,11 @@ use clap::{Parser, Subcommand};
 use serde_json::json;
 
 use legal_ko_core::bookmarks::Bookmarks;
-use legal_ko_core::models::{self, LawEntry};
+use legal_ko_core::models::{self, LawEntry, SortOrder};
 use legal_ko_core::search::{self, Searcher};
 #[cfg(feature = "tts")]
 use legal_ko_core::tts;
-use legal_ko_core::{client, parser, reqwest};
+use legal_ko_core::{client, enrichment, parser, reqwest};
 
 #[derive(Parser)]
 #[command(
@@ -34,6 +34,10 @@ enum Command {
         /// Only show bookmarked laws
         #[arg(long)]
         bookmarks: bool,
+
+        /// Sort order: "title" (default) or "date" (promulgation date, newest first)
+        #[arg(long, default_value = "title")]
+        sort: String,
 
         /// Output as JSON
         #[arg(long)]
@@ -147,9 +151,10 @@ async fn main() -> Result<()> {
             category,
             department,
             bookmarks,
+            sort,
             json,
             limit,
-        } => cmd_list(&client, category, department, bookmarks, json, limit).await,
+        } => cmd_list(&client, category, department, bookmarks, &sort, json, limit).await,
         Command::Search { query, json, limit } => cmd_search(&client, &query, json, limit).await,
         Command::Show { id, json } => cmd_show(&client, &id, json).await,
         Command::Articles { id, json } => cmd_articles(&client, &id, json).await,
@@ -194,7 +199,18 @@ async fn load_entries(client: &reqwest::Client) -> Result<Vec<LawEntry>> {
     let index = client::fetch_metadata(client)
         .await
         .context("Failed to load law metadata from GitHub")?;
-    Ok(models::entries_from_index(index))
+    let mut entries = models::entries_from_index(index);
+
+    // Apply cached enrichment, then batch-fetch any missing entries
+    let cache = enrichment::load_cache();
+    enrichment::apply_cache(&mut entries, &cache);
+    let final_cache = enrichment::fetch_and_enrich(client, &entries, &cache, |_batch| {}).await;
+    // Apply the freshly fetched data to entries
+    enrichment::apply_cache(&mut entries, &final_cache);
+    // Save cache to disk (best-effort)
+    tokio::task::spawn_blocking(move || enrichment::save_cache(&final_cache));
+
+    Ok(entries)
 }
 
 fn apply_filters<'a>(
@@ -235,6 +251,7 @@ fn print_entries(entries: &[&LawEntry], as_json: bool) -> Result<()> {
                     "title": e.title,
                     "category": e.category,
                     "departments": e.departments,
+                    "promulgation_date": e.promulgation_date,
                     "enforcement_date": e.enforcement_date,
                     "status": e.status,
                     "path": e.path,
@@ -261,10 +278,18 @@ async fn cmd_list(
     category: Option<String>,
     department: Option<String>,
     bookmarks_only: bool,
+    sort: &str,
     as_json: bool,
     limit: Option<usize>,
 ) -> Result<()> {
-    let entries = load_entries(client).await?;
+    let mut entries = load_entries(client).await?;
+
+    let order = match sort {
+        "date" | "promulgation" => SortOrder::PromulgationDate,
+        _ => SortOrder::Title,
+    };
+    models::sort_entries(&mut entries, order);
+
     let bm = Bookmarks::load();
     let mut filtered = apply_filters(
         &entries,
@@ -325,6 +350,7 @@ async fn cmd_show(client: &reqwest::Client, id: &str, as_json: bool) -> Result<(
             title: String::new(),
             category: String::new(),
             departments: Vec::new(),
+            promulgation_date: String::new(),
             enforcement_date: String::new(),
             status: String::new(),
             path,
@@ -336,6 +362,9 @@ async fn cmd_show(client: &reqwest::Client, id: &str, as_json: bool) -> Result<(
             "title": entry.title,
             "category": entry.category,
             "departments": entry.departments,
+            "promulgation_date": entry.promulgation_date,
+            "enforcement_date": entry.enforcement_date,
+            "status": entry.status,
             "content": stripped,
         });
         println!("{}", serde_json::to_string_pretty(&obj)?);
@@ -357,6 +386,7 @@ async fn cmd_articles(client: &reqwest::Client, id: &str, as_json: bool) -> Resu
             title: String::new(),
             category: String::new(),
             departments: Vec::new(),
+            promulgation_date: String::new(),
             enforcement_date: String::new(),
             status: String::new(),
             path,
