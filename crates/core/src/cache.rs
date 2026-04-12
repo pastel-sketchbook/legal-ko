@@ -154,3 +154,75 @@ pub fn write_enrichment_cache(cache: &EnrichmentCache) -> Result<()> {
     debug!(entries = cache.len(), "Wrote enrichment cache");
     Ok(())
 }
+
+// ── Precedent metadata cache ─────────────────────────────────
+
+use crate::models::PrecedentMetadataIndex;
+
+/// TTL for the precedent metadata cache (24 hours).
+const PRECEDENT_META_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Path to the precedent metadata cache file.
+fn precedent_meta_cache_path() -> Result<PathBuf> {
+    Ok(cache_dir()?.join("precedent_meta.json"))
+}
+
+/// Read the precedent metadata index from disk cache.
+///
+/// Returns `None` if the file doesn't exist or has expired.
+///
+/// # Errors
+///
+/// Returns an error if the file exists but cannot be read or parsed.
+pub fn read_precedent_meta_cache() -> Result<Option<PrecedentMetadataIndex>> {
+    let path = precedent_meta_cache_path()?;
+    if !path.exists() {
+        debug!("Precedent metadata cache not found");
+        return Ok(None);
+    }
+
+    // Check TTL
+    if let Ok(metadata) = path.metadata()
+        && let Ok(modified) = metadata.modified()
+        && let Ok(age) = modified.elapsed()
+        && age > PRECEDENT_META_TTL
+    {
+        debug!(age_secs = age.as_secs(), "Precedent metadata cache expired");
+        return Ok(None);
+    }
+
+    let content = std::fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read precedent meta cache {}", path.display()))?;
+    let index: PrecedentMetadataIndex = serde_json::from_str(&content)
+        .with_context(|| "Failed to parse precedent meta cache JSON")?;
+    debug!(entries = index.len(), "Loaded precedent metadata cache");
+    Ok(Some(index))
+}
+
+/// Write the precedent metadata index to disk cache (atomic rename).
+///
+/// # Errors
+///
+/// Returns an error if the cache directory cannot be created or the file
+/// cannot be written.
+pub fn write_precedent_meta_cache(index: &PrecedentMetadataIndex) -> Result<()> {
+    let dir = cache_dir()?;
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("Failed to create cache dir {}", dir.display()))?;
+
+    let path = precedent_meta_cache_path()?;
+    let tmp = path.with_extension("tmp");
+    let json =
+        serde_json::to_string(index).context("Failed to serialize precedent metadata cache")?;
+    std::fs::write(&tmp, &json).with_context(|| {
+        format!(
+            "Failed to write temp precedent meta cache {}",
+            tmp.display()
+        )
+    })?;
+    std::fs::rename(&tmp, &path)
+        .with_context(|| format!("Failed to rename precedent meta cache {}", path.display()))?;
+
+    debug!(entries = index.len(), "Wrote precedent metadata cache");
+    Ok(())
+}

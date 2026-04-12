@@ -1,6 +1,8 @@
 pub mod help;
 pub mod law_detail;
 pub mod law_list;
+pub mod precedent_detail;
+pub mod precedent_list;
 pub mod styles;
 
 use ratatui::Frame;
@@ -57,7 +59,11 @@ pub fn render(f: &mut Frame, app: &App) {
                     render_filter_popup(f, app, theme, area, FilterKind::Department);
                 }
                 Popup::AgentPicker => render_agent_picker(f, app, theme, area),
-                Popup::None | Popup::ArticleList => {}
+                Popup::None
+                | Popup::ArticleList
+                | Popup::SectionList
+                | Popup::CaseTypeFilter
+                | Popup::CourtFilter => {}
             }
         }
         View::Detail => {
@@ -66,7 +72,46 @@ pub fn render(f: &mut Frame, app: &App) {
                 Popup::Help => help::render_help(f, theme, area),
                 Popup::ArticleList => law_detail::render_article_popup(f, app, theme, area),
                 Popup::AgentPicker => render_agent_picker(f, app, theme, area),
-                Popup::None | Popup::CategoryFilter | Popup::DepartmentFilter => {}
+                Popup::None
+                | Popup::CategoryFilter
+                | Popup::DepartmentFilter
+                | Popup::SectionList
+                | Popup::CaseTypeFilter
+                | Popup::CourtFilter => {}
+            }
+        }
+        View::PrecedentList => {
+            precedent_list::render_precedent_list(f, app, theme, area);
+            match app.popup {
+                Popup::Help => help::render_help(f, theme, area),
+                Popup::CaseTypeFilter => {
+                    render_filter_popup(f, app, theme, area, FilterKind::CaseType);
+                }
+                Popup::CourtFilter => {
+                    render_filter_popup(f, app, theme, area, FilterKind::Court);
+                }
+                Popup::AgentPicker => render_agent_picker(f, app, theme, area),
+                Popup::None
+                | Popup::CategoryFilter
+                | Popup::DepartmentFilter
+                | Popup::ArticleList
+                | Popup::SectionList => {}
+            }
+        }
+        View::PrecedentDetail => {
+            precedent_detail::render_precedent_detail(f, app, theme, area);
+            match app.popup {
+                Popup::Help => help::render_help(f, theme, area),
+                Popup::SectionList => {
+                    precedent_detail::render_section_popup(f, app, theme, area);
+                }
+                Popup::AgentPicker => render_agent_picker(f, app, theme, area),
+                Popup::None
+                | Popup::CategoryFilter
+                | Popup::DepartmentFilter
+                | Popup::ArticleList
+                | Popup::CaseTypeFilter
+                | Popup::CourtFilter => {}
             }
         }
     }
@@ -98,21 +143,33 @@ fn render_loading(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
 enum FilterKind {
     Category,
     Department,
+    CaseType,
+    Court,
 }
 
 fn render_filter_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect, kind: FilterKind) {
     let popup_area = styles::centered_rect(40, 60, area);
 
-    let (title, items_source, current_filter): (&str, &[String], &Option<String>) = match kind {
+    let (title, items_source, current_filter): (&str, &[String], Option<&String>) = match kind {
         FilterKind::Category => (
-            " Category — 법령구분 ",
+            " Category \u{2014} 법령구분 ",
             &app.categories,
-            &app.category_filter,
+            app.category_filter.as_ref(),
         ),
         FilterKind::Department => (
-            " Department — 소관부처 ",
+            " Department \u{2014} 소관부처 ",
             &app.departments,
-            &app.department_filter,
+            app.department_filter.as_ref(),
+        ),
+        FilterKind::CaseType => (
+            " Case Type \u{2014} 사건종류 ",
+            &app.precedent_case_types,
+            app.precedent_case_type_filter.as_ref(),
+        ),
+        FilterKind::Court => (
+            " Court \u{2014} 법원 ",
+            &app.precedent_courts,
+            app.precedent_court_filter.as_ref(),
         ),
     };
 
@@ -128,7 +185,7 @@ fn render_filter_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect, kind
 
     for (i, item) in items_source.iter().enumerate() {
         let is_selected = app.popup_selected == i + 1;
-        let is_active = current_filter.as_ref() == Some(item);
+        let is_active = current_filter == Some(item);
         let style = styles::list_item_style(theme, is_selected, is_active);
         items.push(ListItem::new(Line::from(Span::styled(
             format!("  {item}"),

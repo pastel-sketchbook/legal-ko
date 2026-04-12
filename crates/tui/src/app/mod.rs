@@ -14,7 +14,10 @@ use std::sync::Arc;
 use legal_ko_core::bookmarks::Bookmarks;
 use legal_ko_core::cache::EnrichmentCache;
 use legal_ko_core::enrichment::{self, EnrichedEntry};
-use legal_ko_core::models::{self, ArticleRef, LawDetail, LawEntry, MetadataIndex, SortOrder};
+use legal_ko_core::models::{
+    self, ArticleRef, LawDetail, LawEntry, MetadataIndex, PrecedentDetail, PrecedentEntry,
+    PrecedentMetadataIndex, PrecedentSectionRef, PrecedentSortOrder, SortOrder,
+};
 use legal_ko_core::preferences::Preferences;
 use legal_ko_core::search::Searcher;
 #[cfg(feature = "tts")]
@@ -41,6 +44,8 @@ pub enum View {
     Loading,
     List,
     Detail,
+    PrecedentList,
+    PrecedentDetail,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +62,9 @@ pub enum Popup {
     DepartmentFilter,
     ArticleList,
     AgentPicker,
+    SectionList,
+    CaseTypeFilter,
+    CourtFilter,
 }
 
 // ── Messages (background → main) ─────────────────────────────
@@ -95,6 +103,22 @@ pub enum Message {
     EnrichmentBatch(Vec<EnrichedEntry>),
     /// All enrichment is complete; cache has been saved.
     EnrichmentDone,
+    /// Precedent metadata loaded from disk cache (instant).
+    PrecedentMetadataCached(PrecedentMetadataIndex),
+    /// Precedent metadata loaded from GitHub Trees API (fresh).
+    PrecedentMetadataLoaded(PrecedentMetadataIndex),
+    /// Precedent metadata fetch failed.
+    PrecedentMetadataError(String),
+    /// Precedent content loaded from GitHub.
+    PrecedentContentLoaded {
+        id: String,
+        content: String,
+    },
+    /// Precedent content fetch failed.
+    PrecedentContentError {
+        id: String,
+        error: String,
+    },
     /// All synthesis and playback for a batch session is done.
     #[cfg(feature = "tts")]
     TtsSynthesisDone,
@@ -231,6 +255,34 @@ pub struct App {
     /// Deferred article jump: when a `navigate` command triggers an auto-open,
     /// the article prefix is stashed here and executed once content loads.
     pub pending_navigate_article: Option<String>,
+
+    // ── Precedent data ────────────────────────────────────────
+    pub all_precedents: Vec<PrecedentEntry>,
+    pub precedent_filtered_indices: Vec<usize>,
+
+    // Precedent list view state
+    pub precedent_list_selected: usize,
+    pub precedent_list_offset: usize,
+    pub precedent_search_query: String,
+    pub precedent_case_type_filter: Option<String>,
+    pub precedent_court_filter: Option<String>,
+    pub precedent_sort_order: PrecedentSortOrder,
+
+    // Available precedent filter options
+    pub precedent_case_types: Vec<String>,
+    pub precedent_courts: Vec<String>,
+
+    // Precedent detail view state
+    pub precedent_detail: Option<PrecedentDetail>,
+    pub precedent_detail_scroll: usize,
+    pub precedent_detail_lines_count: usize,
+    pub precedent_detail_sections: Vec<PrecedentSectionRef>,
+    pub precedent_detail_loading: bool,
+    pub pending_precedent_id: Option<String>,
+    pub precedent_detail_rendered_lines: Vec<Line<'static>>,
+
+    /// True once precedent metadata has been loaded.
+    pub precedents_loaded: bool,
 }
 
 impl App {
@@ -319,6 +371,24 @@ impl App {
             last_agent_index,
             suspend_agent: None,
             pending_navigate_article: None,
+            all_precedents: Vec::new(),
+            precedent_filtered_indices: Vec::new(),
+            precedent_list_selected: 0,
+            precedent_list_offset: 0,
+            precedent_search_query: String::new(),
+            precedent_case_type_filter: None,
+            precedent_court_filter: None,
+            precedent_sort_order: PrecedentSortOrder::default(),
+            precedent_case_types: Vec::new(),
+            precedent_courts: Vec::new(),
+            precedent_detail: None,
+            precedent_detail_scroll: 0,
+            precedent_detail_lines_count: 0,
+            precedent_detail_sections: Vec::new(),
+            precedent_detail_loading: false,
+            pending_precedent_id: None,
+            precedent_detail_rendered_lines: Vec::new(),
+            precedents_loaded: false,
         }
     }
 
@@ -339,6 +409,8 @@ impl App {
             View::Loading => "loading",
             View::List => "list",
             View::Detail => "detail",
+            View::PrecedentList => "precedent_list",
+            View::PrecedentDetail => "precedent_detail",
         };
 
         let snap = Snapshot {
@@ -454,6 +526,14 @@ impl App {
             View::Loading => {
                 warn!(law_id, "Navigate ignored — still loading metadata");
                 self.status_message = Some("Still loading — navigate ignored".to_string());
+            }
+            View::PrecedentList | View::PrecedentDetail => {
+                // Switch back to law list for navigate commands
+                self.view = View::List;
+                self.clear_filters_for_navigate();
+                self.select_law_by_id(law_id);
+                self.pending_navigate_article = article.map(String::from);
+                self.open_selected();
             }
         }
     }
@@ -572,6 +652,12 @@ impl App {
             let (lines, _) = crate::parser::parse_law_markdown(&detail.raw_markdown, self.theme());
             self.detail_lines_count = lines.len();
             self.detail_rendered_lines = lines;
+        }
+        if let Some(ref detail) = self.precedent_detail {
+            let (lines, _) =
+                crate::parser::parse_precedent_markdown(&detail.raw_markdown, self.theme());
+            self.precedent_detail_lines_count = lines.len();
+            self.precedent_detail_rendered_lines = lines;
         }
     }
 
@@ -704,6 +790,7 @@ end tell"#
 
     /// Start fetching metadata in background
     pub fn start_loading(&self) {
+        // Law metadata
         let tx = self.msg_tx.clone();
         let client = self.client.clone();
         tokio::spawn(async move {
@@ -713,6 +800,30 @@ end tell"#
                 }
                 Err(e) => {
                     let _ = tx.send(Message::MetadataError(format!("{e:#}")));
+                }
+            }
+        });
+
+        // Precedent metadata: load cache first (instant), then fetch fresh in background
+        let tx2 = self.msg_tx.clone();
+        let client2 = self.client.clone();
+        tokio::spawn(async move {
+            // 1. Try disk cache (blocking I/O, but fast — ~10ms for 123K entries)
+            if let Ok(Some(cached)) =
+                tokio::task::spawn_blocking(legal_ko_core::cache::read_precedent_meta_cache)
+                    .await
+                    .unwrap_or(Ok(None))
+            {
+                let _ = tx2.send(Message::PrecedentMetadataCached(cached));
+            }
+
+            // 2. Always fetch fresh from GitHub to refresh cache
+            match client::fetch_precedent_metadata(&client2).await {
+                Ok(index) => {
+                    let _ = tx2.send(Message::PrecedentMetadataLoaded(index));
+                }
+                Err(e) => {
+                    let _ = tx2.send(Message::PrecedentMetadataError(format!("{e:#}")));
                 }
             }
         });
@@ -858,6 +969,44 @@ end tell"#
             Message::EnrichmentDone => {
                 info!("Enrichment complete");
                 self.rebuild_filter_options();
+            }
+            Message::PrecedentMetadataCached(index) => {
+                // Only use cache if fresh data hasn't arrived yet
+                if !self.precedents_loaded {
+                    info!(entries = index.len(), "Using cached precedent metadata");
+                    self.load_precedent_metadata(index);
+                }
+            }
+            Message::PrecedentMetadataLoaded(index) => {
+                // Save fresh data to disk cache in background
+                let index_for_cache = index.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Err(e) =
+                        legal_ko_core::cache::write_precedent_meta_cache(&index_for_cache)
+                    {
+                        tracing::warn!(error = %e, "Failed to write precedent meta cache");
+                    }
+                });
+                self.load_precedent_metadata(index);
+            }
+            Message::PrecedentMetadataError(err) => {
+                warn!(error = %err, "Failed to load precedent metadata");
+                // Non-fatal: precedent tab just stays empty
+            }
+            Message::PrecedentContentLoaded { id, content } => {
+                if self.pending_precedent_id.as_deref() != Some(&id) {
+                    info!(id, "Discarding stale precedent content");
+                    return;
+                }
+                self.on_precedent_content_loaded(&id, &content);
+            }
+            Message::PrecedentContentError { id, error } => {
+                if self.pending_precedent_id.as_deref() != Some(&id) {
+                    return;
+                }
+                self.precedent_detail_loading = false;
+                self.status_message = Some(format!("Error loading {id}: {error}"));
+                error!(id, error, "Failed to load precedent");
             }
         }
     }
@@ -1086,5 +1235,126 @@ end tell"#
                 self.status_message = Some(format!("Article not found: {art_query}"));
             }
         }
+    }
+
+    // ── Precedent methods ─────────────────────────────────────
+
+    fn load_precedent_metadata(&mut self, index: PrecedentMetadataIndex) {
+        let entries = models::precedent_entries_from_index(index);
+        info!(count = entries.len(), "Precedent metadata loaded");
+
+        // Extract unique case types and courts
+        let mut case_type_set: HashSet<String> = HashSet::new();
+        let mut court_set: HashSet<String> = HashSet::new();
+        for entry in &entries {
+            case_type_set.insert(entry.case_type.clone());
+            court_set.insert(entry.court_name.clone());
+        }
+
+        let mut case_types: Vec<String> = case_type_set.into_iter().collect();
+        case_types.sort();
+        let mut courts: Vec<String> = court_set.into_iter().collect();
+        courts.sort();
+
+        self.all_precedents = entries;
+        self.precedent_case_types = case_types;
+        self.precedent_courts = courts;
+        self.precedents_loaded = true;
+        self.apply_precedent_filters();
+    }
+
+    /// Get the currently selected precedent entry (if any).
+    pub fn selected_precedent(&self) -> Option<&PrecedentEntry> {
+        self.precedent_filtered_indices
+            .get(self.precedent_list_selected)
+            .map(|&i| &self.all_precedents[i])
+    }
+
+    /// Open the selected precedent: fetch or load from cache.
+    pub fn open_selected_precedent(&mut self) {
+        let Some(entry) = self.selected_precedent().cloned() else {
+            return;
+        };
+
+        self.precedent_detail_loading = true;
+        self.precedent_detail_scroll = 0;
+        self.pending_precedent_id = Some(entry.id.clone());
+        self.status_message = Some(format!("Loading {}...", entry.case_name));
+
+        let client = self.client.clone();
+        let tx = self.msg_tx.clone();
+        let path = entry.path.clone();
+        let id = entry.id.clone();
+        tokio::spawn(async move {
+            match client::load_precedent_content(&client, &path).await {
+                Ok(content) => {
+                    let _ = tx.send(Message::PrecedentContentLoaded { id, content });
+                }
+                Err(e) => {
+                    let _ = tx.send(Message::PrecedentContentError {
+                        id,
+                        error: format!("{e:#}"),
+                    });
+                }
+            }
+        });
+    }
+
+    fn on_precedent_content_loaded(&mut self, id: &str, content: &str) {
+        self.pending_precedent_id = None;
+
+        let entry = self.all_precedents.iter().find(|e| e.id == id).cloned();
+        let Some(mut entry) = entry else {
+            warn!(id, "Precedent not found in entries");
+            self.precedent_detail_loading = false;
+            return;
+        };
+
+        // Enrich entry metadata from frontmatter
+        parser::enrich_precedent_from_frontmatter(&mut entry, content);
+        // Update master list
+        if let Some(master) = self.all_precedents.iter_mut().find(|e| e.id == id) {
+            master.clone_from(&entry);
+        }
+
+        let sections = parser::extract_precedent_sections(content);
+        let (lines, _) = crate::parser::parse_precedent_markdown(content, self.theme());
+        self.precedent_detail_lines_count = lines.len();
+        self.precedent_detail_rendered_lines = lines;
+        self.precedent_detail_sections.clone_from(&sections);
+        self.precedent_detail = Some(PrecedentDetail {
+            entry,
+            raw_markdown: content.to_string(),
+            sections,
+        });
+        self.precedent_detail_loading = false;
+        self.precedent_detail_scroll = 0;
+        self.view = View::PrecedentDetail;
+        self.status_message = None;
+    }
+
+    /// Export the currently viewed precedent to a markdown file.
+    pub fn export_precedent(&mut self) {
+        let Some(ref detail) = self.precedent_detail else {
+            self.status_message = Some("No precedent open to export".to_string());
+            return;
+        };
+
+        let case_name = &detail.entry.case_name;
+        let case_number = &detail.entry.case_number;
+        let safe_name = case_name.replace(['/', '\\'], "_");
+        let safe_number = case_number.replace(['/', '\\'], "_");
+        let filename = format!("{safe_name} ({safe_number}).md");
+
+        let content = detail.raw_markdown.clone();
+        let fname_display = filename.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = std::fs::write(&filename, content) {
+                warn!(error = %e, filename, "Failed to export precedent");
+            }
+        });
+
+        self.status_message = Some(format!("Exported → {fname_display}"));
+        info!(file = %fname_display, "Precedent exported to file");
     }
 }

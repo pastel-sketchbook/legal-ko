@@ -68,13 +68,54 @@ impl App {
         }
     }
 
+    /// Apply search + case type + court filters for precedents.
+    pub fn apply_precedent_filters(&mut self) {
+        let query_lower = self.precedent_search_query.to_lowercase();
+
+        self.precedent_filtered_indices = self
+            .all_precedents
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                // Search filter (case name or case number)
+                if !query_lower.is_empty()
+                    && !entry.case_name.to_lowercase().contains(&query_lower)
+                    && !entry.case_number.to_lowercase().contains(&query_lower)
+                {
+                    return false;
+                }
+                // Case type filter
+                if let Some(ref ct) = self.precedent_case_type_filter
+                    && &entry.case_type != ct
+                {
+                    return false;
+                }
+                // Court filter
+                if let Some(ref court) = self.precedent_court_filter
+                    && &entry.court_name != court
+                {
+                    return false;
+                }
+                true
+            })
+            .map(|(i, _)| i)
+            .collect();
+
+        // Clamp selection
+        if self.precedent_filtered_indices.is_empty() {
+            self.precedent_list_selected = 0;
+        } else if self.precedent_list_selected >= self.precedent_filtered_indices.len() {
+            self.precedent_list_selected = self.precedent_filtered_indices.len().saturating_sub(1);
+        }
+    }
+
     // ── Bookmarks ─────────────────────────────────────────────
 
     pub fn toggle_bookmark(&mut self) {
         let id = match self.view {
             View::List => self.selected_entry().map(|e| e.id.clone()),
             View::Detail => self.detail.as_ref().map(|d| d.entry.id.clone()),
-            View::Loading => None,
+            View::Loading | View::PrecedentList | View::PrecedentDetail => None,
         };
 
         if let Some(id) = id {
@@ -110,13 +151,29 @@ impl App {
     }
 
     pub fn search_push_char(&mut self, c: char) {
-        self.search_query.push(c);
-        self.apply_filters();
+        match self.view {
+            View::PrecedentList => {
+                self.precedent_search_query.push(c);
+                self.apply_precedent_filters();
+            }
+            _ => {
+                self.search_query.push(c);
+                self.apply_filters();
+            }
+        }
     }
 
     pub fn search_pop_char(&mut self) {
-        self.search_query.pop();
-        self.apply_filters();
+        match self.view {
+            View::PrecedentList => {
+                self.precedent_search_query.pop();
+                self.apply_precedent_filters();
+            }
+            _ => {
+                self.search_query.pop();
+                self.apply_filters();
+            }
+        }
     }
 
     pub fn finish_search(&mut self) {
@@ -124,9 +181,18 @@ impl App {
     }
 
     pub fn clear_search(&mut self) {
-        self.search_query.clear();
-        self.input_mode = InputMode::Normal;
-        self.apply_filters();
+        match self.view {
+            View::PrecedentList => {
+                self.precedent_search_query.clear();
+                self.input_mode = InputMode::Normal;
+                self.apply_precedent_filters();
+            }
+            _ => {
+                self.search_query.clear();
+                self.input_mode = InputMode::Normal;
+                self.apply_filters();
+            }
+        }
     }
 
     // ── Filter popups ─────────────────────────────────────────
@@ -146,6 +212,23 @@ impl App {
             self.popup = Popup::ArticleList;
             self.popup_selected = 0;
         }
+    }
+
+    pub fn open_section_list(&mut self) {
+        if !self.precedent_detail_sections.is_empty() {
+            self.popup = Popup::SectionList;
+            self.popup_selected = 0;
+        }
+    }
+
+    pub fn open_case_type_filter(&mut self) {
+        self.popup = Popup::CaseTypeFilter;
+        self.popup_selected = 0;
+    }
+
+    pub fn open_court_filter(&mut self) {
+        self.popup = Popup::CourtFilter;
+        self.popup_selected = 0;
     }
 
     /// Open the AI agent picker popup.
@@ -225,6 +308,34 @@ impl App {
                 self.jump_to_article(self.popup_selected);
                 self.close_popup();
             }
+            Popup::SectionList => {
+                self.jump_to_section(self.popup_selected);
+                self.close_popup();
+            }
+            Popup::CaseTypeFilter => {
+                if self.popup_selected == 0 {
+                    self.precedent_case_type_filter = None;
+                } else {
+                    self.precedent_case_type_filter = self
+                        .precedent_case_types
+                        .get(self.popup_selected.saturating_sub(1))
+                        .cloned();
+                }
+                self.apply_precedent_filters();
+                self.close_popup();
+            }
+            Popup::CourtFilter => {
+                if self.popup_selected == 0 {
+                    self.precedent_court_filter = None;
+                } else {
+                    self.precedent_court_filter = self
+                        .precedent_courts
+                        .get(self.popup_selected.saturating_sub(1))
+                        .cloned();
+                }
+                self.apply_precedent_filters();
+                self.close_popup();
+            }
             Popup::AgentPicker => {
                 if let Some(&agent) = self.installed_agents.get(self.popup_selected) {
                     self.close_popup();
@@ -244,11 +355,21 @@ impl App {
         self.status_message = Some(format!("Sort: {}", self.sort_order.label()));
     }
 
+    pub fn toggle_precedent_sort(&mut self) {
+        self.precedent_sort_order = self.precedent_sort_order.next();
+        models::sort_precedent_entries(&mut self.all_precedents, self.precedent_sort_order);
+        self.apply_precedent_filters();
+        self.status_message = Some(format!("Sort: {}", self.precedent_sort_order.label()));
+    }
+
     fn popup_items_count(&self) -> usize {
         match self.popup {
             Popup::CategoryFilter => self.categories.len() + 1,
             Popup::DepartmentFilter => self.departments.len() + 1,
             Popup::ArticleList => self.detail_articles.len(),
+            Popup::SectionList => self.precedent_detail_sections.len(),
+            Popup::CaseTypeFilter => self.precedent_case_types.len() + 1,
+            Popup::CourtFilter => self.precedent_courts.len() + 1,
             Popup::AgentPicker => self.installed_agents.len(),
             _ => 0,
         }

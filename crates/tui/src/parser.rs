@@ -2,7 +2,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::theme::Theme;
-use legal_ko_core::models::ArticleRef;
+use legal_ko_core::models::{ArticleRef, PrecedentSectionRef};
 
 /// Parse markdown content into styled ratatui Lines and extract article references.
 ///
@@ -130,6 +130,73 @@ fn parse_inline_bold(line: &str, theme: &Theme) -> Line<'static> {
     }
 
     Line::from(spans)
+}
+
+/// Parse precedent markdown content into styled ratatui Lines and extract section references.
+///
+/// Returns (`rendered_lines`, sections).
+#[must_use]
+pub fn parse_precedent_markdown(
+    raw: &str,
+    theme: &Theme,
+) -> (Vec<Line<'static>>, Vec<PrecedentSectionRef>) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut sections: Vec<PrecedentSectionRef> = Vec::new();
+
+    // Strip YAML frontmatter if present
+    let content = legal_ko_core::parser::strip_frontmatter(raw);
+
+    for text_line in content.lines() {
+        let line_index = lines.len();
+
+        if let Some(heading) = text_line.strip_prefix("## ") {
+            // Section headings: ## 판시사항, ## 판결요지, etc.
+            sections.push(PrecedentSectionRef {
+                label: heading.trim().to_string(),
+                line_index,
+            });
+            lines.push(Line::from(vec![Span::styled(
+                heading.to_string(),
+                Style::default()
+                    .fg(theme.heading_chapter)
+                    .add_modifier(Modifier::BOLD),
+            )]));
+        } else if let Some(heading) = text_line.strip_prefix("# ") {
+            // Major heading (title)
+            lines.push(Line::from(vec![Span::styled(
+                heading.to_string(),
+                Style::default()
+                    .fg(theme.heading_major)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            )]));
+        } else if let Some(heading) = text_line.strip_prefix("### ") {
+            lines.push(Line::from(vec![Span::styled(
+                format!("  {heading}"),
+                Style::default()
+                    .fg(theme.heading_section)
+                    .add_modifier(Modifier::BOLD),
+            )]));
+        } else if let Some(inner) = text_line
+            .strip_prefix("**")
+            .and_then(|s| s.strip_suffix("**"))
+        {
+            lines.push(Line::from(vec![Span::styled(
+                inner.to_string(),
+                Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+            )]));
+        } else if text_line.starts_with("**") {
+            lines.push(parse_inline_bold(text_line, theme));
+        } else if text_line.trim().is_empty() {
+            lines.push(Line::from(""));
+        } else {
+            lines.push(Line::from(Span::styled(
+                text_line.to_string(),
+                Style::default().fg(theme.fg),
+            )));
+        }
+    }
+
+    (lines, sections)
 }
 
 #[cfg(test)]

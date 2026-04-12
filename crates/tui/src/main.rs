@@ -290,6 +290,8 @@ fn handle_key_event(app: &mut App, key: KeyEvent, terminal_height: usize) {
         View::Loading => handle_loading_key(app, key),
         View::List => handle_list_key(app, key, terminal_height),
         View::Detail => handle_detail_key(app, key, terminal_height),
+        View::PrecedentList => handle_precedent_list_key(app, key, terminal_height),
+        View::PrecedentDetail => handle_precedent_detail_key(app, key, terminal_height),
     }
     app.sync_context();
 }
@@ -329,6 +331,13 @@ fn handle_list_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         #[cfg(feature = "tts")]
         KeyCode::Char('T') => app.toggle_tts_profile(),
         KeyCode::Char('o') => app.open_agent_picker(),
+        KeyCode::Tab | KeyCode::BackTab => {
+            if app.precedents_loaded {
+                app.view = View::PrecedentList;
+            } else {
+                app.status_message = Some("Precedents still loading...".to_string());
+            }
+        }
         KeyCode::Char('?') => app.popup = Popup::Help,
         KeyCode::Esc => {
             if app.search_query.is_empty() {
@@ -378,19 +387,106 @@ fn handle_detail_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
     }
 }
 
+fn handle_precedent_list_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
+    let page_size = terminal_height.saturating_sub(4);
+
+    match key.code {
+        KeyCode::Char('q') => app.should_quit = true,
+        KeyCode::Char('j') | KeyCode::Down => app.precedent_list_move_down(),
+        KeyCode::Char('k') | KeyCode::Up => app.precedent_list_move_up(),
+        KeyCode::Char('g') | KeyCode::Home => app.precedent_list_top(),
+        KeyCode::Char('G') | KeyCode::End => app.precedent_list_bottom(),
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.precedent_list_page_down(page_size);
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.precedent_list_page_up(page_size);
+        }
+        KeyCode::PageDown => app.precedent_list_page_down(page_size),
+        KeyCode::PageUp => app.precedent_list_page_up(page_size),
+        KeyCode::Enter => app.open_selected_precedent(),
+        KeyCode::Char('/') => app.start_search(),
+        KeyCode::Char('c') => app.open_case_type_filter(),
+        KeyCode::Char('d') => app.open_court_filter(),
+        KeyCode::Char('S') => app.toggle_precedent_sort(),
+        KeyCode::Char('t') => app.next_theme(),
+        KeyCode::Char('o') => app.open_agent_picker(),
+        KeyCode::Tab | KeyCode::BackTab => {
+            app.view = View::List;
+        }
+        KeyCode::Char('?') => app.popup = Popup::Help,
+        KeyCode::Esc => {
+            if app.precedent_search_query.is_empty() {
+                app.go_back();
+            } else {
+                app.clear_search();
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_precedent_detail_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
+    let page_size = terminal_height.saturating_sub(2);
+
+    match key.code {
+        KeyCode::Char('q') | KeyCode::Esc => app.go_back(),
+        KeyCode::Char('j') | KeyCode::Down => app.precedent_detail_scroll_down(1),
+        KeyCode::Char('k') | KeyCode::Up => app.precedent_detail_scroll_up(1),
+        KeyCode::Char('g') | KeyCode::Home => app.precedent_detail_top(),
+        KeyCode::Char('G') | KeyCode::End => app.precedent_detail_bottom(),
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.precedent_detail_scroll_down(page_size);
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.precedent_detail_scroll_up(page_size);
+        }
+        KeyCode::PageDown => app.precedent_detail_scroll_down(page_size),
+        KeyCode::PageUp => app.precedent_detail_scroll_up(page_size),
+        KeyCode::Char('n') => app.next_section(),
+        KeyCode::Char('p') => app.prev_section(),
+        KeyCode::Char('a') => app.open_section_list(),
+        KeyCode::Char('E') => app.export_precedent(),
+        KeyCode::Char('t') => app.next_theme(),
+        KeyCode::Char('o') => app.open_agent_picker(),
+        KeyCode::Char('?') => app.popup = Popup::Help,
+        _ => {}
+    }
+}
+
 fn handle_search_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => app.clear_search(),
         KeyCode::Enter => app.finish_search(),
         KeyCode::Backspace => app.search_pop_char(),
         KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.list_move_down();
+            if app.view == View::PrecedentList {
+                app.precedent_list_move_down();
+            } else {
+                app.list_move_down();
+            }
         }
         KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.list_move_up();
+            if app.view == View::PrecedentList {
+                app.precedent_list_move_up();
+            } else {
+                app.list_move_up();
+            }
         }
-        KeyCode::Down => app.list_move_down(),
-        KeyCode::Up => app.list_move_up(),
+        KeyCode::Down => {
+            if app.view == View::PrecedentList {
+                app.precedent_list_move_down();
+            } else {
+                app.list_move_down();
+            }
+        }
+        KeyCode::Up => {
+            if app.view == View::PrecedentList {
+                app.precedent_list_move_up();
+            } else {
+                app.list_move_up();
+            }
+        }
         KeyCode::Char(c) => app.search_push_char(c),
         _ => {}
     }
