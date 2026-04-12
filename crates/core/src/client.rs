@@ -6,6 +6,7 @@ use tracing::{debug, info, warn};
 use crate::cache;
 use crate::models::{
     GitTreeResponse, MetadataEntry, MetadataIndex, PrecedentMetadataEntry, PrecedentMetadataIndex,
+    RawPrecedentMetadataIndex,
 };
 
 /// Raw-content base URL for the new repo location.
@@ -246,119 +247,78 @@ pub async fn load_law_content(client: &reqwest::Client, path: &str) -> Result<St
 /// Raw-content base URL for the precedent-kr repo.
 const PRECEDENT_BASE_URL: &str = "https://raw.githubusercontent.com/legalize-kr/precedent-kr/main";
 
-/// GitHub API endpoint for the precedent-kr recursive tree listing.
-const PRECEDENT_TREE_API_URL: &str =
-    "https://api.github.com/repos/legalize-kr/precedent-kr/git/trees/main?recursive=1";
-
-/// Known case types (사건종류) that form the top-level directories.
-const PRECEDENT_CASE_TYPES: &[&str] = &[
-    "가사",
-    "기타",
-    "민사",
-    "선거·특별",
-    "세무",
-    "일반행정",
-    "특허",
-    "형사",
-];
-
-/// Known court levels that form the second-level directories.
-const COURT_LEVELS: &[&str] = &["대법원", "하급심"];
-
-/// Fetch the precedent metadata index by listing the repository tree via
-/// the GitHub Git Trees API.
+/// URL for the pre-built metadata.json in the precedent-kr repo.
 ///
-/// Each `.md` file under a `{case_type}/{court}/` directory becomes one
-/// entry. The directory structure provides the case type and court name,
-/// and the filename provides the case number.
+/// This ~35 MB file (< 3 MB gzip) contains all 123K+ precedent entries with
+/// fully populated fields (case name, case number, date, court, case type),
+/// which is much faster and richer than the GitHub Trees API approach.
+const PRECEDENT_METADATA_URL: &str =
+    "https://raw.githubusercontent.com/legalize-kr/precedent-kr/main/metadata.json";
+
+/// Fetch the precedent metadata index from the pre-built `metadata.json`
+/// in the precedent-kr repository.
 ///
-/// Full metadata (case name, ruling date, ruling type) is left with default
-/// values — it is populated lazily from YAML frontmatter when a specific
-/// precedent is opened.
+/// This replaces the former GitHub Trees API approach. The metadata.json
+/// file contains all fields pre-extracted from YAML frontmatter, so entries
+/// have full case names, dates, court names, etc. immediately — no lazy
+/// enrichment needed.
 ///
 /// # Errors
 ///
 /// Returns an error if the HTTP request fails or the response cannot be parsed.
 pub async fn fetch_precedent_metadata(client: &reqwest::Client) -> Result<PrecedentMetadataIndex> {
-    info!("Fetching precedent repository tree from GitHub API");
+    info!("Fetching precedent metadata.json from GitHub");
 
     let mut retries = 1;
     let resp = loop {
-        match client
-            .get(PRECEDENT_TREE_API_URL)
-            .header("Accept", "application/vnd.github+json")
-            .send()
-            .await
-        {
+        match client.get(PRECEDENT_METADATA_URL).send().await {
             Ok(r) => break r,
             Err(e) if retries > 0 => {
-                warn!(error = %e, "Precedent GitHub API fetch failed, retrying in 2s");
+                warn!(error = %e, "Precedent metadata fetch failed, retrying in 2s");
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 retries -= 1;
             }
-            Err(e) => return Err(e).context("Failed to fetch precedent GitHub tree API"),
+            Err(e) => return Err(e).context("Failed to fetch precedent metadata.json"),
         }
     };
 
     let status = resp.status();
     if !status.is_success() {
-        anyhow::bail!("Precedent GitHub Trees API returned HTTP {status}");
+        anyhow::bail!("Precedent metadata.json returned HTTP {status}");
     }
 
-    let tree_resp: GitTreeResponse = resp
+    // Deserialize the Korean-keyed JSON into raw structs, then convert.
+    let raw: RawPrecedentMetadataIndex = resp
         .json()
         .await
-        .context("Failed to parse precedent GitHub Trees API response")?;
+        .context("Failed to parse precedent metadata.json")?;
 
-    if tree_resp.truncated {
-        anyhow::bail!(
-            "Precedent GitHub tree response was truncated — repository may have too many entries"
+    let mut index = PrecedentMetadataIndex::with_capacity(raw.len());
+    for (_serial, meta) in raw {
+        // Derive stable ID from path: strip .md extension
+        let id = meta
+            .path
+            .strip_suffix(".md")
+            .unwrap_or(&meta.path)
+            .to_string();
+
+        index.insert(
+            id,
+            PrecedentMetadataEntry {
+                path: meta.path,
+                case_name: meta.case_name,
+                case_number: meta.case_number,
+                ruling_date: meta.ruling_date,
+                court_name: meta.court_name,
+                case_type: meta.case_type,
+                ruling_type: meta.ruling_type,
+            },
         );
-    }
-
-    let mut index = PrecedentMetadataIndex::new();
-
-    for entry in &tree_resp.tree {
-        if entry.entry_type != "blob" {
-            continue;
-        }
-        // Only process .md files
-        if !entry.path.ends_with(".md") {
-            continue;
-        }
-        // Expected: {case_type}/{court}/{case_number}.md (3 parts)
-        let parts: Vec<&str> = entry.path.splitn(3, '/').collect();
-        if parts.len() < 3 {
-            continue;
-        }
-        let case_type = parts[0];
-        let court = parts[1];
-        let filename = parts[2];
-
-        // Validate directory structure
-        if !PRECEDENT_CASE_TYPES.contains(&case_type) && !COURT_LEVELS.contains(&court) {
-            continue;
-        }
-
-        let case_number = filename.strip_suffix(".md").unwrap_or(filename);
-        let id = format!("{case_type}/{court}/{case_number}");
-
-        let meta = PrecedentMetadataEntry {
-            path: entry.path.clone(),
-            case_name: String::new(),
-            case_number: case_number.to_string(),
-            ruling_date: String::new(),
-            court_name: court.to_string(),
-            case_type: case_type.to_string(),
-            ruling_type: String::new(),
-        };
-
-        index.insert(id, meta);
     }
 
     info!(
         count = index.len(),
-        "Built precedent metadata index from tree"
+        "Built precedent metadata index from metadata.json"
     );
     Ok(index)
 }

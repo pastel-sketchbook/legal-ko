@@ -177,10 +177,33 @@ impl PrecedentSortOrder {
     }
 }
 
+/// Raw JSON shape from `precedent-kr/metadata.json` (Korean field names).
+#[derive(Debug, Clone, Deserialize)]
+pub struct RawPrecedentMeta {
+    pub path: String,
+    #[serde(rename = "사건명", default)]
+    pub case_name: String,
+    #[serde(rename = "사건번호", default)]
+    pub case_number: String,
+    #[serde(rename = "선고일자", default)]
+    pub ruling_date: String,
+    #[serde(rename = "법원명", default)]
+    pub court_name: String,
+    #[serde(rename = "사건종류", default)]
+    pub case_type: String,
+    #[serde(rename = "판결유형", default)]
+    pub ruling_type: String,
+}
+
+/// Raw metadata index from `precedent-kr/metadata.json`.
+///
+/// Keys are serial numbers (판례일련번호); values are `RawPrecedentMeta`.
+pub type RawPrecedentMetadataIndex = HashMap<String, RawPrecedentMeta>;
+
 /// Metadata entry for a single precedent file.
 ///
-/// Constructed from the GitHub tree listing; frontmatter fields are populated
-/// lazily when the precedent is opened.
+/// Constructed from `metadata.json` in the precedent-kr repository.
+/// All fields are populated at load time — no lazy frontmatter fetching needed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrecedentMetadataEntry {
     /// Raw file path in the repo (e.g. "민사/대법원/2000다10048.md")
