@@ -1,14 +1,14 @@
-use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use ratatui::Frame;
 
 use crate::app::{App, InputMode};
 use crate::theme::Theme;
 
-use super::VERSION;
 use super::styles;
+use super::VERSION;
 
 pub fn render_law_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let chunks = Layout::vertical([

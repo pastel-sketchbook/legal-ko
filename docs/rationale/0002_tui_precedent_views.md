@@ -77,7 +77,7 @@ list popup in law detail and the section list popup in precedent detail.
 ## Decision: c/d Filter Keys Reused Per View
 
 In law list: `c` = category filter, `d` = department filter.
-In precedent list: `c` = case type filter, `d` = court filter.
+In precedent list: `c` = case filter, `d` = court filter.
 
 **Rationale:** The keys map to the semantic role (primary filter, secondary
 filter) rather than the specific field name. Users in the precedent view never

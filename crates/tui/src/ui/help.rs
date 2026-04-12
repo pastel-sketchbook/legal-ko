@@ -1,8 +1,8 @@
-use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::Frame;
 
 use crate::theme::Theme;
 
@@ -55,7 +55,7 @@ pub fn render_help(f: &mut Frame, theme: &Theme, area: Rect) {
         Line::from(""),
         header_line(theme, "Precedent Views"),
         key_line(theme, "Tab", "Switch laws / precedents"),
-        key_line(theme, "c", "Filter by case type"),
+        key_line(theme, "c", "Filter by case"),
         key_line(theme, "d", "Filter by court"),
         key_line(theme, "n/p", "Next / prev section"),
         key_line(theme, "a", "Section list popup"),

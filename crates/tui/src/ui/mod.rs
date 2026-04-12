@@ -5,11 +5,11 @@ pub mod precedent_detail;
 pub mod precedent_list;
 pub mod styles;
 
-use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
+use ratatui::Frame;
 
 use crate::app::{App, Popup, View};
 use crate::theme::Theme;
@@ -162,7 +162,7 @@ fn render_filter_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect, kind
             app.department_filter.as_ref(),
         ),
         FilterKind::CaseType => (
-            " Case Type \u{2014} 사건종류 ",
+            " Case \u{2014} 사건종류 ",
             &app.precedent_case_types,
             app.precedent_case_type_filter.as_ref(),
         ),
