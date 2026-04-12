@@ -1,14 +1,14 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
-use ratatui::Frame;
 
 use crate::app::{App, InputMode, View};
 use crate::theme::Theme;
 
-use super::styles;
 use super::VERSION;
+use super::styles;
 
 pub fn render_precedent_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let chunks = Layout::vertical([
@@ -137,7 +137,7 @@ fn render_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let total_width = area.width as usize;
 
     // Column widths
-    let court_w: usize = 6; // 대법원/하급심
+    let court_w: usize = 14; // 대법원, XX지방법원, XX고등법원 etc.
     let case_type_w: usize = 10;
     let date_w: usize = 10; // YYYY-MM-DD
     let gaps: usize = 3; // spaces between columns
