@@ -204,7 +204,7 @@ pub fn push_version_label(
     ));
     spans.push(Span::styled(
         theme_text,
-        Style::default().fg(theme.muted).bg(theme.panel_bg),
+        Style::default().fg(theme.accent).bg(theme.panel_bg),
     ));
     spans.push(Span::styled(
         version_text,

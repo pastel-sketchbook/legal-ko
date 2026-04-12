@@ -1,15 +1,15 @@
-use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::theme::Theme;
 
-use super::VERSION;
 use super::styles;
+use super::VERSION;
 
 pub fn render_precedent_detail(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let chunks = Layout::vertical([
@@ -118,7 +118,7 @@ fn render_detail_title(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     ));
     parts.push(Span::styled(
         theme_label,
-        Style::default().fg(theme.muted).bg(theme.panel_bg),
+        Style::default().fg(theme.accent).bg(theme.panel_bg),
     ));
     parts.push(Span::styled(
         version_label,
