@@ -164,6 +164,35 @@ pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         .split(vertical[0])[0]
 }
 
+/// Truncate a string to fit within `max_width` display columns.
+///
+/// If the string exceeds `max_width`, it is cut and an ellipsis (`…`, 1 column)
+/// is appended. Handles multi-byte / double-width characters (e.g. Korean)
+/// correctly via `UnicodeWidthChar`.
+#[must_use]
+pub fn truncate_with_ellipsis(s: &str, max_width: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+
+    let full_width = UnicodeWidthStr::width(s);
+    if full_width <= max_width {
+        return s.to_string();
+    }
+
+    let mut result = String::new();
+    let mut width = 0;
+    let limit = max_width.saturating_sub(1); // reserve 1 col for "…"
+    for ch in s.chars() {
+        let cw = ch.width().unwrap_or(0);
+        if width + cw > limit {
+            break;
+        }
+        result.push(ch);
+        width += cw;
+    }
+    result.push('\u{2026}'); // …
+    result
+}
+
 /// Append a right-aligned version label to `spans`, filling the gap with spaces.
 ///
 /// `width` is the total available columns. The function measures the existing

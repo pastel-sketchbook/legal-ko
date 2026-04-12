@@ -306,7 +306,7 @@ pub async fn fetch_precedent_metadata(client: &reqwest::Client) -> Result<Preced
             id,
             PrecedentMetadataEntry {
                 path: meta.path,
-                case_name: meta.case_name,
+                case_name: sanitize_case_name(&meta.case_name),
                 case_number: meta.case_number,
                 ruling_date: meta.ruling_date,
                 court_name: meta.court_name,
@@ -321,6 +321,19 @@ pub async fn fetch_precedent_metadata(client: &reqwest::Client) -> Result<Preced
         "Built precedent metadata index from metadata.json"
     );
     Ok(index)
+}
+
+/// Clean up a case name from metadata: strip HTML tags (`<br/>`, `<br>`, etc.),
+/// collapse newlines into spaces, and trim leading/trailing whitespace.
+fn sanitize_case_name(raw: &str) -> String {
+    raw.replace("<br/>", " ")
+        .replace("<br>", " ")
+        .replace("<BR/>", " ")
+        .replace("<BR>", " ")
+        .replace('\n', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Fetch a single precedent file's raw markdown content from GitHub.

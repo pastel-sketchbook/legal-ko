@@ -1,14 +1,14 @@
-use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use ratatui::Frame;
 
 use crate::app::{App, InputMode, View};
 use crate::theme::Theme;
 
-use super::VERSION;
 use super::styles;
+use super::VERSION;
 
 pub fn render_precedent_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let chunks = Layout::vertical([
@@ -164,7 +164,8 @@ fn render_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             let entry = &app.all_precedents[prec_idx];
             let is_selected = display_idx == app.precedent_list_selected;
 
-            let name_col = styles::pad_to_width(&entry.case_name, name_w);
+            let display_name = styles::truncate_with_ellipsis(&entry.case_name, name_w);
+            let name_col = styles::pad_to_width(&display_name, name_w);
             let court_col = styles::pad_to_width(&entry.court_name, court_w);
             let type_text = format!("[{}]", entry.case_type);
             let type_col = styles::pad_to_width(&type_text, case_type_w);

@@ -1,15 +1,15 @@
-use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::theme::Theme;
 
-use super::VERSION;
 use super::styles;
+use super::VERSION;
 
 pub fn render_precedent_detail(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let chunks = Layout::vertical([
@@ -38,8 +38,8 @@ fn render_detail_title(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         .as_ref()
         .map_or("Loading...", |d| d.entry.case_name.as_str());
 
-    // Truncate long case names to 70 display-width chars
-    let title = truncate_to_width(raw_title, 70);
+    // Truncate long case names to 80 display-width columns
+    let title = styles::truncate_with_ellipsis(raw_title, 80);
 
     let title_style = styles::title_bar(theme);
 
@@ -220,33 +220,6 @@ fn source_line_to_wrapped_offset(lines: &[Line<'_>], source_line: usize, width: 
     }
 
     u16::try_from(wrapped).unwrap_or(u16::MAX)
-}
-
-/// Truncate a string to fit within `max_width` display columns.
-///
-/// If truncated, appends "…" (which is 1 column wide). Handles multi-byte
-/// characters (e.g. Korean) correctly via `UnicodeWidthChar`.
-fn truncate_to_width(s: &str, max_width: usize) -> String {
-    use unicode_width::UnicodeWidthChar;
-
-    let full_width = UnicodeWidthStr::width(s);
-    if full_width <= max_width {
-        return s.to_string();
-    }
-
-    let mut result = String::new();
-    let mut width = 0;
-    let limit = max_width.saturating_sub(1); // reserve 1 col for "…"
-    for ch in s.chars() {
-        let cw = ch.width().unwrap_or(0);
-        if width + cw > limit {
-            break;
-        }
-        result.push(ch);
-        width += cw;
-    }
-    result.push('\u{2026}'); // …
-    result
 }
 
 /// Render the section list popup
