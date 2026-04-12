@@ -3,11 +3,11 @@ use clap::{Parser, Subcommand};
 use serde_json::json;
 
 use legal_ko_core::bookmarks::Bookmarks;
-use legal_ko_core::models::{self, LawEntry, SortOrder};
+use legal_ko_core::models::{self, LawEntry, PrecedentEntry, PrecedentSortOrder, SortOrder};
 use legal_ko_core::search::{self, Searcher};
 #[cfg(feature = "tts")]
 use legal_ko_core::tts;
-use legal_ko_core::{client, enrichment, parser, reqwest};
+use legal_ko_core::{client, crossref, enrichment, parser, reqwest};
 
 #[derive(Parser)]
 #[command(
@@ -130,6 +130,93 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+
+    // ── Precedent (판례) subcommands ────────────────────────
+    /// List court precedents (optionally filtered)
+    #[command(name = "precedent-list")]
+    PrecedentList {
+        /// Filter by case type (사건종류: 민사, 형사, 일반행정, etc.)
+        #[arg(long)]
+        case_type: Option<String>,
+
+        /// Filter by court name (법원명: 대법원, 하급심)
+        #[arg(long)]
+        court: Option<String>,
+
+        /// Sort order: "name" (default) or "date" (ruling date, newest first)
+        #[arg(long, default_value = "name")]
+        sort: String,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Maximum number of results
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    /// Search precedents by case name or case number
+    #[command(name = "precedent-search")]
+    PrecedentSearch {
+        /// Search query
+        query: String,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Maximum number of results
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    /// Show a precedent's full content
+    #[command(name = "precedent-show")]
+    PrecedentShow {
+        /// Precedent ID (e.g. "민사/대법원/2000다10048")
+        id: String,
+
+        /// Output as JSON (includes raw markdown)
+        #[arg(long)]
+        json: bool,
+    },
+    /// List sections in a precedent (판시사항, 판결요지, etc.)
+    #[command(name = "precedent-sections")]
+    PrecedentSections {
+        /// Precedent ID (e.g. "민사/대법원/2000다10048")
+        id: String,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Cross-reference: find laws cited by a precedent (4-approach fallback)
+    #[command(name = "precedent-laws")]
+    PrecedentLaws {
+        /// Precedent ID (e.g. "민사/대법원/2000다10048")
+        id: String,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reverse cross-reference: find precedents that cite a given law article
+    #[command(name = "law-precedents")]
+    LawPrecedents {
+        /// Law name to search for (e.g. "민법")
+        law_name: String,
+
+        /// Article to filter by (e.g. "제393조")
+        #[arg(long)]
+        article: Option<String>,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Maximum number of results
+        #[arg(long)]
+        limit: Option<usize>,
+    },
 }
 
 #[tokio::main]
@@ -169,6 +256,27 @@ async fn main() -> Result<()> {
             fast,
             json,
         } => cmd_speak(&client, &id, article, &voice, fast, json).await,
+
+        // ── Precedent commands ──────────────────────────────
+        Command::PrecedentList {
+            case_type,
+            court,
+            sort,
+            json,
+            limit,
+        } => cmd_precedent_list(&client, case_type, court, &sort, json, limit).await,
+        Command::PrecedentSearch { query, json, limit } => {
+            cmd_precedent_search(&client, &query, json, limit).await
+        }
+        Command::PrecedentShow { id, json } => cmd_precedent_show(&client, &id, json).await,
+        Command::PrecedentSections { id, json } => cmd_precedent_sections(&client, &id, json).await,
+        Command::PrecedentLaws { id, json } => cmd_precedent_laws(&client, &id, json).await,
+        Command::LawPrecedents {
+            law_name,
+            article,
+            json,
+            limit,
+        } => cmd_law_precedents(&client, &law_name, article, json, limit).await,
     }
 }
 
@@ -427,6 +535,388 @@ async fn cmd_bookmarks(client: &reqwest::Client, as_json: bool) -> Result<()> {
     let entries = load_entries(client).await?;
     let results: Vec<&LawEntry> = entries.iter().filter(|e| bm.is_bookmarked(&e.id)).collect();
     print_entries(&results, as_json)?;
+    Ok(())
+}
+
+// ── Precedent (판례) command handlers ────────────────────────
+
+async fn load_precedent_entries(client: &reqwest::Client) -> Result<Vec<PrecedentEntry>> {
+    let index = client::fetch_precedent_metadata(client)
+        .await
+        .context("Failed to load precedent metadata from GitHub")?;
+    Ok(models::precedent_entries_from_index(index))
+}
+
+fn print_precedent_entries(entries: &[&PrecedentEntry], as_json: bool) -> Result<()> {
+    if as_json {
+        let items: Vec<_> = entries
+            .iter()
+            .map(|e| {
+                json!({
+                    "id": e.id,
+                    "case_name": e.case_name,
+                    "case_number": e.case_number,
+                    "ruling_date": e.ruling_date,
+                    "court_name": e.court_name,
+                    "case_type": e.case_type,
+                    "ruling_type": e.ruling_type,
+                    "path": e.path,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&items)?);
+    } else {
+        for e in entries {
+            let name = if e.case_name.is_empty() {
+                &e.case_number
+            } else {
+                &e.case_name
+            };
+            println!(
+                "{}\t{}\t[{}]\t{}\t{}",
+                e.id, name, e.case_type, e.court_name, e.ruling_date
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_precedent_list(
+    client: &reqwest::Client,
+    case_type: Option<String>,
+    court: Option<String>,
+    sort: &str,
+    as_json: bool,
+    limit: Option<usize>,
+) -> Result<()> {
+    let mut entries = load_precedent_entries(client).await?;
+
+    let order = match sort {
+        "date" | "ruling" => PrecedentSortOrder::RulingDate,
+        _ => PrecedentSortOrder::CaseName,
+    };
+    models::sort_precedent_entries(&mut entries, order);
+
+    let mut filtered: Vec<&PrecedentEntry> = entries
+        .iter()
+        .filter(|e| {
+            if let Some(ref ct) = case_type
+                && e.case_type != *ct
+            {
+                return false;
+            }
+            if let Some(ref c) = court
+                && e.court_name != *c
+            {
+                return false;
+            }
+            true
+        })
+        .collect();
+    if let Some(n) = limit {
+        filtered.truncate(n);
+    }
+    print_precedent_entries(&filtered, as_json)?;
+    Ok(())
+}
+
+async fn cmd_precedent_search(
+    client: &reqwest::Client,
+    query: &str,
+    as_json: bool,
+    limit: Option<usize>,
+) -> Result<()> {
+    let entries = load_precedent_entries(client).await?;
+    let n = limit.unwrap_or(50);
+    let query_lower = query.to_lowercase();
+
+    // Naive search: match against case_name and case_number
+    let results: Vec<&PrecedentEntry> = entries
+        .iter()
+        .filter(|e| {
+            e.case_name.to_lowercase().contains(&query_lower)
+                || e.case_number.to_lowercase().contains(&query_lower)
+        })
+        .take(n)
+        .collect();
+
+    print_precedent_entries(&results, as_json)?;
+    Ok(())
+}
+
+async fn cmd_precedent_show(client: &reqwest::Client, id: &str, as_json: bool) -> Result<()> {
+    let path = format!("{id}.md");
+    let content = client::load_precedent_content(client, &path).await?;
+
+    let stripped = parser::strip_frontmatter(&content);
+
+    if as_json {
+        let mut entry = PrecedentEntry {
+            id: id.to_string(),
+            case_name: String::new(),
+            case_number: String::new(),
+            ruling_date: String::new(),
+            court_name: String::new(),
+            case_type: String::new(),
+            ruling_type: String::new(),
+            path,
+        };
+        parser::enrich_precedent_from_frontmatter(&mut entry, &content);
+
+        let sections = parser::extract_precedent_sections(&content);
+        let section_labels: Vec<&str> = sections.iter().map(|s| s.label.as_str()).collect();
+
+        let obj = json!({
+            "id": entry.id,
+            "case_name": entry.case_name,
+            "case_number": entry.case_number,
+            "ruling_date": entry.ruling_date,
+            "court_name": entry.court_name,
+            "case_type": entry.case_type,
+            "ruling_type": entry.ruling_type,
+            "sections": section_labels,
+            "content": stripped,
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+    } else {
+        println!("{stripped}");
+    }
+    Ok(())
+}
+
+async fn cmd_precedent_sections(client: &reqwest::Client, id: &str, as_json: bool) -> Result<()> {
+    let path = format!("{id}.md");
+    let content = client::load_precedent_content(client, &path).await?;
+
+    let sections = parser::extract_precedent_sections(&content);
+
+    if as_json {
+        let mut entry = PrecedentEntry {
+            id: id.to_string(),
+            case_name: String::new(),
+            case_number: String::new(),
+            ruling_date: String::new(),
+            court_name: String::new(),
+            case_type: String::new(),
+            ruling_type: String::new(),
+            path,
+        };
+        parser::enrich_precedent_from_frontmatter(&mut entry, &content);
+
+        let items: Vec<_> = sections
+            .iter()
+            .map(|s| {
+                json!({
+                    "label": s.label,
+                    "line_index": s.line_index,
+                })
+            })
+            .collect();
+        let obj = json!({
+            "id": entry.id,
+            "case_name": entry.case_name,
+            "sections": items,
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+    } else {
+        let mut case_name = String::new();
+        let fm = parser::parse_frontmatter(&content);
+        if let Some(t) = fm.get("사건명") {
+            case_name = t.as_str().to_string();
+        }
+        println!("# {id} — {case_name}");
+        for s in &sections {
+            println!("  L{}: {}", s.line_index, s.label);
+        }
+    }
+    Ok(())
+}
+
+// ── Cross-reference command handlers ─────────────────────────
+
+async fn cmd_precedent_laws(client: &reqwest::Client, id: &str, as_json: bool) -> Result<()> {
+    // Fetch precedent content
+    let path = format!("{id}.md");
+    let content = client::load_precedent_content(client, &path).await?;
+
+    // Extract case_type from frontmatter
+    let fm = parser::parse_frontmatter(&content);
+    let case_type = fm.get("사건종류").map_or("", |v| v.as_str());
+
+    // Fetch law metadata to get known law names for Approach 3 matching
+    let law_index = client::fetch_metadata(client)
+        .await
+        .context("Failed to load law metadata from GitHub")?;
+    let law_entries = models::entries_from_index(law_index);
+    let known_laws: Vec<String> = law_entries.iter().map(|e| e.title.clone()).collect();
+
+    // Run full 4-approach cross-reference
+    let xref = crossref::cross_reference(&content, case_type, &known_laws);
+
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&xref)?);
+    } else {
+        let case_name = fm.get("사건명").map_or("", |v| v.as_str());
+        println!("# {id} — {case_name}");
+        println!("Resolution: {:?}", xref.resolution);
+        println!();
+
+        if !xref.statute_refs.is_empty() {
+            println!("## 참조조문 (Statute References)");
+            for sr in &xref.statute_refs {
+                let detail = sr.detail.as_deref().unwrap_or("");
+                let group = sr.group.map_or(String::new(), |g| format!("[{g}] "));
+                println!("  {group}{} {} {detail}", sr.law_name, sr.article);
+            }
+            println!();
+        }
+
+        if !xref.law_matches.is_empty() {
+            let matched: Vec<_> = xref
+                .law_matches
+                .iter()
+                .filter(|m| m.law_id.is_some())
+                .collect();
+            if !matched.is_empty() {
+                println!("## Law Matches");
+                for m in &matched {
+                    println!(
+                        "  {} {} → {} ({:?})",
+                        m.statute_ref.law_name,
+                        m.statute_ref.article,
+                        m.law_id.as_deref().unwrap_or("?"),
+                        m.match_type
+                    );
+                }
+                println!();
+            }
+        }
+
+        if !xref.case_refs.is_empty() {
+            println!("## 참조판례 (Case References)");
+            for cr in &xref.case_refs {
+                let groups = if cr.groups.is_empty() {
+                    String::new()
+                } else {
+                    let g: Vec<String> = cr.groups.iter().map(|n| format!("[{n}]")).collect();
+                    format!("{} ", g.join(""))
+                };
+                println!(
+                    "  {groups}{} {} ({})",
+                    cr.court, cr.case_number, cr.ruling_date
+                );
+            }
+            println!();
+        }
+
+        if xref.resolution == crossref::Resolution::AffinityFallback {
+            println!("## Affinity Suggestions (case type: {case_type})");
+            for a in &xref.affinity {
+                println!("  {} — {}", a.search_term, a.reason);
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_law_precedents(
+    client: &reqwest::Client,
+    law_name: &str,
+    article_filter: Option<String>,
+    as_json: bool,
+    limit: Option<usize>,
+) -> Result<()> {
+    // Fetch all precedent entries
+    let precedent_entries = load_precedent_entries(client).await?;
+    let n = limit.unwrap_or(50);
+
+    // For each precedent, fetch content and check if it cites the given law.
+    // This is expensive for large datasets, so we first filter by naive text
+    // matching on the precedent ID / metadata, then confirm with parsing.
+    //
+    // Since we can't download all 123K precedent files, we use a heuristic:
+    // search for the law_name in the case_name field, and also check any
+    // precedents whose case_type matches the law's typical domain.
+    //
+    // For a production system this would use a pre-built index, but for now
+    // we report this as a best-effort scan with a practical limit.
+
+    let mut matches = Vec::new();
+
+    // Naive pre-filter: check case_name for the law name
+    let candidates: Vec<&PrecedentEntry> = precedent_entries
+        .iter()
+        .filter(|e| e.case_name.contains(law_name))
+        .take(n * 5) // fetch extra candidates to account for false positives
+        .collect();
+
+    for entry in &candidates {
+        if matches.len() >= n {
+            break;
+        }
+
+        // Fetch content and parse statute refs
+        let path = format!("{}.md", entry.id);
+        let content = match client::load_precedent_content(client, &path).await {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let refs = crossref::extract_statute_refs(&content);
+        let is_match = refs.iter().any(|sr| {
+            if sr.law_name != law_name {
+                return false;
+            }
+            if let Some(ref art) = article_filter {
+                sr.article == *art
+            } else {
+                true
+            }
+        });
+
+        if is_match {
+            matches.push(entry);
+        }
+    }
+
+    if as_json {
+        let items: Vec<_> = matches
+            .iter()
+            .map(|e| {
+                json!({
+                    "id": e.id,
+                    "case_name": e.case_name,
+                    "case_number": e.case_number,
+                    "ruling_date": e.ruling_date,
+                    "court_name": e.court_name,
+                    "case_type": e.case_type,
+                })
+            })
+            .collect();
+        let obj = json!({
+            "law_name": law_name,
+            "article": article_filter,
+            "matches": items,
+            "count": matches.len(),
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+    } else {
+        let art_label = article_filter.as_deref().unwrap_or("(all articles)");
+        println!("# Precedents citing {} {}", law_name, art_label);
+        println!("Found {} match(es):", matches.len());
+        println!();
+        for e in &matches {
+            let name = if e.case_name.is_empty() {
+                &e.case_number
+            } else {
+                &e.case_name
+            };
+            println!(
+                "  {} — {} [{}] {} ({})",
+                e.id, name, e.case_type, e.court_name, e.ruling_date
+            );
+        }
+    }
     Ok(())
 }
 

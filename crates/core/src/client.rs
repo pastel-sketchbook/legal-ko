@@ -4,7 +4,9 @@ use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
 
 use crate::cache;
-use crate::models::{GitTreeResponse, MetadataEntry, MetadataIndex};
+use crate::models::{
+    GitTreeResponse, MetadataEntry, MetadataIndex, PrecedentMetadataEntry, PrecedentMetadataIndex,
+};
 
 /// Raw-content base URL for the new repo location.
 const BASE_URL: &str = "https://raw.githubusercontent.com/legalize-kr/legalize-kr/main";
@@ -233,6 +235,198 @@ pub async fn load_law_content(client: &reqwest::Client, path: &str) -> Result<St
     tokio::task::spawn_blocking(move || {
         if let Err(e) = cache::write_cache(&cache_path, &cache_content) {
             warn!(path = %cache_path, error = %e, "Failed to cache");
+        }
+    });
+
+    Ok(content)
+}
+
+// ── Precedent (판례) client ──────────────────────────────────
+
+/// Raw-content base URL for the precedent-kr repo.
+const PRECEDENT_BASE_URL: &str = "https://raw.githubusercontent.com/legalize-kr/precedent-kr/main";
+
+/// GitHub API endpoint for the precedent-kr recursive tree listing.
+const PRECEDENT_TREE_API_URL: &str =
+    "https://api.github.com/repos/legalize-kr/precedent-kr/git/trees/main?recursive=1";
+
+/// Known case types (사건종류) that form the top-level directories.
+const PRECEDENT_CASE_TYPES: &[&str] = &[
+    "가사",
+    "기타",
+    "민사",
+    "선거·특별",
+    "세무",
+    "일반행정",
+    "특허",
+    "형사",
+];
+
+/// Known court levels that form the second-level directories.
+const COURT_LEVELS: &[&str] = &["대법원", "하급심"];
+
+/// Fetch the precedent metadata index by listing the repository tree via
+/// the GitHub Git Trees API.
+///
+/// Each `.md` file under a `{case_type}/{court}/` directory becomes one
+/// entry. The directory structure provides the case type and court name,
+/// and the filename provides the case number.
+///
+/// Full metadata (case name, ruling date, ruling type) is left with default
+/// values — it is populated lazily from YAML frontmatter when a specific
+/// precedent is opened.
+///
+/// # Errors
+///
+/// Returns an error if the HTTP request fails or the response cannot be parsed.
+pub async fn fetch_precedent_metadata(client: &reqwest::Client) -> Result<PrecedentMetadataIndex> {
+    info!("Fetching precedent repository tree from GitHub API");
+
+    let mut retries = 1;
+    let resp = loop {
+        match client
+            .get(PRECEDENT_TREE_API_URL)
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await
+        {
+            Ok(r) => break r,
+            Err(e) if retries > 0 => {
+                warn!(error = %e, "Precedent GitHub API fetch failed, retrying in 2s");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                retries -= 1;
+            }
+            Err(e) => return Err(e).context("Failed to fetch precedent GitHub tree API"),
+        }
+    };
+
+    let status = resp.status();
+    if !status.is_success() {
+        anyhow::bail!("Precedent GitHub Trees API returned HTTP {status}");
+    }
+
+    let tree_resp: GitTreeResponse = resp
+        .json()
+        .await
+        .context("Failed to parse precedent GitHub Trees API response")?;
+
+    if tree_resp.truncated {
+        anyhow::bail!(
+            "Precedent GitHub tree response was truncated — repository may have too many entries"
+        );
+    }
+
+    let mut index = PrecedentMetadataIndex::new();
+
+    for entry in &tree_resp.tree {
+        if entry.entry_type != "blob" {
+            continue;
+        }
+        // Only process .md files
+        if !entry.path.ends_with(".md") {
+            continue;
+        }
+        // Expected: {case_type}/{court}/{case_number}.md (3 parts)
+        let parts: Vec<&str> = entry.path.splitn(3, '/').collect();
+        if parts.len() < 3 {
+            continue;
+        }
+        let case_type = parts[0];
+        let court = parts[1];
+        let filename = parts[2];
+
+        // Validate directory structure
+        if !PRECEDENT_CASE_TYPES.contains(&case_type) && !COURT_LEVELS.contains(&court) {
+            continue;
+        }
+
+        let case_number = filename.strip_suffix(".md").unwrap_or(filename);
+        let id = format!("{case_type}/{court}/{case_number}");
+
+        let meta = PrecedentMetadataEntry {
+            path: entry.path.clone(),
+            case_name: String::new(),
+            case_number: case_number.to_string(),
+            ruling_date: String::new(),
+            court_name: court.to_string(),
+            case_type: case_type.to_string(),
+            ruling_type: String::new(),
+        };
+
+        index.insert(id, meta);
+    }
+
+    info!(
+        count = index.len(),
+        "Built precedent metadata index from tree"
+    );
+    Ok(index)
+}
+
+/// Fetch a single precedent file's raw markdown content from GitHub.
+///
+/// # Errors
+///
+/// Returns an error if the HTTP request fails or the response body cannot be read.
+pub async fn fetch_precedent_content(client: &reqwest::Client, path: &str) -> Result<String> {
+    let url = format!("{PRECEDENT_BASE_URL}/{path}");
+    debug!(url, "Fetching precedent content");
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("Failed to fetch precedent {path}"))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        anyhow::bail!("Precedent {path} returned HTTP {status}");
+    }
+
+    let content = resp
+        .text()
+        .await
+        .with_context(|| format!("Failed to read body of precedent {path}"))?;
+
+    Ok(content)
+}
+
+/// Load precedent content: try cache first, then fetch from GitHub and cache.
+///
+/// Cache keys are prefixed with `precedent/` to avoid collisions with law
+/// content.
+///
+/// # Errors
+///
+/// Returns an error if both cache read and network fetch fail.
+pub async fn load_precedent_content(client: &reqwest::Client, path: &str) -> Result<String> {
+    let cache_key = format!("precedent/{path}");
+
+    // Try cache first
+    let ck = cache_key.clone();
+    let cached = tokio::task::spawn_blocking(move || cache::read_cache(&ck))
+        .await
+        .unwrap_or_else(|_| Ok(None));
+    match cached {
+        Ok(Some(content)) => {
+            debug!(path, "Loaded precedent from cache");
+            return Ok(content);
+        }
+        Ok(None) => {}
+        Err(e) => {
+            warn!(path, error = %e, "Precedent cache read error");
+        }
+    }
+
+    // Fetch from network
+    let content = fetch_precedent_content(client, path).await?;
+
+    // Cache the result (best-effort)
+    let ck = cache_key;
+    let cc = content.clone();
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = cache::write_cache(&ck, &cc) {
+            warn!(path = %ck, error = %e, "Failed to cache precedent");
         }
     });
 

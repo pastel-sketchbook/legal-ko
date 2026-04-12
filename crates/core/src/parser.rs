@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::models::ArticleRef;
+use crate::models::PrecedentSectionRef;
 
 /// Strip YAML frontmatter delimited by --- ... ---
 #[must_use]
@@ -302,6 +303,114 @@ pub fn extract_full_text(raw: &str) -> String {
     result
 }
 
+// ── Precedent (판례) parsing ────────────────────────────────
+
+/// Enrich a `PrecedentEntry` with metadata extracted from the YAML frontmatter.
+///
+/// Precedent frontmatter fields:
+/// - `사건명` → case_name
+/// - `사건번호` → case_number
+/// - `선고일자` → ruling_date
+/// - `법원명` → court_name
+/// - `사건종류` → case_type
+/// - `판결유형` → ruling_type
+pub fn enrich_precedent_from_frontmatter(entry: &mut crate::models::PrecedentEntry, raw: &str) {
+    let fm = parse_frontmatter(raw);
+
+    if let Some(v) = fm.get("사건명") {
+        let s = v.as_str();
+        if !s.is_empty() {
+            entry.case_name = s.to_string();
+        }
+    }
+    if let Some(v) = fm.get("사건번호") {
+        let s = v.as_str();
+        if !s.is_empty() {
+            entry.case_number = s.to_string();
+        }
+    }
+    if let Some(v) = fm.get("선고일자") {
+        let s = v.as_str();
+        if !s.is_empty() {
+            entry.ruling_date = s.to_string();
+        }
+    }
+    if let Some(v) = fm.get("법원명") {
+        let s = v.as_str();
+        if !s.is_empty() {
+            entry.court_name = s.to_string();
+        }
+    }
+    if let Some(v) = fm.get("사건종류") {
+        let s = v.as_str();
+        if !s.is_empty() {
+            entry.case_type = s.to_string();
+        }
+    }
+    if let Some(v) = fm.get("판결유형") {
+        let s = v.as_str();
+        if !s.is_empty() {
+            entry.ruling_type = s.to_string();
+        }
+    }
+}
+
+/// Extract section references from a precedent markdown document.
+///
+/// Precedent documents use `## heading` for major sections such as
+/// 판시사항, 판결요지, 참조조문, 참조판례, 판례내용.
+#[must_use]
+pub fn extract_precedent_sections(raw: &str) -> Vec<PrecedentSectionRef> {
+    let content = strip_frontmatter(raw);
+    let mut sections = Vec::new();
+
+    for (line_index, line) in content.lines().enumerate() {
+        if let Some(heading) = line.strip_prefix("## ") {
+            let label = heading.trim().to_string();
+            if !label.is_empty() {
+                sections.push(PrecedentSectionRef { label, line_index });
+            }
+        }
+    }
+
+    sections
+}
+
+/// Extract plain text for a specific section of a precedent by index.
+///
+/// Returns the section heading and all subsequent lines up to the next
+/// `## ` heading, stripped of markdown formatting.
+#[must_use]
+pub fn extract_precedent_section_text(raw: &str, section_index: usize) -> Option<String> {
+    let sections = extract_precedent_sections(raw);
+    let section = sections.get(section_index)?;
+
+    let content = strip_frontmatter(raw);
+    let lines: Vec<&str> = content.lines().collect();
+
+    let start = section.line_index;
+    if start >= lines.len() {
+        return None;
+    }
+
+    let end = sections
+        .get(section_index + 1)
+        .map_or(lines.len(), |next| next.line_index);
+
+    let mut result = String::new();
+    for &line in &lines[start..end] {
+        let plain = strip_markdown_line(line);
+        if !plain.is_empty() {
+            if !result.is_empty() {
+                result.push('\n');
+            }
+            result.push_str(&plain);
+        }
+    }
+
+    Some(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,5 +590,73 @@ mod tests {
         assert_eq!(fm.get("공포일자").unwrap().as_str(), "2026-03-17");
         assert_eq!(fm.get("시행일자").unwrap().as_str(), "2026-03-17");
         assert_eq!(fm.get("상태").unwrap().as_str(), "시행");
+    }
+
+    // ── Precedent parser tests ──────────────────────────────
+
+    #[test]
+    fn test_extract_precedent_sections() {
+        let input = "---\n사건명: 소유권이전등기등\n---\n# 소유권이전등기등\n\n## 판시사항\n\n[1] Some text\n\n## 판결요지\n\n[1] More text\n\n## 판례내용\n\nFull text here";
+        let sections = extract_precedent_sections(input);
+        assert_eq!(sections.len(), 3);
+        assert_eq!(sections[0].label, "판시사항");
+        assert_eq!(sections[1].label, "판결요지");
+        assert_eq!(sections[2].label, "판례내용");
+    }
+
+    #[test]
+    fn test_extract_precedent_sections_empty() {
+        let input = "# Just a title\nSome body text";
+        let sections = extract_precedent_sections(input);
+        assert!(sections.is_empty());
+    }
+
+    #[test]
+    fn test_extract_precedent_section_text() {
+        let input = "## 판시사항\n\n[1] First point\n\n## 판결요지\n\n[1] Second point";
+        let text = extract_precedent_section_text(input, 0).unwrap();
+        assert!(text.contains("판시사항"));
+        assert!(text.contains("[1] First point"));
+        assert!(!text.contains("판결요지"));
+
+        let text2 = extract_precedent_section_text(input, 1).unwrap();
+        assert!(text2.contains("판결요지"));
+        assert!(text2.contains("[1] Second point"));
+    }
+
+    #[test]
+    fn test_extract_precedent_section_text_out_of_range() {
+        let input = "## 판시사항\nSome text";
+        assert!(extract_precedent_section_text(input, 5).is_none());
+    }
+
+    #[test]
+    fn test_enrich_precedent_from_frontmatter() {
+        let mut entry = crate::models::PrecedentEntry {
+            id: "민사/대법원/2000다10048".to_string(),
+            case_name: String::new(),
+            case_number: "2000다10048".to_string(),
+            ruling_date: String::new(),
+            court_name: "대법원".to_string(),
+            case_type: "민사".to_string(),
+            ruling_type: String::new(),
+            path: "민사/대법원/2000다10048.md".to_string(),
+        };
+        let raw = "---\n판례일련번호: '81927'\n사건번호: 2000다10048\n사건명: 소유권이전등기등\n법원명: 대법원\n법원등급: 대법원\n사건종류: 민사\n선고일자: '2002-09-27'\n---\n# 소유권이전등기등";
+        enrich_precedent_from_frontmatter(&mut entry, raw);
+        assert_eq!(entry.case_name, "소유권이전등기등");
+        assert_eq!(entry.ruling_date, "2002-09-27");
+        assert_eq!(entry.court_name, "대법원");
+        assert_eq!(entry.case_type, "민사");
+    }
+
+    #[test]
+    fn test_parse_precedent_frontmatter_realistic() {
+        let input = "---\n판례일련번호: '81927'\n사건번호: 2000다10048\n사건명: 소유권이전등기등\n법원명: 대법원\n법원등급: 대법원\n사건종류: 민사\n출처: https://www.law.go.kr/판례/81927\n선고일자: '2002-09-27'\n---\n# Content";
+        let fm = parse_frontmatter(input);
+        assert_eq!(fm.get("판례일련번호").unwrap().as_str(), "81927");
+        assert_eq!(fm.get("사건번호").unwrap().as_str(), "2000다10048");
+        assert_eq!(fm.get("사건명").unwrap().as_str(), "소유권이전등기등");
+        assert_eq!(fm.get("선고일자").unwrap().as_str(), "2002-09-27");
     }
 }

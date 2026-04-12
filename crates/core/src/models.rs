@@ -145,6 +145,159 @@ pub fn sort_entries(entries: &mut [LawEntry], order: SortOrder) {
     }
 }
 
+// ── Precedent (판례) types ────────────────────────────────────
+
+/// Sort order for precedent entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PrecedentSortOrder {
+    /// Sort by case name (사건명), then case number.
+    #[default]
+    CaseName,
+    /// Sort by ruling date (선고일자, newest first), then case name.
+    RulingDate,
+}
+
+impl PrecedentSortOrder {
+    /// Cycle to the next sort order.
+    #[must_use]
+    pub fn next(self) -> Self {
+        match self {
+            PrecedentSortOrder::CaseName => PrecedentSortOrder::RulingDate,
+            PrecedentSortOrder::RulingDate => PrecedentSortOrder::CaseName,
+        }
+    }
+
+    /// Human-readable label for the current sort order.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            PrecedentSortOrder::CaseName => "case name",
+            PrecedentSortOrder::RulingDate => "ruling date",
+        }
+    }
+}
+
+/// Metadata entry for a single precedent file.
+///
+/// Constructed from the GitHub tree listing; frontmatter fields are populated
+/// lazily when the precedent is opened.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrecedentMetadataEntry {
+    /// Raw file path in the repo (e.g. "민사/대법원/2000다10048.md")
+    pub path: String,
+    /// Case name (사건명)
+    pub case_name: String,
+    /// Case number (사건번호, e.g. "2000다10048")
+    pub case_number: String,
+    /// Ruling date (선고일자, e.g. "2003-11-14")
+    pub ruling_date: String,
+    /// Court name (법원명, e.g. "대법원")
+    pub court_name: String,
+    /// Case type (사건종류, e.g. "민사", "형사")
+    pub case_type: String,
+    /// Ruling type (판결유형)
+    pub ruling_type: String,
+}
+
+/// Metadata index for precedents: stable ID → `PrecedentMetadataEntry`.
+///
+/// The ID is derived from the path, e.g. `민사/대법원/2000다10048`.
+pub type PrecedentMetadataIndex = HashMap<String, PrecedentMetadataEntry>;
+
+/// A single precedent entry for display in list views.
+#[derive(Debug, Clone, Serialize)]
+pub struct PrecedentEntry {
+    /// Path-derived ID (e.g. "민사/대법원/2000다10048")
+    pub id: String,
+    /// Case name (사건명)
+    pub case_name: String,
+    /// Case number (사건번호)
+    pub case_number: String,
+    /// Ruling date (선고일자)
+    pub ruling_date: String,
+    /// Court name (법원명)
+    pub court_name: String,
+    /// Case type (사건종류)
+    pub case_type: String,
+    /// Ruling type (판결유형)
+    pub ruling_type: String,
+    /// Raw file path in the repo
+    pub path: String,
+}
+
+/// A reference to a named section within a precedent document.
+#[derive(Debug, Clone, Serialize)]
+pub struct PrecedentSectionRef {
+    /// Section heading (e.g. "판시사항", "판결요지", "판례내용")
+    pub label: String,
+    /// Line index in the stripped content
+    pub line_index: usize,
+}
+
+/// Parsed precedent detail content.
+#[derive(Debug, Clone)]
+pub struct PrecedentDetail {
+    /// The precedent entry metadata
+    pub entry: PrecedentEntry,
+    /// Raw markdown content
+    pub raw_markdown: String,
+    /// Extracted sections for navigation
+    pub sections: Vec<PrecedentSectionRef>,
+}
+
+/// Convert a `PrecedentMetadataIndex` into a sorted `Vec<PrecedentEntry>`.
+///
+/// Entries are sorted by case name, then by case number for deterministic ordering.
+#[must_use]
+pub fn precedent_entries_from_index(index: PrecedentMetadataIndex) -> Vec<PrecedentEntry> {
+    let mut entries: Vec<PrecedentEntry> = index
+        .into_iter()
+        .map(|(id, meta)| PrecedentEntry {
+            id,
+            case_name: meta.case_name,
+            case_number: meta.case_number,
+            ruling_date: meta.ruling_date,
+            court_name: meta.court_name,
+            case_type: meta.case_type,
+            ruling_type: meta.ruling_type,
+            path: meta.path,
+        })
+        .collect();
+    sort_precedent_entries(&mut entries, PrecedentSortOrder::CaseName);
+    entries
+}
+
+/// Sort precedent entries in-place according to the given sort order.
+pub fn sort_precedent_entries(entries: &mut [PrecedentEntry], order: PrecedentSortOrder) {
+    match order {
+        PrecedentSortOrder::CaseName => {
+            entries.sort_by(|a, b| {
+                a.case_name
+                    .cmp(&b.case_name)
+                    .then_with(|| a.case_number.cmp(&b.case_number))
+            });
+        }
+        PrecedentSortOrder::RulingDate => {
+            entries.sort_by(|a, b| {
+                // Descending date (newest first); empty dates sort last.
+                let da = if a.ruling_date.is_empty() {
+                    ""
+                } else {
+                    &a.ruling_date
+                };
+                let db = if b.ruling_date.is_empty() {
+                    ""
+                } else {
+                    &b.ruling_date
+                };
+                db.cmp(da).then_with(|| a.case_name.cmp(&b.case_name))
+            });
+        }
+    }
+}
+
+// ── Law article types ────────────────────────────────────────
+
 /// A reference to an article (제X조) within a law document
 #[derive(Debug, Clone, Serialize)]
 pub struct ArticleRef {
@@ -242,6 +395,78 @@ mod tests {
     fn test_entries_from_empty_index() {
         let index = MetadataIndex::new();
         let entries = entries_from_index(index);
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_precedent_entries_from_index_sorted() {
+        let mut index = PrecedentMetadataIndex::new();
+        index.insert(
+            "형사/대법원/2020도1234".to_string(),
+            PrecedentMetadataEntry {
+                path: "형사/대법원/2020도1234.md".to_string(),
+                case_name: "사기".to_string(),
+                case_number: "2020도1234".to_string(),
+                ruling_date: "2021-03-15".to_string(),
+                court_name: "대법원".to_string(),
+                case_type: "형사".to_string(),
+                ruling_type: String::new(),
+            },
+        );
+        index.insert(
+            "민사/대법원/2000다10048".to_string(),
+            PrecedentMetadataEntry {
+                path: "민사/대법원/2000다10048.md".to_string(),
+                case_name: "소유권이전등기등".to_string(),
+                case_number: "2000다10048".to_string(),
+                ruling_date: "2002-09-27".to_string(),
+                court_name: "대법원".to_string(),
+                case_type: "민사".to_string(),
+                ruling_type: String::new(),
+            },
+        );
+
+        let entries = precedent_entries_from_index(index);
+        assert_eq!(entries.len(), 2);
+        // Sorted by case name: 사기 < 소유권이전등기등
+        assert_eq!(entries[0].case_name, "사기");
+        assert_eq!(entries[1].case_name, "소유권이전등기등");
+    }
+
+    #[test]
+    fn test_sort_precedent_entries_by_date() {
+        let mut entries = vec![
+            PrecedentEntry {
+                id: "민사/대법원/2000다10048".to_string(),
+                case_name: "소유권이전등기등".to_string(),
+                case_number: "2000다10048".to_string(),
+                ruling_date: "2002-09-27".to_string(),
+                court_name: "대법원".to_string(),
+                case_type: "민사".to_string(),
+                ruling_type: String::new(),
+                path: "민사/대법원/2000다10048.md".to_string(),
+            },
+            PrecedentEntry {
+                id: "형사/대법원/2020도1234".to_string(),
+                case_name: "사기".to_string(),
+                case_number: "2020도1234".to_string(),
+                ruling_date: "2021-03-15".to_string(),
+                court_name: "대법원".to_string(),
+                case_type: "형사".to_string(),
+                ruling_type: String::new(),
+                path: "형사/대법원/2020도1234.md".to_string(),
+            },
+        ];
+        sort_precedent_entries(&mut entries, PrecedentSortOrder::RulingDate);
+        // Newest first
+        assert_eq!(entries[0].ruling_date, "2021-03-15");
+        assert_eq!(entries[1].ruling_date, "2002-09-27");
+    }
+
+    #[test]
+    fn test_precedent_entries_from_empty_index() {
+        let index = PrecedentMetadataIndex::new();
+        let entries = precedent_entries_from_index(index);
         assert!(entries.is_empty());
     }
 }

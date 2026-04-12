@@ -15,7 +15,7 @@ Use `cargo` for all build/test/run tasks.
 
 | Crate | Type | Binary | Purpose |
 |-------|------|--------|---------|
-| `legal-ko-core` | lib | — | Shared logic: models, HTTP client, caching, parser, bookmarks, context, preferences, AI agent definitions |
+| `legal-ko-core` | lib | — | Shared logic: models, HTTP client, caching, parser, crossref, bookmarks, context, preferences, AI agent definitions |
 | `legal-ko-tui` | bin | `legal-ko` | Human-facing ratatui TUI |
 | `legal-ko-cli` | bin | `legal-ko-cli` | LLM-facing CLI with `--json` output |
 
@@ -52,9 +52,10 @@ Workspace deps: `ratatui`, `crossterm`, `tokio` (full), `reqwest` (json),
 crates/
   core/src/
     lib.rs          — re-exports all modules, AiAgent struct + AGENTS constant
-    models.rs       — LawEntry, LawDetail, ArticleRef, MetadataIndex, MetadataEntry
-    client.rs       — HTTP client (fetch metadata.json, fetch law markdown files)
-    parser.rs       — YAML frontmatter stripping, article extraction (no ratatui dep)
+    models.rs       — LawEntry, LawDetail, ArticleRef, MetadataIndex, MetadataEntry, PrecedentEntry, PrecedentMetadataEntry, PrecedentSortOrder
+    client.rs       — HTTP client (fetch metadata.json, fetch law/precedent markdown files)
+    parser.rs       — YAML frontmatter stripping, article extraction, precedent section extraction (no ratatui dep)
+    crossref.rs     — 4-approach cross-reference: statute refs, case refs, fuzzy law-name matching, case-type affinity
     cache.rs        — Disk cache at ~/.cache/legal-ko/ (SHA256 keyed)
     bookmarks.rs    — Persist bookmarks to ~/.config/legal-ko/bookmarks.json
     context.rs      — TUI↔Agent context (TuiContext, TuiCommand, read/write/take)
@@ -75,7 +76,7 @@ crates/
       styles.rs     — Badge-style key hints, status bar helpers
       help.rs       — Keybinding overlay popup
   cli/src/
-    main.rs         — clap subcommands: list, search, show, articles, bookmarks, context, navigate, speak (all with --json)
+    main.rs         — clap subcommands: list, search, show, articles, bookmarks, context, navigate, speak, precedent-list, precedent-search, precedent-show, precedent-sections, precedent-laws, law-precedents (all with --json)
 ```
 
 ## CLI Subcommands
@@ -88,6 +89,12 @@ crates/
 - `legal-ko-cli context [--json]`
 - `legal-ko-cli navigate <id> [--article X] [--json]`
 - `legal-ko-cli speak <id> [--article N] [--voice X] [--json]`
+- `legal-ko-cli precedent-list [--case-type X] [--court X] [--sort name|date] [--json] [--limit N]`
+- `legal-ko-cli precedent-search <query> [--json] [--limit N]`
+- `legal-ko-cli precedent-show <id> [--json]`
+- `legal-ko-cli precedent-sections <id> [--json]`
+- `legal-ko-cli precedent-laws <id> [--json]` — cross-reference: find laws cited by a precedent (4-approach fallback)
+- `legal-ko-cli law-precedents <law_name> [--article X] [--json] [--limit N]` — reverse: find precedents citing a law
 
 ## Key Design Decisions
 

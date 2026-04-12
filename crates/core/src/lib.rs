@@ -3,6 +3,7 @@ pub mod cache;
 pub mod client;
 pub mod config;
 pub mod context;
+pub mod crossref;
 pub mod enrichment;
 pub mod models;
 pub mod parser;
