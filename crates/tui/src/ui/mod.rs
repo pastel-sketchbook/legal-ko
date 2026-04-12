@@ -5,11 +5,11 @@ pub mod precedent_detail;
 pub mod precedent_list;
 pub mod styles;
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
-use ratatui::Frame;
 
 use crate::app::{App, Popup, View};
 use crate::theme::Theme;
