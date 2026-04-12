@@ -1,15 +1,15 @@
-use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::theme::Theme;
 
-use super::VERSION;
 use super::styles;
+use super::VERSION;
 
 pub fn render_precedent_detail(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let chunks = Layout::vertical([
@@ -189,6 +189,9 @@ fn render_detail_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             pairs.push(("n/p", "section"));
             pairs.push(("a", "section list"));
         }
+        if !app.precedent_crossref_matches.is_empty() {
+            pairs.push(("r", "refs"));
+        }
         pairs.push(("E", "export"));
         pairs.push(("t", "theme"));
         pairs.push(("o", "AI agent"));
@@ -238,6 +241,49 @@ pub fn render_section_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect)
 
     let block = Block::default()
         .title(" Sections \u{2014} 섹션 목록 ")
+        .borders(Borders::ALL)
+        .style(Style::default().fg(theme.accent).bg(theme.panel_bg));
+
+    let list = List::new(items).block(block);
+
+    let clear_area = Rect {
+        x: popup_area.x.saturating_sub(1),
+        y: popup_area.y,
+        width: popup_area.width.saturating_add(2),
+        height: popup_area.height,
+    };
+    f.render_widget(Clear, clear_area);
+    f.render_widget(list, popup_area);
+}
+
+/// Render the cross-reference (참조조문) popup showing matched laws.
+pub fn render_crossref_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
+    let popup_area = styles::centered_rect(60, 60, area);
+
+    let items: Vec<ListItem> = app
+        .precedent_crossref_matches
+        .iter()
+        .enumerate()
+        .map(|(i, law_match)| {
+            let style = styles::list_item_style(theme, i == app.popup_selected, false);
+
+            let label = if let Some(ref law_id) = law_match.law_id {
+                format!(
+                    "  {} {} → {}",
+                    law_match.statute_ref.law_name, law_match.statute_ref.article, law_id
+                )
+            } else {
+                format!(
+                    "  {} {} (no match)",
+                    law_match.statute_ref.law_name, law_match.statute_ref.article
+                )
+            };
+            ListItem::new(Line::from(Span::styled(label, style)))
+        })
+        .collect();
+
+    let block = Block::default()
+        .title(" 참조조문 \u{2014} Referenced Laws ")
         .borders(Borders::ALL)
         .style(Style::default().fg(theme.accent).bg(theme.panel_bg));
 

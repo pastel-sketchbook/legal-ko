@@ -1,8 +1,8 @@
-use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::Frame;
 
 use crate::theme::Theme;
 
@@ -59,6 +59,7 @@ pub fn render_help(f: &mut Frame, theme: &Theme, area: Rect) {
         key_line(theme, "d", "Filter by court"),
         key_line(theme, "n/p", "Next / prev section"),
         key_line(theme, "a", "Section list popup"),
+        key_line(theme, "r", "Referenced laws (참조조문)"),
         Line::from(""),
         header_line(theme, "Other"),
         key_line(theme, "o", "Open AI agent split"),

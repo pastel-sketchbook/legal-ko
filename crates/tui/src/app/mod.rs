@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use legal_ko_core::bookmarks::Bookmarks;
 use legal_ko_core::cache::EnrichmentCache;
+use legal_ko_core::crossref::{self, LawMatch};
 use legal_ko_core::enrichment::{self, EnrichedEntry};
 use legal_ko_core::models::{
     self, ArticleRef, LawDetail, LawEntry, MetadataIndex, PrecedentDetail, PrecedentEntry,
@@ -65,6 +66,7 @@ pub enum Popup {
     SectionList,
     CaseTypeFilter,
     CourtFilter,
+    CrossRefList,
 }
 
 // ── Messages (background → main) ─────────────────────────────
@@ -283,6 +285,9 @@ pub struct App {
 
     /// True once precedent metadata has been loaded.
     pub precedents_loaded: bool,
+
+    /// Cross-reference matches for the currently viewed precedent (참조조문 → law).
+    pub precedent_crossref_matches: Vec<LawMatch>,
 }
 
 impl App {
@@ -389,6 +394,7 @@ impl App {
             pending_precedent_id: None,
             precedent_detail_rendered_lines: Vec::new(),
             precedents_loaded: false,
+            precedent_crossref_matches: Vec::new(),
         }
     }
 
@@ -1331,6 +1337,23 @@ end tell"#
         self.precedent_detail_scroll = 0;
         self.view = View::PrecedentDetail;
         self.status_message = None;
+
+        // Cross-reference: extract 참조조문 and match against known laws
+        let known_laws: Vec<String> = self
+            .all_laws
+            .iter()
+            .map(|e| e.title.clone())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        let statute_refs = crossref::extract_statute_refs(content);
+        self.precedent_crossref_matches = crossref::match_statute_refs(&statute_refs, &known_laws);
+        if !self.precedent_crossref_matches.is_empty() {
+            info!(
+                count = self.precedent_crossref_matches.len(),
+                "Cross-referenced 참조조문"
+            );
+        }
     }
 
     /// Export the currently viewed precedent to a markdown file.
@@ -1356,5 +1379,25 @@ end tell"#
 
         self.status_message = Some(format!("Exported → {fname_display}"));
         info!(file = %fname_display, "Precedent exported to file");
+    }
+
+    /// Jump from a precedent's 참조조문 cross-reference to the cited law.
+    ///
+    /// If the `LawMatch` has a resolved `law_id`, switches to the law detail
+    /// view and opens the law at the cited article. Uses the navigate flow
+    /// which clears filters and queues an article jump.
+    pub fn jump_to_crossref_law(&mut self, law_match: &LawMatch) {
+        if let Some(ref law_id) = law_match.law_id {
+            // Navigate to the law, optionally jumping to the cited article
+            let article = Some(law_match.statute_ref.article.as_str());
+            self.handle_navigate(law_id, article);
+        } else {
+            // No match found — show the raw reference
+            let label = format!(
+                "{} {}",
+                law_match.statute_ref.law_name, law_match.statute_ref.article
+            );
+            self.status_message = Some(format!("No matching law found for: {label}"));
+        }
     }
 }

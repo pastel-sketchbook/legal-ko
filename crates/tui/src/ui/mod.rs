@@ -5,11 +5,11 @@ pub mod precedent_detail;
 pub mod precedent_list;
 pub mod styles;
 
-use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
+use ratatui::Frame;
 
 use crate::app::{App, Popup, View};
 use crate::theme::Theme;
@@ -63,7 +63,8 @@ pub fn render(f: &mut Frame, app: &App) {
                 | Popup::ArticleList
                 | Popup::SectionList
                 | Popup::CaseTypeFilter
-                | Popup::CourtFilter => {}
+                | Popup::CourtFilter
+                | Popup::CrossRefList => {}
             }
         }
         View::Detail => {
@@ -77,7 +78,8 @@ pub fn render(f: &mut Frame, app: &App) {
                 | Popup::DepartmentFilter
                 | Popup::SectionList
                 | Popup::CaseTypeFilter
-                | Popup::CourtFilter => {}
+                | Popup::CourtFilter
+                | Popup::CrossRefList => {}
             }
         }
         View::PrecedentList => {
@@ -95,7 +97,8 @@ pub fn render(f: &mut Frame, app: &App) {
                 | Popup::CategoryFilter
                 | Popup::DepartmentFilter
                 | Popup::ArticleList
-                | Popup::SectionList => {}
+                | Popup::SectionList
+                | Popup::CrossRefList => {}
             }
         }
         View::PrecedentDetail => {
@@ -104,6 +107,9 @@ pub fn render(f: &mut Frame, app: &App) {
                 Popup::Help => help::render_help(f, theme, area),
                 Popup::SectionList => {
                     precedent_detail::render_section_popup(f, app, theme, area);
+                }
+                Popup::CrossRefList => {
+                    precedent_detail::render_crossref_popup(f, app, theme, area);
                 }
                 Popup::AgentPicker => render_agent_picker(f, app, theme, area),
                 Popup::None

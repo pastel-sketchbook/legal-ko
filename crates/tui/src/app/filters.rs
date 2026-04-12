@@ -231,6 +231,15 @@ impl App {
         self.popup_selected = 0;
     }
 
+    pub fn open_crossref_list(&mut self) {
+        if !self.precedent_crossref_matches.is_empty() {
+            self.popup = Popup::CrossRefList;
+            self.popup_selected = 0;
+        } else {
+            self.status_message = Some("No 참조조문 found in this precedent".to_string());
+        }
+    }
+
     /// Open the AI agent picker popup.
     ///
     /// If no agents are installed, shows a status message instead.
@@ -336,6 +345,16 @@ impl App {
                 self.apply_precedent_filters();
                 self.close_popup();
             }
+            Popup::CrossRefList => {
+                if let Some(law_match) = self
+                    .precedent_crossref_matches
+                    .get(self.popup_selected)
+                    .cloned()
+                {
+                    self.close_popup();
+                    self.jump_to_crossref_law(&law_match);
+                }
+            }
             Popup::AgentPicker => {
                 if let Some(&agent) = self.installed_agents.get(self.popup_selected) {
                     self.close_popup();
@@ -370,6 +389,7 @@ impl App {
             Popup::SectionList => self.precedent_detail_sections.len(),
             Popup::CaseTypeFilter => self.precedent_case_types.len() + 1,
             Popup::CourtFilter => self.precedent_courts.len() + 1,
+            Popup::CrossRefList => self.precedent_crossref_matches.len(),
             Popup::AgentPicker => self.installed_agents.len(),
             _ => 0,
         }

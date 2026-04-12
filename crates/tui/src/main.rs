@@ -446,6 +446,7 @@ fn handle_precedent_detail_key(app: &mut App, key: KeyEvent, terminal_height: us
         KeyCode::Char('n') => app.next_section(),
         KeyCode::Char('p') => app.prev_section(),
         KeyCode::Char('a') => app.open_section_list(),
+        KeyCode::Char('r') => app.open_crossref_list(),
         KeyCode::Char('E') => app.export_precedent(),
         KeyCode::Char('t') => app.next_theme(),
         KeyCode::Char('o') => app.open_agent_picker(),
