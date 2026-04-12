@@ -16,8 +16,7 @@ fn key_badge<'a>(theme: &Theme, key: &str, desc: &str) -> Vec<Span<'a>> {
     ]
 }
 
-/// Build a status bar Line with an optional prefix, badge-style shortcuts,
-/// and the theme name right-aligned.
+/// Build a status bar Line with an optional prefix and badge-style shortcuts.
 #[must_use]
 pub fn status_line<'a>(
     theme: &Theme,
@@ -25,41 +24,29 @@ pub fn status_line<'a>(
     pairs: &[(&str, &str)],
     width: u16,
 ) -> Line<'a> {
-    let mut left_spans: Vec<Span<'a>> = Vec::new();
+    let mut spans: Vec<Span<'a>> = Vec::new();
 
     if !prefix.is_empty() {
-        left_spans.push(Span::styled(
+        spans.push(Span::styled(
             prefix.to_string(),
             Style::default().fg(theme.muted),
         ));
     }
 
     for (key, desc) in pairs {
-        left_spans.extend(key_badge(theme, key, desc));
+        spans.extend(key_badge(theme, key, desc));
     }
 
-    let theme_label = format!(" {} ", theme.name);
-
-    // Calculate left content width
-    let left_width: usize = left_spans.iter().map(|s| s.content.width()).sum();
-    let right_width = theme_label.width();
+    // Fill remaining space with panel background
+    let used: usize = spans.iter().map(|s| s.content.width()).sum();
     let total = width as usize;
-
-    let mut spans = left_spans;
-
-    // Add spacer to push theme name to the right
-    let gap = total.saturating_sub(left_width + right_width);
+    let gap = total.saturating_sub(used);
     if gap > 0 {
         spans.push(Span::styled(
             " ".repeat(gap),
             Style::default().bg(theme.panel_bg),
         ));
     }
-
-    spans.push(Span::styled(
-        theme_label,
-        Style::default().fg(theme.muted).bg(theme.panel_bg),
-    ));
 
     Line::from(spans)
 }
@@ -133,23 +120,17 @@ pub fn pad_to_width(s: &str, target_width: usize) -> String {
     }
 }
 
-/// Build a status bar Line with a left message and the theme name right-aligned.
+/// Build a status bar Line with a left message.
 #[must_use]
 pub fn status_message_line<'a>(theme: &Theme, msg: &str, width: u16) -> Line<'a> {
     let left = format!(" {msg}");
-    let theme_label = format!(" {} ", theme.name);
     let left_w = UnicodeWidthStr::width(left.as_str());
-    let right_w = theme_label.width();
     let total = width as usize;
-    let gap = total.saturating_sub(left_w + right_w);
+    let gap = total.saturating_sub(left_w);
 
     Line::from(vec![
         Span::styled(left, Style::default().fg(theme.accent)),
         Span::styled(" ".repeat(gap), Style::default().bg(theme.panel_bg)),
-        Span::styled(
-            theme_label,
-            Style::default().fg(theme.muted).bg(theme.panel_bg),
-        ),
     ])
 }
 
@@ -193,19 +174,22 @@ pub fn truncate_with_ellipsis(s: &str, max_width: usize) -> String {
     result
 }
 
-/// Append a right-aligned version label to `spans`, filling the gap with spaces.
+/// Append right-aligned `[sort] [theme] vX.Y.Z` labels to `spans`.
 ///
 /// `width` is the total available columns. The function measures the existing
-/// spans, computes the gap, and pushes a spacer + version span.
+/// spans, computes the gap, and pushes a spacer + label spans.
 pub fn push_version_label(
     spans: &mut Vec<Span<'static>>,
     theme: &Theme,
+    sort_label: &str,
     version: &str,
     width: u16,
 ) {
-    let version_label = format!(" v{version} ");
+    let sort_text = format!(" {sort_label} ");
+    let theme_text = format!(" {} ", theme.name);
+    let version_text = format!(" v{version} ");
     let left_width: usize = spans.iter().map(|s| s.content.width()).sum();
-    let right_width = version_label.width();
+    let right_width = sort_text.width() + theme_text.width() + version_text.width();
     let total = width as usize;
     let gap = total.saturating_sub(left_width + right_width);
     if gap > 0 {
@@ -215,7 +199,15 @@ pub fn push_version_label(
         ));
     }
     spans.push(Span::styled(
-        version_label,
+        sort_text,
+        Style::default().fg(theme.muted).bg(theme.panel_bg),
+    ));
+    spans.push(Span::styled(
+        theme_text,
+        Style::default().fg(theme.muted).bg(theme.panel_bg),
+    ));
+    spans.push(Span::styled(
+        version_text,
         Style::default().fg(theme.muted).bg(theme.panel_bg),
     ));
 }

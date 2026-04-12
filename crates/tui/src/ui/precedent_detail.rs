@@ -1,15 +1,15 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
-use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::theme::Theme;
 
-use super::styles;
 use super::VERSION;
+use super::styles;
 
 pub fn render_precedent_detail(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let chunks = Layout::vertical([
@@ -85,13 +85,18 @@ fn render_detail_title(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         }
     }
 
+    let sort_label = format!(" {} ", app.precedent_sort_order.label());
+    let theme_label = format!(" {} ", theme.name);
     let version_label = format!(" v{VERSION} ");
 
     // Measure widths for right-alignment
     let left_width: usize = parts.iter().map(|s| s.content.width()).sum();
     let meta_width: usize = right_parts.iter().map(|s| s.content.width()).sum();
+    let sort_width = UnicodeWidthStr::width(sort_label.as_str());
+    let theme_width = UnicodeWidthStr::width(theme_label.as_str());
     let version_width = UnicodeWidthStr::width(version_label.as_str());
-    let right_total = meta_width + version_width + if meta_width > 0 { 2 } else { 0 };
+    let right_total =
+        meta_width + sort_width + theme_width + version_width + if meta_width > 0 { 2 } else { 0 };
     let total = area.width as usize;
     let gap = total.saturating_sub(left_width + right_total);
 
@@ -107,6 +112,14 @@ fn render_detail_title(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         parts.push(Span::styled(" ", Style::default().bg(theme.panel_bg)));
     }
 
+    parts.push(Span::styled(
+        sort_label,
+        Style::default().fg(theme.muted).bg(theme.panel_bg),
+    ));
+    parts.push(Span::styled(
+        theme_label,
+        Style::default().fg(theme.muted).bg(theme.panel_bg),
+    ));
     parts.push(Span::styled(
         version_label,
         Style::default().fg(theme.muted).bg(theme.panel_bg),

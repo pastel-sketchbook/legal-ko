@@ -1,14 +1,14 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
-use ratatui::Frame;
 
 use crate::app::{App, InputMode};
 use crate::theme::Theme;
 
-use super::styles;
 use super::VERSION;
+use super::styles;
 
 pub fn render_law_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let chunks = Layout::vertical([
@@ -70,8 +70,14 @@ fn render_title_bar(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         ));
     }
 
-    // Right-align version label
-    styles::push_version_label(&mut parts, theme, VERSION, area.width);
+    // Right-align sort + theme + version labels
+    styles::push_version_label(
+        &mut parts,
+        theme,
+        app.sort_order.label(),
+        VERSION,
+        area.width,
+    );
 
     let line = Line::from(parts);
     let bar = Paragraph::new(line).style(title_style);
