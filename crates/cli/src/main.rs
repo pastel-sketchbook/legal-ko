@@ -857,9 +857,8 @@ async fn cmd_law_precedents(
 
         // Fetch content and parse statute refs
         let path = format!("{}.md", entry.id);
-        let content = match client::load_precedent_content(client, &path).await {
-            Ok(c) => c,
-            Err(_) => continue,
+        let Ok(content) = client::load_precedent_content(client, &path).await else {
+            continue;
         };
 
         let refs = crossref::extract_statute_refs(&content);
@@ -902,7 +901,7 @@ async fn cmd_law_precedents(
         println!("{}", serde_json::to_string_pretty(&obj)?);
     } else {
         let art_label = article_filter.as_deref().unwrap_or("(all articles)");
-        println!("# Precedents citing {} {}", law_name, art_label);
+        println!("# Precedents citing {law_name} {art_label}");
         println!("Found {} match(es):", matches.len());
         println!();
         for e in &matches {

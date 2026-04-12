@@ -308,12 +308,12 @@ pub fn extract_full_text(raw: &str) -> String {
 /// Enrich a `PrecedentEntry` with metadata extracted from the YAML frontmatter.
 ///
 /// Precedent frontmatter fields:
-/// - `사건명` → case_name
-/// - `사건번호` → case_number
-/// - `선고일자` → ruling_date
-/// - `법원명` → court_name
-/// - `사건종류` → case_type
-/// - `판결유형` → ruling_type
+/// - `사건명` → `case_name`
+/// - `사건번호` → `case_number`
+/// - `선고일자` → `ruling_date`
+/// - `법원명` → `court_name`
+/// - `사건종류` → `case_type`
+/// - `판결유형` → `ruling_type`
 pub fn enrich_precedent_from_frontmatter(entry: &mut crate::models::PrecedentEntry, raw: &str) {
     let fm = parse_frontmatter(raw);
 

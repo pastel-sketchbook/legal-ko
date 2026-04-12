@@ -1,15 +1,15 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
-use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::theme::Theme;
 
-use super::styles;
 use super::VERSION;
+use super::styles;
 
 pub fn render_precedent_detail(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let chunks = Layout::vertical([
@@ -218,7 +218,7 @@ fn render_detail_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     f.render_widget(bar, area);
 }
 
-/// Convert a source-line index into a wrapped-line offset (same logic as law_detail).
+/// Convert a source-line index into a wrapped-line offset (same logic as `law_detail`).
 fn source_line_to_wrapped_offset(lines: &[Line<'_>], source_line: usize, width: u16) -> u16 {
     let w = width as usize;
     if w == 0 {

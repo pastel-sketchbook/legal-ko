@@ -151,28 +151,22 @@ impl App {
     }
 
     pub fn search_push_char(&mut self, c: char) {
-        match self.view {
-            View::PrecedentList => {
-                self.precedent_search_query.push(c);
-                self.apply_precedent_filters();
-            }
-            _ => {
-                self.search_query.push(c);
-                self.apply_filters();
-            }
+        if self.view == View::PrecedentList {
+            self.precedent_search_query.push(c);
+            self.apply_precedent_filters();
+        } else {
+            self.search_query.push(c);
+            self.apply_filters();
         }
     }
 
     pub fn search_pop_char(&mut self) {
-        match self.view {
-            View::PrecedentList => {
-                self.precedent_search_query.pop();
-                self.apply_precedent_filters();
-            }
-            _ => {
-                self.search_query.pop();
-                self.apply_filters();
-            }
+        if self.view == View::PrecedentList {
+            self.precedent_search_query.pop();
+            self.apply_precedent_filters();
+        } else {
+            self.search_query.pop();
+            self.apply_filters();
         }
     }
 
@@ -181,17 +175,14 @@ impl App {
     }
 
     pub fn clear_search(&mut self) {
-        match self.view {
-            View::PrecedentList => {
-                self.precedent_search_query.clear();
-                self.input_mode = InputMode::Normal;
-                self.apply_precedent_filters();
-            }
-            _ => {
-                self.search_query.clear();
-                self.input_mode = InputMode::Normal;
-                self.apply_filters();
-            }
+        if self.view == View::PrecedentList {
+            self.precedent_search_query.clear();
+            self.input_mode = InputMode::Normal;
+            self.apply_precedent_filters();
+        } else {
+            self.search_query.clear();
+            self.input_mode = InputMode::Normal;
+            self.apply_filters();
         }
     }
 
@@ -232,11 +223,11 @@ impl App {
     }
 
     pub fn open_crossref_list(&mut self) {
-        if !self.precedent_crossref_matches.is_empty() {
+        if self.precedent_crossref_matches.is_empty() {
+            self.status_message = Some("No 참조조문 found in this precedent".to_string());
+        } else {
             self.popup = Popup::CrossRefList;
             self.popup_selected = 0;
-        } else {
-            self.status_message = Some("No 참조조문 found in this precedent".to_string());
         }
     }
 

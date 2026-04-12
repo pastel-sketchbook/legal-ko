@@ -45,9 +45,8 @@ pub struct StatuteRef {
 /// Returns an empty `Vec` if no 참조조문 section is found.
 #[must_use]
 pub fn extract_statute_refs(raw: &str) -> Vec<StatuteRef> {
-    let section_text = match extract_section_text(raw, "참조조문") {
-        Some(t) => t,
-        None => return Vec::new(),
+    let Some(section_text) = extract_section_text(raw, "참조조문") else {
+        return Vec::new();
     };
 
     let mut refs = Vec::new();
@@ -135,7 +134,7 @@ fn parse_statute_segment(segment: &str, groups: &[u32], out: &mut Vec<StatuteRef
         }
 
         // Try to split into "law_name 제N조 ..." or just "제N조 ..."
-        if let Some(statute_ref) = parse_single_ref(part, &current_law) {
+        if let Some(statute_ref) = parse_single_ref(part, current_law.as_ref()) {
             current_law = Some(statute_ref.law_name.clone());
             current_article = Some(statute_ref.article.clone());
             // Emit one ref per group, or one with no group
@@ -194,7 +193,7 @@ fn try_parse_bare_detail(s: &str) -> Option<String> {
 /// If the string doesn't start with "제", everything before the first "제"
 /// (outside parentheses) is treated as the law name. If it starts with "제",
 /// the `inherited_law` is used.
-fn parse_single_ref(s: &str, inherited_law: &Option<String>) -> Option<StatuteRef> {
+fn parse_single_ref(s: &str, inherited_law: Option<&String>) -> Option<StatuteRef> {
     let s = s.trim();
     if s.is_empty() {
         return None;
@@ -206,7 +205,7 @@ fn parse_single_ref(s: &str, inherited_law: &Option<String>) -> Option<StatuteRe
     // Everything before "제" is the law name (possibly with parenthetical notes)
     let raw_law_name = s[..article_start].trim();
     let law_name = if raw_law_name.is_empty() {
-        inherited_law.clone()?
+        inherited_law.cloned()?
     } else {
         normalise_law_name(raw_law_name)
     };
@@ -310,9 +309,8 @@ pub struct CaseRef {
 /// - `헌법재판소 2000. 2. 24. 98헌바94 결정`
 #[must_use]
 pub fn extract_case_refs(raw: &str) -> Vec<CaseRef> {
-    let section_text = match extract_section_text(raw, "참조판례") {
-        Some(t) => t,
-        None => return Vec::new(),
+    let Some(section_text) = extract_section_text(raw, "참조판례") else {
+        return Vec::new();
     };
 
     let mut refs = Vec::new();
@@ -633,6 +631,7 @@ pub struct AffinityLaw {
 ///
 /// Returns a list of search terms and reasons, ordered by relevance.
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn affinity_laws(case_type: &str) -> Vec<AffinityLaw> {
     match case_type {
         "민사" => vec![
