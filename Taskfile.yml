@@ -104,6 +104,12 @@ tasks:
     cmds:
       - cargo clean
 
+  changelog:
+    desc: Regenerate CHANGELOG.md from git tags and conventional commits
+    cmds:
+      - ./scripts/changelog.sh > CHANGELOG.md
+      - echo "CHANGELOG.md regenerated"
+
   loc:
     desc: Count lines of code
     cmds:
