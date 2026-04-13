@@ -3,6 +3,18 @@
 All notable changes to this project are documented in this file.
 Generated from conventional commits via `task changelog`.
 
+## [0.4.3] — 2026-04-12
+
+### Added
+- add 법조인 search with persistent cached person index
+- add 법조인 extraction from precedent documents
+
+### Fixed
+- resolve clippy pedantic warnings and structured tracing fields
+
+### Chore
+- add CHANGELOG.md generation from git tags via task changelog
+
 ## [0.4.2] — 2026-04-12
 
 ### Refactored
