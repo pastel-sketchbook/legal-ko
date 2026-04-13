@@ -248,6 +248,39 @@ pub struct PrecedentEntry {
     pub path: String,
 }
 
+/// Role of a person referenced in a precedent document.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PersonRole {
+    /// 대법관 / 판사 — judge (presiding, associate, etc.)
+    Judge,
+    /// 변호사 — attorney / counsel
+    Attorney,
+    /// 검사 — prosecutor
+    Prosecutor,
+}
+
+impl std::fmt::Display for PersonRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Judge => write!(f, "judge"),
+            Self::Attorney => write!(f, "attorney"),
+            Self::Prosecutor => write!(f, "prosecutor"),
+        }
+    }
+}
+
+/// A person referenced in a precedent document (judge, attorney, or prosecutor).
+#[derive(Debug, Clone, Serialize)]
+pub struct PersonRef {
+    /// The person's name (Korean)
+    pub name: String,
+    /// Their role in the case
+    pub role: PersonRole,
+    /// Optional qualifier (e.g. "재판장", "주심")
+    pub qualifier: Option<String>,
+}
+
 /// A reference to a named section within a precedent document.
 #[derive(Debug, Clone, Serialize)]
 pub struct PrecedentSectionRef {

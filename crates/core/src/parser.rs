@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::models::ArticleRef;
 use crate::models::PrecedentSectionRef;
+use crate::models::{PersonRef, PersonRole};
 
 /// Strip YAML frontmatter delimited by --- ... ---
 #[must_use]
@@ -411,6 +412,141 @@ pub fn extract_precedent_section_text(raw: &str, section_index: usize) -> Option
     Some(result)
 }
 
+// ── Person extraction ──────────────────────────────────────────
+
+/// Check whether a character looks like a Korean syllable (Hangul).
+fn is_hangul(c: char) -> bool {
+    matches!(c, '\u{AC00}'..='\u{D7AF}' | '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}')
+}
+
+/// Check whether a string looks like a Korean personal name (2-4 syllables, all Hangul).
+pub fn is_korean_name(s: &str) -> bool {
+    let chars: Vec<char> = s.chars().collect();
+    (2..=4).contains(&chars.len()) && chars.iter().all(|c| is_hangul(*c))
+}
+
+/// Extract a name and optional parenthesised qualifier from a token.
+///
+/// e.g. `"강신욱(재판장)"` → `("강신욱", Some("재판장"))`
+///      `"윤재식"`         → `("윤재식", None)`
+fn split_name_qualifier(token: &str) -> (&str, Option<&str>) {
+    if let Some(paren_start) = token.find('(') {
+        let name = &token[..paren_start];
+        let qual = token[paren_start + '('.len_utf8()..]
+            .strip_suffix(')')
+            .unwrap_or(&token[paren_start + '('.len_utf8()..]);
+        (name, Some(qual))
+    } else {
+        (token, None)
+    }
+}
+
+/// Extract persons (judges, attorneys, prosecutors) from a precedent markdown document.
+///
+/// Scans the `판례내용` section for:
+/// - **Judges** — `대법관 이름(재판장) 이름(주심) 이름…` or `판사 이름(재판장) 이름…`
+///   at the end of the document.
+/// - **Attorneys** — `변호사 이름` patterns (from `소송대리인`, `변 호 인` lines, etc.)
+/// - **Prosecutors** — `【검    사】 이름` lines.
+#[must_use]
+pub fn extract_persons(raw: &str) -> Vec<PersonRef> {
+    let content = strip_frontmatter(raw);
+    let mut persons = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // Helper to add a person, deduplicating by (name, role).
+    let mut add = |name: &str, role: PersonRole, qualifier: Option<&str>| {
+        let name = name.trim();
+        if !is_korean_name(name) {
+            return;
+        }
+        let key = (name.to_string(), role.clone());
+        if seen.insert(key) {
+            persons.push(PersonRef {
+                name: name.to_string(),
+                role,
+                qualifier: qualifier.map(String::from),
+            });
+        }
+    };
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // ── Judges ──────────────────────────────────────────
+        // Pattern: line starts with 대법관 or 판사, followed by space-separated
+        // names, optionally with (재판장) (주심) qualifiers.
+        // e.g. "대법관 강신욱(재판장) 변재승(주심) 윤재식 고현철"
+        // e.g. "판사 이상인(재판장) 김병찬 최승원"
+        for prefix in &["대법관", "판사"] {
+            if let Some(rest) = trimmed.strip_prefix(prefix) {
+                let rest = rest.trim();
+                if rest.is_empty() {
+                    continue;
+                }
+                for token in rest.split_whitespace() {
+                    let (name, qual) = split_name_qualifier(token);
+                    add(name, PersonRole::Judge, qual);
+                }
+            }
+        }
+
+        // ── Attorneys ───────────────────────────────────────
+        // Patterns:
+        //   "변호사 이름"
+        //   "소송대리인 변호사 이름"
+        //   "변호사 이름 외 N인"
+        //   "변호사 이름, 이름"  (comma separated)
+        //   "변호사 이름(피고인들을 위한)"
+        // The text may also have "변 호 인" with decorative spacing — we
+        // normalise whitespace inside the marker check.
+        {
+            // Find all occurrences of "변호사" in the line
+            let normalized: String = trimmed.chars().filter(|c| *c != ' ').collect();
+            // Only process lines that are part of the case info header (contain
+            // 【 or 소송대리인) or that are standalone short lines (the
+            // "변호사" keyword followed by a name).
+            if normalized.contains("변호사") {
+                // Extract names after each "변호사" occurrence in the original line
+                let mut search_from = 0;
+                while let Some(pos) = trimmed[search_from..].find("변호사") {
+                    let abs_pos = search_from + pos;
+                    let after = trimmed[abs_pos + "변호사".len()..].trim_start();
+                    // First token is the name (possibly with parenthesised client info)
+                    if let Some(first_token) = after.split_whitespace().next() {
+                        let (name, _qual) = split_name_qualifier(first_token);
+                        // Strip trailing punctuation / stray parens
+                        let name = name.trim_end_matches([',', '.', '，', ')', '）']);
+                        add(name, PersonRole::Attorney, None);
+                    }
+                    search_from = abs_pos + "변호사".len();
+                }
+            }
+        }
+
+        // ── Prosecutors ─────────────────────────────────────
+        // Pattern: "【검    사】 이름 외 N인" or "【검사】 이름"
+        // The spaces inside 검사 vary widely.
+        {
+            let normalized: String = trimmed.chars().filter(|c| *c != ' ').collect();
+            if let Some(pos) = normalized.find("【검사】") {
+                let after = &normalized[pos + "【검사】".len()..];
+                // Names may be comma-separated or followed by "외 N인"
+                for part in after.split([',', '，']) {
+                    let part = part.trim();
+                    // Stop at "외"
+                    let name_part = part.split('외').next().unwrap_or(part).trim();
+                    if let Some(first_token) = name_part.split_whitespace().next() {
+                        add(first_token, PersonRole::Prosecutor, None);
+                    }
+                }
+            }
+        }
+    }
+
+    persons
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -658,5 +794,147 @@ mod tests {
         assert_eq!(fm.get("사건번호").unwrap().as_str(), "2000다10048");
         assert_eq!(fm.get("사건명").unwrap().as_str(), "소유권이전등기등");
         assert_eq!(fm.get("선고일자").unwrap().as_str(), "2002-09-27");
+    }
+
+    // ── Person extraction tests ─────────────────────────────
+
+    #[test]
+    fn test_extract_judges_supreme_court() {
+        let input =
+            "## 판례내용\n\nSome text here.\n\n대법관 강신욱(재판장) 변재승(주심) 윤재식 고현철\n";
+        let persons = extract_persons(input);
+        let judges: Vec<_> = persons
+            .iter()
+            .filter(|p| p.role == PersonRole::Judge)
+            .collect();
+        assert_eq!(judges.len(), 4);
+        assert_eq!(judges[0].name, "강신욱");
+        assert_eq!(judges[0].qualifier.as_deref(), Some("재판장"));
+        assert_eq!(judges[1].name, "변재승");
+        assert_eq!(judges[1].qualifier.as_deref(), Some("주심"));
+        assert_eq!(judges[2].name, "윤재식");
+        assert!(judges[2].qualifier.is_none());
+        assert_eq!(judges[3].name, "고현철");
+    }
+
+    #[test]
+    fn test_extract_judges_lower_court() {
+        let input = "판사 이상인(재판장) 김병찬 최승원\n";
+        let persons = extract_persons(input);
+        let judges: Vec<_> = persons
+            .iter()
+            .filter(|p| p.role == PersonRole::Judge)
+            .collect();
+        assert_eq!(judges.len(), 3);
+        assert_eq!(judges[0].name, "이상인");
+        assert_eq!(judges[0].qualifier.as_deref(), Some("재판장"));
+        assert_eq!(judges[1].name, "김병찬");
+        assert_eq!(judges[2].name, "최승원");
+    }
+
+    #[test]
+    fn test_extract_attorneys() {
+        let input = "【원고, 피상고인】 석수1동 주공아파트 (소송대리인 변호사 김길찬)\n【피고, 상고인】 피고 (소송대리인 변호사 김형수)\n";
+        let persons = extract_persons(input);
+        let attorneys: Vec<_> = persons
+            .iter()
+            .filter(|p| p.role == PersonRole::Attorney)
+            .collect();
+        assert_eq!(attorneys.len(), 2);
+        assert_eq!(attorneys[0].name, "김길찬");
+        assert_eq!(attorneys[1].name, "김형수");
+    }
+
+    #[test]
+    fn test_extract_attorneys_multiple_on_line() {
+        let input = "【변 호 인】   변호사 김문수 외 5인\n";
+        let persons = extract_persons(input);
+        let attorneys: Vec<_> = persons
+            .iter()
+            .filter(|p| p.role == PersonRole::Attorney)
+            .collect();
+        assert_eq!(attorneys.len(), 1);
+        assert_eq!(attorneys[0].name, "김문수");
+    }
+
+    #[test]
+    fn test_extract_prosecutors() {
+        let input = "【검    사】 양재헌 외 1인\n";
+        let persons = extract_persons(input);
+        let prosecutors: Vec<_> = persons
+            .iter()
+            .filter(|p| p.role == PersonRole::Prosecutor)
+            .collect();
+        assert_eq!(prosecutors.len(), 1);
+        assert_eq!(prosecutors[0].name, "양재헌");
+    }
+
+    #[test]
+    fn test_extract_persons_full_document() {
+        let input = "---\n사건명: 테스트\n---\n# 테스트\n\n## 판례내용\n\n\
+            【원고, 상고인】 원고 (소송대리인 변호사 장익현)\n\
+            【피고, 피상고인】 피고 1 외 1인 (소송대리인 변호사 김형수)\n\
+            【원심판결】 대구고법 2000. 8. 11. 선고\n\n\
+            Some reasoning text.\n\n\
+            대법관 강신욱(재판장) 변재승(주심) 윤재식 고현철\n";
+        let persons = extract_persons(input);
+        assert_eq!(
+            persons
+                .iter()
+                .filter(|p| p.role == PersonRole::Judge)
+                .count(),
+            4
+        );
+        assert_eq!(
+            persons
+                .iter()
+                .filter(|p| p.role == PersonRole::Attorney)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn test_extract_persons_dedup() {
+        // Same attorney mentioned twice should appear once
+        let input = "변호사 김길찬\n소송대리인 변호사 김길찬\n";
+        let persons = extract_persons(input);
+        let attorneys: Vec<_> = persons
+            .iter()
+            .filter(|p| p.role == PersonRole::Attorney)
+            .collect();
+        assert_eq!(attorneys.len(), 1);
+    }
+
+    #[test]
+    fn test_extract_persons_empty() {
+        let input = "# 취득세부과처분취소\n\n## 판결요지\n\nSome text.\n";
+        let persons = extract_persons(input);
+        assert!(persons.is_empty());
+    }
+
+    #[test]
+    fn test_is_korean_name() {
+        assert!(is_korean_name("강신욱"));
+        assert!(is_korean_name("김길찬"));
+        assert!(is_korean_name("이름"));
+        assert!(is_korean_name("대법원")); // 3 Hangul chars — passes shape check
+        assert!(!is_korean_name("A"));
+        assert!(!is_korean_name("가")); // too short (1 char)
+        assert!(!is_korean_name("abcde")); // non-Hangul
+        assert!(!is_korean_name("김a수")); // mixed
+    }
+
+    #[test]
+    fn test_split_name_qualifier() {
+        assert_eq!(
+            split_name_qualifier("강신욱(재판장)"),
+            ("강신욱", Some("재판장"))
+        );
+        assert_eq!(
+            split_name_qualifier("변재승(주심)"),
+            ("변재승", Some("주심"))
+        );
+        assert_eq!(split_name_qualifier("윤재식"), ("윤재식", None));
     }
 }
