@@ -336,7 +336,7 @@ pub fn enrich_precedent_from_frontmatter(entry: &mut crate::models::PrecedentEnt
         }
     }
     if let Some(v) = fm.get("법원명") {
-        let s = v.as_str();
+        let s = v.as_str().trim();
         if !s.is_empty() {
             entry.court_name = s.to_string();
         }

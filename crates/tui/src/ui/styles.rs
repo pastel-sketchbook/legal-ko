@@ -134,6 +134,20 @@ pub fn status_message_line<'a>(theme: &Theme, msg: &str, width: u16) -> Line<'a>
     ])
 }
 
+/// Widen `popup_area` by 1 column on each side so that `Clear` erases any
+/// CJK double-width artifacts that bleed into the border columns.
+///
+/// Use this instead of `f.render_widget(Clear, popup_area)` for every popup.
+#[must_use]
+pub fn clear_area_for_popup(popup_area: Rect) -> Rect {
+    Rect {
+        x: popup_area.x.saturating_sub(1),
+        y: popup_area.y,
+        width: popup_area.width.saturating_add(2),
+        height: popup_area.height,
+    }
+}
+
 /// Create a centered rect using percentage of the parent area.
 #[must_use]
 pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {

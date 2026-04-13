@@ -259,13 +259,7 @@ pub fn render_section_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect)
 
     let list = List::new(items).block(block);
 
-    let clear_area = Rect {
-        x: popup_area.x.saturating_sub(1),
-        y: popup_area.y,
-        width: popup_area.width.saturating_add(2),
-        height: popup_area.height,
-    };
-    f.render_widget(Clear, clear_area);
+    f.render_widget(Clear, styles::clear_area_for_popup(popup_area));
     f.render_widget(list, popup_area);
 }
 
@@ -302,12 +296,6 @@ pub fn render_crossref_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect
 
     let list = List::new(items).block(block);
 
-    let clear_area = Rect {
-        x: popup_area.x.saturating_sub(1),
-        y: popup_area.y,
-        width: popup_area.width.saturating_add(2),
-        height: popup_area.height,
-    };
-    f.render_widget(Clear, clear_area);
+    f.render_widget(Clear, styles::clear_area_for_popup(popup_area));
     f.render_widget(list, popup_area);
 }

@@ -75,7 +75,7 @@ pub fn render_help(f: &mut Frame, theme: &Theme, area: Rect) {
 
     let paragraph = Paragraph::new(help_lines).block(block);
 
-    f.render_widget(Clear, popup_area);
+    f.render_widget(Clear, styles::clear_area_for_popup(popup_area));
     f.render_widget(paragraph, popup_area);
 }
 

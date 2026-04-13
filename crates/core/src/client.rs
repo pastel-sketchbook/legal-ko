@@ -309,7 +309,7 @@ pub async fn fetch_precedent_metadata(client: &reqwest::Client) -> Result<Preced
                 case_name: sanitize_case_name(&meta.case_name),
                 case_number: meta.case_number,
                 ruling_date: meta.ruling_date,
-                court_name: meta.court_name,
+                court_name: meta.court_name.trim().to_string(),
                 case_type: meta.case_type,
                 ruling_type: meta.ruling_type,
             },
