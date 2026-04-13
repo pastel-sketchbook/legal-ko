@@ -205,9 +205,10 @@ fn render_filter_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect, kind
         .style(Style::default().fg(theme.accent).bg(theme.panel_bg));
 
     let list = List::new(items).block(block);
+    let mut state = ratatui::widgets::ListState::default().with_selected(Some(app.popup_selected));
 
     f.render_widget(Clear, popup_area);
-    f.render_widget(list, popup_area);
+    f.render_stateful_widget(list, popup_area, &mut state);
 }
 
 fn render_agent_picker(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
