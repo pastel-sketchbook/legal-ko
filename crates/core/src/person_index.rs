@@ -27,10 +27,6 @@ const CONCURRENT_FETCHES: usize = 50;
 /// TTL for the person index cache (7 days).
 const PERSON_INDEX_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
-/// If the number of known precedents exceeds the indexed count by this ratio,
-/// the index is considered stale and will be rebuilt.
-const STALENESS_RATIO: f64 = 1.05;
-
 /// A single person→precedent association stored in the index.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersonIndexEntry {
@@ -54,6 +50,7 @@ pub struct PersonIndex {
 
 impl PersonIndex {
     /// Create an empty index.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             scanned_count: 0,
@@ -62,6 +59,7 @@ impl PersonIndex {
     }
 
     /// Look up all precedent associations for a given person name.
+    #[must_use]
     pub fn search(&self, name: &str, role: Option<&PersonRole>) -> Vec<&PersonIndexEntry> {
         self.entries
             .get(name)
@@ -75,11 +73,14 @@ impl PersonIndex {
     }
 
     /// Whether this index is stale relative to the current number of precedents.
+    #[must_use]
     pub fn is_stale(&self, current_count: usize) -> bool {
         if self.scanned_count == 0 {
             return true;
         }
-        current_count as f64 > self.scanned_count as f64 * STALENESS_RATIO
+        // Integer arithmetic: stale if current > scanned * 1.05
+        // Equivalent to: current * 100 > scanned * 105
+        current_count * 100 > self.scanned_count * 105
     }
 }
 
@@ -105,6 +106,10 @@ fn person_index_path() -> Result<PathBuf> {
 /// Read the person index from disk cache.
 ///
 /// Returns `None` if the file doesn't exist or has expired.
+///
+/// # Errors
+///
+/// Returns an error if the cache file exists but cannot be read or parsed.
 pub fn read_person_index() -> Result<Option<PersonIndex>> {
     let path = person_index_path()?;
     if !path.exists() {
@@ -134,6 +139,11 @@ pub fn read_person_index() -> Result<Option<PersonIndex>> {
 }
 
 /// Write the person index to disk cache (atomic rename).
+///
+/// # Errors
+///
+/// Returns an error if the cache directory cannot be created or the file
+/// cannot be written.
 pub fn write_person_index(index: &PersonIndex) -> Result<()> {
     let dir = cache_dir()?;
     std::fs::create_dir_all(&dir)

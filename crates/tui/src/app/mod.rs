@@ -318,6 +318,7 @@ pub struct App {
 }
 
 impl App {
+    #[allow(clippy::too_many_lines)]
     pub fn new() -> Self {
         let (msg_tx, msg_rx) = mpsc::unbounded_channel();
         let bookmarks = Bookmarks::load();

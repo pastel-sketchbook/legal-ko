@@ -181,7 +181,7 @@ pub fn load_engine(handle: &TtsEngineHandle, project_root: &Path) -> Result<()> 
     info!(
         device = %config.device,
         attn = %config.attn_impl,
-        threads = %intra_threads.map_or("default".to_string(), |n| n.to_string()),
+        threads = ?intra_threads,
         "Loading VibeVoice TTS",
     );
 
@@ -225,9 +225,9 @@ pub fn synthesize(
         .context("TTS synthesis failed")?;
 
     info!(
-        duration_secs = format!("{:.1}", result.duration_secs),
-        generation_secs = format!("{:.1}", result.generation_time_secs),
-        rtf = format!("{:.2}", result.rtf),
+        duration_secs = result.duration_secs,
+        generation_secs = result.generation_time_secs,
+        rtf = result.rtf,
         "Synthesized audio",
     );
 
@@ -268,9 +268,9 @@ where
         .context("TTS streaming synthesis failed")?;
 
     info!(
-        duration_secs = format!("{:.1}", result.duration_secs),
-        generation_secs = format!("{:.1}", result.generation_time_secs),
-        rtf = format!("{:.2}", result.rtf),
+        duration_secs = result.duration_secs,
+        generation_secs = result.generation_time_secs,
+        rtf = result.rtf,
         "Synthesized audio (streaming)",
     );
 
@@ -410,8 +410,8 @@ pub fn synthesize_and_play_segments_with_handle(
         info!(
             segment = i + 1,
             total,
-            duration_secs = format!("{:.1}", result.duration_secs),
-            generation_secs = format!("{:.1}", result.generation_time_secs),
+            duration_secs = result.duration_secs,
+            generation_secs = result.generation_time_secs,
             "Segment synthesized",
         );
     }
@@ -501,10 +501,7 @@ pub fn synthesize_and_play_with_handle(
                 flushed = true;
                 #[allow(clippy::cast_precision_loss)]
                 let threshold_secs = prebuffer_threshold as f64 / f64::from(OUTPUT_SR);
-                debug!(
-                    threshold_secs = format!("{threshold_secs:.1}"),
-                    "Pre-buffer flushed, playback started"
-                );
+                debug!(threshold_secs, "Pre-buffer flushed, playback started");
             }
         }
     })?;

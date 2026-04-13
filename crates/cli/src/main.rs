@@ -1161,7 +1161,7 @@ fn print_person_results(
             .collect();
         let obj = json!({
             "query": name,
-            "role_filter": role.map(|r| r.to_string()),
+            "role_filter": role.map(std::string::ToString::to_string),
             "total_matches": results.len(),
             "matches": matches,
         });
@@ -1302,9 +1302,9 @@ async fn cmd_speak(
             println!("{}", serde_json::to_string_pretty(&obj)?);
         } else {
             tracing::info!(
-                duration_secs = format!("{:.1}", result.duration_secs),
-                generation_time_secs = format!("{:.1}", result.generation_time_secs),
-                rtf = format!("{:.2}", result.rtf),
+                duration_secs = result.duration_secs,
+                generation_time_secs = result.generation_time_secs,
+                rtf = result.rtf,
                 "TTS complete"
             );
         }
@@ -1362,9 +1362,9 @@ async fn cmd_speak(
         } else {
             tracing::info!(
                 segments = stats.segments,
-                duration_secs = format!("{:.1}", stats.duration_secs),
-                generation_time_secs = format!("{:.1}", stats.generation_time_secs),
-                rtf = format!("{:.2}", stats.rtf),
+                duration_secs = stats.duration_secs,
+                generation_time_secs = stats.generation_time_secs,
+                rtf = stats.rtf,
                 "TTS complete"
             );
         }

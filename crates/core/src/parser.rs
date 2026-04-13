@@ -420,6 +420,7 @@ fn is_hangul(c: char) -> bool {
 }
 
 /// Check whether a string looks like a Korean personal name (2-4 syllables, all Hangul).
+#[must_use]
 pub fn is_korean_name(s: &str) -> bool {
     let chars: Vec<char> = s.chars().collect();
     (2..=4).contains(&chars.len()) && chars.iter().all(|c| is_hangul(*c))
