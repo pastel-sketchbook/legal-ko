@@ -46,6 +46,10 @@ to `~/bin`. Verify: `legal-ko-cli list --limit 1 --json` should return a JSON ar
 - User names a law and wants to see its contents or article list
 - User asks "관련 법을 찾아줘", "어떤 법이 적용돼?", "What law covers...?"
 
+> **See also:** For court precedent searches, cross-referencing statutes with
+> rulings, or searching by 법조인 (judge/attorney/prosecutor) name, use the
+> [legal-ko-precedent](.agents/skills/legal-ko-precedent/SKILL.md) skill.
+
 ## Workflow
 
 ### Phase 1 — Understand the Question

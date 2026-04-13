@@ -58,6 +58,16 @@ legal-ko        # or: task run
 | `?` | Help |
 | `Esc` / `q` | Back / quit |
 
+### Precedent Keybindings
+
+| Key | Action |
+|-----|--------|
+| `Tab` | Switch between law list and precedent list |
+| `c` | Filter by case type (민사, 형사, etc.) |
+| `d` | Filter by court (대법원, 하급심) |
+| `s` | Section popup (판시사항, 판결요지, etc.) |
+| `r` | Cross-reference: find laws cited by the precedent |
+
 ### Themes
 
 14 themes (7 dark + 7 light), persisted across sessions:
@@ -99,19 +109,41 @@ legal-ko-cli bookmarks --json
 | `navigate <id>` | Send navigate command to TUI (`--article` for article jump) |
 | `speak <id>` | TTS playback (requires `--features tts`) |
 
+#### Precedent Commands
+
+| Command | Description |
+|---------|-------------|
+| `precedent-list` | List precedents, optionally filtered by `--case-type`, `--court`, `--sort` |
+| `precedent-search <query>` | Search by case name/number; auto-falls back to 법조인 search for name queries |
+| `precedent-show <id>` | Full precedent content (markdown, frontmatter stripped) |
+| `precedent-sections <id>` | List sections (판시사항, 판결요지, etc.) with line indices |
+| `precedent-persons <id>` | Extract 법조인 (judges, attorneys, prosecutors) from a precedent |
+| `precedent-search-person <name>` | Search precedents by 법조인 name (`--role`, `--case-type`, `--court`) |
+| `precedent-laws <id>` | Cross-reference: find laws cited by a precedent (4-approach fallback) |
+| `law-precedents <law_name>` | Reverse: find precedents citing a law (`--article` for specific article) |
+
 Law IDs follow the path format: `kr/{법령명}/{유형}` (e.g., `kr/형법/법률`)
 
-## LLM Skill
+Precedent IDs follow: `{사건종류}/{법원명}/{사건번호}` (e.g., `민사/대법원/2000다10048`)
 
-The `.agents/skills/legal-ko-search/` skill enables AI agents to find relevant
-Korean laws from natural language questions.
+## LLM Skills
+
+Two skills enable AI agents to search Korean legal data:
+
+- **Law Search** (`.agents/skills/legal-ko-search/`) — Find statutes and
+  specific articles from natural language questions
+- **Precedent Search** (`.agents/skills/legal-ko-precedent/`) — Find court
+  rulings, extract sections, cross-reference with statutes, and search by
+  법조인 (judge/attorney/prosecutor) names
 
 **Example:** "전세 문제가 있어. 관련 법을 찾아줘."
 
-The skill translates colloquial legal questions into `legal-ko-cli` search
-commands, reads law content, and cites specific articles — with a mandatory
+The skills translate colloquial legal questions into `legal-ko-cli` commands,
+read law/precedent content, and cite specific articles — with a mandatory
 disclaimer that results are not legal advice. See
-[SKILL.md](.agents/skills/legal-ko-search/SKILL.md) for the full workflow.
+[law search SKILL.md](.agents/skills/legal-ko-search/SKILL.md) and
+[precedent SKILL.md](.agents/skills/legal-ko-precedent/SKILL.md) for full
+workflows.
 
 ## AI Agent Integration
 
@@ -152,7 +184,7 @@ legal-ko-cli navigate "kr/주택임대차보호법/법률" --article "제3조"
 
 ```
 crates/
-  core/     lib    — models, HTTP client, cache, parser, bookmarks, context, search
+  core/     lib    — models, HTTP client, cache, parser, crossref, bookmarks, context, search
   tui/      bin    — ratatui terminal UI (legal-ko)
   cli/      bin    — clap CLI with --json (legal-ko-cli)
 ```

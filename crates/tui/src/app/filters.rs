@@ -1,7 +1,8 @@
-use super::{App, InputMode, Popup, View};
+use super::{App, InputMode, Message, Popup, View};
 use legal_ko_core::AGENTS;
 use legal_ko_core::models;
-use tracing::warn;
+use legal_ko_core::parser;
+use tracing::{info, warn};
 
 impl App {
     /// Apply search + category + department + bookmarks filters.
@@ -70,6 +71,10 @@ impl App {
 
     /// Apply search + case type + court filters for precedents.
     pub fn apply_precedent_filters(&mut self) {
+        // Cancel any in-flight person search when filters change.
+        self.person_search_active = false;
+        self.person_search_results.clear();
+
         let query_lower = self.precedent_search_query.to_lowercase();
 
         self.precedent_filtered_indices = self
@@ -107,6 +112,51 @@ impl App {
         } else if self.precedent_list_selected >= self.precedent_filtered_indices.len() {
             self.precedent_list_selected = self.precedent_filtered_indices.len().saturating_sub(1);
         }
+
+        // If the query looks like a Korean name, trigger 법조인 (legal
+        // professional) search. This runs alongside the normal metadata filter
+        // — results from both are available to the renderer.
+        if !query_lower.is_empty() && parser::is_korean_name(&self.precedent_search_query) {
+            self.start_person_search();
+        }
+    }
+
+    /// Spawn a background task that searches for a 법조인 name using the
+    /// cached person index. If no index exists, builds one concurrently
+    /// first (sending progress messages to the UI).
+    fn start_person_search(&mut self) {
+        self.person_search_seq = self.person_search_seq.wrapping_add(1);
+        self.person_search_active = true;
+        self.person_search_results.clear();
+
+        let seq = self.person_search_seq;
+        let name = self.precedent_search_query.clone();
+        let entries: Vec<_> = self.all_precedents.clone();
+        let tx = self.msg_tx.clone();
+        let http = self.client.clone();
+
+        info!(seq, name = %name, entries = entries.len(), "Starting person search (indexed)");
+
+        tokio::spawn(async move {
+            let results = legal_ko_core::person_index::search_persons(
+                &http,
+                &name,
+                None,
+                &entries,
+                |_scanned, _total| {
+                    // Progress is implicit via the animated indicator in the UI
+                },
+            )
+            .await;
+
+            for r in results {
+                let _ = tx.send(Message::PersonSearchHit {
+                    seq,
+                    entry: r.entry,
+                });
+            }
+            let _ = tx.send(Message::PersonSearchDone { seq });
+        });
     }
 
     // ── Bookmarks ─────────────────────────────────────────────

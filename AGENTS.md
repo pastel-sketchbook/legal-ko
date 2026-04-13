@@ -15,7 +15,7 @@ Use `cargo` for all build/test/run tasks.
 
 | Crate | Type | Binary | Purpose |
 |-------|------|--------|---------|
-| `legal-ko-core` | lib | — | Shared logic: models, HTTP client, caching, parser, crossref, bookmarks, context, preferences, AI agent definitions |
+| `legal-ko-core` | lib | — | Shared logic: models, HTTP client, caching, parser, crossref, person index, bookmarks, context, preferences, AI agent definitions |
 | `legal-ko-tui` | bin | `legal-ko` | Human-facing ratatui TUI |
 | `legal-ko-cli` | bin | `legal-ko-cli` | LLM-facing CLI with `--json` output |
 
@@ -43,7 +43,7 @@ cp target/release/legal-ko-cli ~/bin/legal-ko-cli
 
 Workspace deps: `ratatui`, `crossterm`, `tokio` (full), `reqwest` (json),
 `serde`/`serde_json`, `clap` (derive), `anyhow`, `tracing`,
-`tracing-subscriber`, `dirs`, `sha2`, `unicode-width`,
+`tracing-subscriber`, `dirs`, `sha2`, `unicode-width`, `futures`,
 `meilisearch-sdk` (optional, behind `meilisearch` feature).
 
 ## Architecture
@@ -52,11 +52,12 @@ Workspace deps: `ratatui`, `crossterm`, `tokio` (full), `reqwest` (json),
 crates/
   core/src/
     lib.rs          — re-exports all modules, AiAgent struct + AGENTS constant
-    models.rs       — LawEntry, LawDetail, ArticleRef, MetadataIndex, MetadataEntry, PrecedentEntry, PrecedentMetadataEntry, PrecedentSortOrder
+    models.rs       — LawEntry, LawDetail, ArticleRef, MetadataIndex, MetadataEntry, PrecedentEntry, PrecedentMetadataEntry, PrecedentSortOrder, PersonRole, PersonRef
     client.rs       — HTTP client (fetch metadata.json, fetch law/precedent markdown files)
-    parser.rs       — YAML frontmatter stripping, article extraction, precedent section extraction (no ratatui dep)
+    parser.rs       — YAML frontmatter stripping, article extraction, precedent section extraction, 법조인 extraction (no ratatui dep)
     crossref.rs     — 4-approach cross-reference: statute refs, case refs, fuzzy law-name matching, case-type affinity
     cache.rs        — Disk cache at ~/.cache/legal-ko/ (SHA256 keyed)
+    person_index.rs — Persistent person (법조인) index: concurrent build via buffer_unordered(50), cached to ~/.cache/legal-ko/person_index.json, instant repeat lookups
     bookmarks.rs    — Persist bookmarks to ~/.config/legal-ko/bookmarks.json
     context.rs      — TUI↔Agent context (TuiContext, TuiCommand, read/write/take)
     preferences.rs  — Theme & agent preference persistence to ~/.config/legal-ko/preferences.json
@@ -76,7 +77,7 @@ crates/
       styles.rs     — Badge-style key hints, status bar helpers
       help.rs       — Keybinding overlay popup
   cli/src/
-    main.rs         — clap subcommands: list, search, show, articles, bookmarks, context, navigate, speak, precedent-list, precedent-search, precedent-show, precedent-sections, precedent-laws, law-precedents (all with --json)
+    main.rs         — clap subcommands: list, search, show, articles, bookmarks, context, navigate, speak, precedent-list, precedent-search, precedent-show, precedent-sections, precedent-persons, precedent-search-person, precedent-laws, law-precedents (all with --json)
 ```
 
 ## CLI Subcommands
@@ -90,17 +91,20 @@ crates/
 - `legal-ko-cli navigate <id> [--article X] [--json]`
 - `legal-ko-cli speak <id> [--article N] [--voice X] [--json]`
 - `legal-ko-cli precedent-list [--case-type X] [--court X] [--sort name|date] [--json] [--limit N]`
-- `legal-ko-cli precedent-search <query> [--json] [--limit N]`
+- `legal-ko-cli precedent-search <query> [--json] [--limit N]` — search by case name/number; auto-falls back to 법조인 search if query looks like a Korean name and no metadata matches
 - `legal-ko-cli precedent-show <id> [--json]`
 - `legal-ko-cli precedent-sections <id> [--json]`
 - `legal-ko-cli precedent-laws <id> [--json]` — cross-reference: find laws cited by a precedent (4-approach fallback)
 - `legal-ko-cli law-precedents <law_name> [--article X] [--json] [--limit N]` — reverse: find precedents citing a law
+- `legal-ko-cli precedent-persons <id> [--json]` — extract 법조인 (judges, attorneys, prosecutors) from a precedent
+- `legal-ko-cli precedent-search-person <name> [--role judge|attorney|prosecutor] [--case-type X] [--court X] [--json] [--limit N]` — search precedents by 법조인 name; uses cached person index (~/.cache/legal-ko/person_index.json) for instant repeat lookups, builds index concurrently on first run
 
 ## Key Design Decisions
 
 - **Data source**: Fetches from raw.githubusercontent.com (legalize-kr repo), not a local clone.
 - **Async pattern**: `#[tokio::main]`, background tasks for HTTP, `mpsc` channel for messages.
-- **Caching**: Individual law files cached to disk; metadata fetched fresh on startup.
+- **Caching**: Individual law files cached to disk; metadata fetched fresh on startup. Person index cached to `~/.cache/legal-ko/person_index.json` (7-day TTL, rebuilt if precedent count grows >5%).
+- **Person search**: Uses `futures::stream::buffer_unordered(50)` for concurrent document fetching during index build. First run scans all 123K+ precedents (~3 min); subsequent searches are instant (HashMap lookup from cached index).
 - **Vim keybindings**: j/k navigate, `/` search, Enter open, Esc back, n/p article nav, etc.
 - **Theme system**: 14 themes with persistence, `t` key cycles, semantic color fields.
 - **Core/TUI split**: Parser split — core has `strip_frontmatter` + `extract_articles` (pure text), TUI has `parse_law_markdown` (ratatui Lines with theme colors).

@@ -7,10 +7,12 @@ description: >-
   판결요지, 참조조문), and maps precedents to the laws they cite. USE FOR:
   find Korean precedent, search court ruling, 판례 찾기, 판례 검색, 관련 판례
   찾아줘, 대법원 판결, case law Korea, how did the court rule, 참조조문 찾기,
-  which precedents cite this law, 민법 제840조 판례, 형법 판례. DO NOT USE FOR:
-  legal advice or interpretation (always add a disclaimer), non-Korean
-  jurisdictions, searching statutes without precedent context (use
-  legal-ko-search for pure statute lookup), creating or editing files.
+  which precedents cite this law, 민법 제840조 판례, 형법 판례, find judge,
+  find attorney, 법조인 찾기, 판사 찾기, 변호사 찾기, 검사 찾기, cases by judge,
+  cases by lawyer. DO NOT USE FOR: legal advice or interpretation (always add a
+  disclaimer), non-Korean jurisdictions, searching statutes without precedent
+  context (use legal-ko-search for pure statute lookup), creating or editing
+  files.
 license: MIT
 metadata:
   author: legal-ko contributors
@@ -27,8 +29,8 @@ statutes using `legal-ko-cli`.
 | **Tool** | `legal-ko-cli` (installed to `~/bin` via `task install`) |
 | **Data source** | 123,000+ precedents from [precedent-kr](https://github.com/legalize-kr/precedent-kr) |
 | **Law data** | All Korean statutes from [legalize-kr](https://github.com/legalize-kr/legalize-kr) |
-| **Search method** | Case name / case number substring match |
-| **Output** | Precedent metadata, sections, statute cross-references |
+| **Search method** | Case name / case number substring match; auto-fallback to 법조인 name search |
+| **Output** | Precedent metadata, sections, statute cross-references, 법조인 (legal professional) extraction |
 | **Language** | Respond in the same language the user used (Korean or English) |
 
 ## Install
@@ -103,6 +105,8 @@ The file path is the same with `.md` appended.
 - User asks "관련 판례를 찾아줘", "대법원이 어떻게 판결했어?", "What did the court rule on...?"
 - User is viewing a law article and wants related precedents
 - User wants to trace the citation chain of a ruling (참조판례)
+- User asks about cases involving a specific judge, attorney, or prosecutor (법조인)
+- User wants to know which judges presided over a certain type of case
 
 ## Workflow
 
@@ -119,7 +123,9 @@ Parse the user's question to identify:
 
 > **CRITICAL:** `legal-ko-cli precedent-search` matches against **case names**
 > (사건명) and **case numbers** (사건번호). Case names are formal Korean legal
-> descriptions, not colloquial terms.
+> descriptions, not colloquial terms. If the query looks like a Korean name
+> (2-4 Hangul syllables) and returns no metadata matches, the CLI automatically
+> falls back to 법조인 (legal professional) search across document content.
 
 **Case name patterns** — Korean precedent case names follow standard legal
 terminology. Common patterns:
@@ -388,10 +394,12 @@ Use this to narrow searches to the right case type:
 | Command | Purpose | Key Flags |
 |---------|---------|-----------|
 | `legal-ko-cli precedent-list` | List precedents | `--case-type`, `--court`, `--sort`, `--json`, `--limit` |
-| `legal-ko-cli precedent-search <query>` | Search by case name / number | `--json`, `--limit` |
+| `legal-ko-cli precedent-search <query>` | Search by case name / number; auto-falls back to 법조인 search if query looks like a Korean name | `--json`, `--limit` |
 | `legal-ko-cli precedent-show <id>` | Read full precedent text | `--json` |
 | `legal-ko-cli precedent-sections <id>` | List sections in a precedent | `--json` |
 | `legal-ko-cli precedent-laws <id>` | Cross-reference: find laws cited by a precedent | `--json` |
+| `legal-ko-cli precedent-persons <id>` | Extract judges, attorneys, prosecutors from a precedent | `--json` |
+| `legal-ko-cli precedent-search-person <name>` | Search precedents by person name | `--role`, `--case-type`, `--court`, `--json`, `--limit` |
 | `legal-ko-cli law-precedents <law_name>` | Reverse: find precedents citing a law | `--article`, `--json`, `--limit` |
 
 ### Law Commands (for cross-referencing)
@@ -510,3 +518,89 @@ legal-ko-cli precedent-show "민사/대법원/..." --json
 legal-ko-cli search "근로기준" --json --limit 5
 legal-ko-cli articles "kr/근로기준법/법률" --json
 ```
+
+### Example 5: Finding cases by a specific judge
+
+**User:** "김선수 대법관이 참여한 민사 판례를 찾아줘."
+
+**Agent workflow:**
+
+```bash
+# Search by judge name, filtered by case type
+legal-ko-cli precedent-search-person "김선수" --role judge --case-type 민사 --json --limit 20
+
+# Read a specific result to see full details
+legal-ko-cli precedent-show "민사/대법원/2018다12345" --json
+
+# Extract all persons from that precedent
+legal-ko-cli precedent-persons "민사/대법원/2018다12345" --json
+```
+
+### Example 6: Finding cases by attorney
+
+**User:** "변호사 이름으로 판례를 검색할 수 있어?"
+
+**Agent workflow:**
+
+```bash
+# Search by attorney name across all case types
+legal-ko-cli precedent-search-person "홍길동" --role attorney --json --limit 30
+
+# Narrow to a specific court
+legal-ko-cli precedent-search-person "홍길동" --role attorney --court 대법원 --json --limit 20
+```
+
+> **Performance note:** 법조인 search uses a cached person index
+> (`~/.cache/legal-ko/person_index.json`). The first search builds the
+> index by scanning all 123K+ precedents concurrently (~3 min with 50
+> parallel fetches). Subsequent searches are instant (HashMap lookup).
+> The index is rebuilt automatically when it expires (7-day TTL) or when
+> the number of precedents grows >5%. Use `--case-type` and `--court`
+> flags to post-filter results after the instant lookup.
+
+## 법조인 (Legal Professional) Extraction Reference
+
+법조인 names (judges, attorneys, prosecutors) are extracted from the `판례내용`
+(full ruling text) section, not from metadata. The extraction handles these
+patterns:
+
+### Judges (판사/대법관)
+
+Found at the end of the ruling text:
+
+```
+대법관   이름(재판장) 이름(주심) 이름 이름
+판사   이름(재판장) 이름 이름
+```
+
+Qualifiers like `(재판장)` and `(주심)` are preserved in the output.
+
+### Attorneys (변호사)
+
+Found in representation lines:
+
+```
+소송대리인 변호사 이름
+(소송대리인 변호사 이름, 이름)
+【변 호 인】 변호사 이름
+```
+
+### Prosecutors (검사)
+
+Found in `【검    사】` lines (spacing inside 검사 varies):
+
+```
+【검    사】 이름 외 2인
+【검 사】 이름
+```
+
+### Output Format
+
+```json
+{
+  "persons": [
+    { "name": "이름", "role": "judge", "qualifier": "재판장" },
+    { "name": "이름", "role": "attorney", "qualifier": null },
+    { "name": "이름", "role": "prosecutor", "qualifier": null }
+  ]
+}

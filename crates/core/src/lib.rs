@@ -7,6 +7,7 @@ pub mod crossref;
 pub mod enrichment;
 pub mod models;
 pub mod parser;
+pub mod person_index;
 pub mod preferences;
 pub mod search;
 #[cfg(feature = "tts")]

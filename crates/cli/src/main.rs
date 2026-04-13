@@ -3,11 +3,13 @@ use clap::{Parser, Subcommand};
 use serde_json::json;
 
 use legal_ko_core::bookmarks::Bookmarks;
-use legal_ko_core::models::{self, LawEntry, PrecedentEntry, PrecedentSortOrder, SortOrder};
+use legal_ko_core::models::{
+    self, LawEntry, PersonRole, PrecedentEntry, PrecedentSortOrder, SortOrder,
+};
 use legal_ko_core::search::{self, Searcher};
 #[cfg(feature = "tts")]
 use legal_ko_core::tts;
-use legal_ko_core::{client, crossref, enrichment, parser, reqwest};
+use legal_ko_core::{client, crossref, enrichment, parser, person_index, reqwest};
 
 #[derive(Parser)]
 #[command(
@@ -217,6 +219,46 @@ enum Command {
         #[arg(long)]
         limit: Option<usize>,
     },
+    /// Extract persons (judges, attorneys, prosecutors) from a precedent
+    #[command(name = "precedent-persons")]
+    PrecedentPersons {
+        /// Precedent ID (e.g. "민사/대법원/2000다10048")
+        id: String,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Search precedents by attorney, judge, or prosecutor name.
+    ///
+    /// Fetches content for each matching precedent (pre-filtered by --case-type
+    /// / --court) and extracts person names. Requires network access per
+    /// candidate; use filters and --limit to keep it fast.
+    #[command(name = "precedent-search-person")]
+    PrecedentSearchPerson {
+        /// Person name to search for (Korean, e.g. "김길찬")
+        name: String,
+
+        /// Filter by role: judge, attorney, prosecutor (all if omitted)
+        #[arg(long)]
+        role: Option<String>,
+
+        /// Pre-filter by case type (사건종류) to narrow search
+        #[arg(long)]
+        case_type: Option<String>,
+
+        /// Pre-filter by court name (법원명) to narrow search
+        #[arg(long)]
+        court: Option<String>,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Maximum number of results to return (default 20)
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
 }
 
 #[tokio::main]
@@ -277,6 +319,15 @@ async fn main() -> Result<()> {
             json,
             limit,
         } => cmd_law_precedents(&client, &law_name, article, json, limit).await,
+        Command::PrecedentPersons { id, json } => cmd_precedent_persons(&client, &id, json).await,
+        Command::PrecedentSearchPerson {
+            name,
+            role,
+            case_type,
+            court,
+            json,
+            limit,
+        } => cmd_precedent_search_person(&client, &name, role, case_type, court, json, limit).await,
     }
 }
 
@@ -640,8 +691,25 @@ async fn cmd_precedent_search(
         .take(n)
         .collect();
 
-    print_precedent_entries(&results, as_json)?;
-    Ok(())
+    if !results.is_empty() {
+        print_precedent_entries(&results, as_json)?;
+        return Ok(());
+    }
+
+    // No metadata matches — if the query looks like a Korean name, fall back
+    // to 법조인 (legal professional) search across documents.
+    if !parser::is_korean_name(query) {
+        // Not a name-shaped query; just print empty results.
+        print_precedent_entries(&results, as_json)?;
+        return Ok(());
+    }
+
+    let max_results = limit.unwrap_or(20);
+    if !as_json {
+        eprintln!("No metadata matches for \"{query}\". Trying 법조인 search…");
+    }
+
+    search_persons_indexed(client, query, None, &entries, as_json, max_results).await
 }
 
 async fn cmd_precedent_show(client: &reqwest::Client, id: &str, as_json: bool) -> Result<()> {
@@ -916,6 +984,213 @@ async fn cmd_law_precedents(
             );
         }
     }
+    Ok(())
+}
+
+async fn cmd_precedent_persons(client: &reqwest::Client, id: &str, as_json: bool) -> Result<()> {
+    let path = format!("{id}.md");
+    let content = client::load_precedent_content(client, &path).await?;
+
+    let persons = parser::extract_persons(&content);
+
+    if as_json {
+        let mut entry = PrecedentEntry {
+            id: id.to_string(),
+            case_name: String::new(),
+            case_number: String::new(),
+            ruling_date: String::new(),
+            court_name: String::new(),
+            case_type: String::new(),
+            ruling_type: String::new(),
+            path,
+        };
+        parser::enrich_precedent_from_frontmatter(&mut entry, &content);
+
+        let items: Vec<_> = persons
+            .iter()
+            .map(|p| {
+                json!({
+                    "name": p.name,
+                    "role": p.role,
+                    "qualifier": p.qualifier,
+                })
+            })
+            .collect();
+        let obj = json!({
+            "id": entry.id,
+            "case_name": entry.case_name,
+            "persons": items,
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+    } else {
+        let fm = parser::parse_frontmatter(&content);
+        let case_name = fm.get("사건명").map_or("(unknown)", |v| v.as_str());
+        println!("# {id}");
+        println!("  {case_name}");
+        println!();
+        if persons.is_empty() {
+            println!("  (no persons found)");
+        } else {
+            for p in &persons {
+                let qual = p
+                    .qualifier
+                    .as_deref()
+                    .map_or(String::new(), |q| format!(" ({q})"));
+                println!("  [{role}] {name}{qual}", role = p.role, name = p.name);
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_precedent_search_person(
+    client: &reqwest::Client,
+    name: &str,
+    role_filter: Option<String>,
+    case_type_filter: Option<String>,
+    court_filter: Option<String>,
+    as_json: bool,
+    limit: usize,
+) -> Result<()> {
+    // Parse optional role filter.
+    let role: Option<PersonRole> = match role_filter.as_deref() {
+        Some("judge") => Some(PersonRole::Judge),
+        Some("attorney") => Some(PersonRole::Attorney),
+        Some("prosecutor") => Some(PersonRole::Prosecutor),
+        Some(other) => anyhow::bail!("Unknown role '{other}'. Use: judge, attorney, or prosecutor"),
+        None => None,
+    };
+
+    // Load metadata.
+    let entries = load_precedent_entries(client).await?;
+
+    if !as_json {
+        eprintln!(
+            "Searching for \"{name}\" across {} precedent(s)…",
+            entries.len()
+        );
+    }
+
+    let mut results =
+        person_index::search_persons(client, name, role.as_ref(), &entries, |scanned, total| {
+            if !as_json {
+                eprint!("\rBuilding person index: {scanned}/{total}");
+            }
+        })
+        .await;
+
+    if !as_json {
+        eprint!("\r\x1b[K");
+    }
+
+    // Post-filter by case type / court.
+    if case_type_filter.is_some() || court_filter.is_some() {
+        results.retain(|r| {
+            if let Some(ref ct) = case_type_filter
+                && &r.entry.case_type != ct
+            {
+                return false;
+            }
+            if let Some(ref court) = court_filter
+                && &r.entry.court_name != court
+            {
+                return false;
+            }
+            true
+        });
+    }
+
+    print_person_results(name, role.as_ref(), &results, as_json, limit)
+}
+
+/// Search for a person using the cached person index.
+///
+/// If no index exists, builds one concurrently (with progress output to
+/// stderr), caches it, and then searches. Subsequent calls are instant.
+async fn search_persons_indexed(
+    client: &reqwest::Client,
+    name: &str,
+    role: Option<&PersonRole>,
+    all_entries: &[PrecedentEntry],
+    as_json: bool,
+    max_results: usize,
+) -> Result<()> {
+    let results =
+        person_index::search_persons(client, name, role, all_entries, |scanned, total| {
+            if !as_json {
+                eprint!("\rBuilding person index: {scanned}/{total}");
+            }
+        })
+        .await;
+
+    if !as_json {
+        // Clear progress line
+        eprint!("\r\x1b[K");
+    }
+
+    print_person_results(name, role, &results, as_json, max_results)
+}
+
+/// Format and print person search results (shared by direct and fallback paths).
+fn print_person_results(
+    name: &str,
+    role: Option<&PersonRole>,
+    results: &[person_index::PersonSearchResult],
+    as_json: bool,
+    max_results: usize,
+) -> Result<()> {
+    let capped: Vec<_> = results.iter().take(max_results).collect();
+
+    if as_json {
+        let matches: Vec<serde_json::Value> = capped
+            .iter()
+            .map(|r| {
+                json!({
+                    "id": r.entry.id,
+                    "case_name": r.entry.case_name,
+                    "case_number": r.entry.case_number,
+                    "ruling_date": r.entry.ruling_date,
+                    "court_name": r.entry.court_name,
+                    "case_type": r.entry.case_type,
+                    "matched_roles": [{
+                        "role": r.role,
+                        "qualifier": r.qualifier,
+                    }],
+                })
+            })
+            .collect();
+        let obj = json!({
+            "query": name,
+            "role_filter": role.map(|r| r.to_string()),
+            "total_matches": results.len(),
+            "matches": matches,
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+    } else {
+        for r in &capped {
+            let q = r
+                .qualifier
+                .as_deref()
+                .map_or(String::new(), |q| format!("/{q}"));
+            let case = if r.entry.case_name.is_empty() {
+                &r.entry.case_number
+            } else {
+                &r.entry.case_name
+            };
+            println!(
+                "  {} — {} [{}] {} ({}) [{}{}]",
+                r.entry.id,
+                case,
+                r.entry.case_type,
+                r.entry.court_name,
+                r.entry.ruling_date,
+                r.role,
+                q,
+            );
+        }
+        eprintln!("Found {} match(es).", results.len());
+    }
+
     Ok(())
 }
 

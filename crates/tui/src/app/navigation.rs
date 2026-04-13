@@ -97,37 +97,40 @@ impl App {
     // ── Precedent list navigation ─────────────────────────────
 
     pub fn precedent_list_move_down(&mut self) {
-        if !self.precedent_filtered_indices.is_empty()
-            && self.precedent_list_selected
-                < self.precedent_filtered_indices.len().saturating_sub(1)
-        {
-            self.precedent_list_selected += 1;
+        let count = self.precedent_visible_count();
+        let cursor = self.precedent_cursor();
+        if count > 0 && cursor < count.saturating_sub(1) {
+            self.set_precedent_cursor(cursor + 1);
         }
     }
 
     pub fn precedent_list_move_up(&mut self) {
-        self.precedent_list_selected = self.precedent_list_selected.saturating_sub(1);
+        let cursor = self.precedent_cursor();
+        self.set_precedent_cursor(cursor.saturating_sub(1));
     }
 
     pub fn precedent_list_page_down(&mut self, page_size: usize) {
-        if self.precedent_filtered_indices.is_empty() {
+        let count = self.precedent_visible_count();
+        if count == 0 {
             return;
         }
-        self.precedent_list_selected = (self.precedent_list_selected + page_size)
-            .min(self.precedent_filtered_indices.len().saturating_sub(1));
+        let cursor = self.precedent_cursor();
+        self.set_precedent_cursor((cursor + page_size).min(count.saturating_sub(1)));
     }
 
     pub fn precedent_list_page_up(&mut self, page_size: usize) {
-        self.precedent_list_selected = self.precedent_list_selected.saturating_sub(page_size);
+        let cursor = self.precedent_cursor();
+        self.set_precedent_cursor(cursor.saturating_sub(page_size));
     }
 
     pub fn precedent_list_top(&mut self) {
-        self.precedent_list_selected = 0;
+        self.set_precedent_cursor(0);
     }
 
     pub fn precedent_list_bottom(&mut self) {
-        if !self.precedent_filtered_indices.is_empty() {
-            self.precedent_list_selected = self.precedent_filtered_indices.len().saturating_sub(1);
+        let count = self.precedent_visible_count();
+        if count > 0 {
+            self.set_precedent_cursor(count.saturating_sub(1));
         }
     }
 

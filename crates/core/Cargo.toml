@@ -12,6 +12,7 @@ tts = ["dep:rodio", "dep:libc", "dep:vibe-rust"]
 anyhow.workspace = true
 chrono.workspace = true
 dirs.workspace = true
+futures.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

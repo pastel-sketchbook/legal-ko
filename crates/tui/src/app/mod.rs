@@ -38,6 +38,10 @@ use tokio::sync::mpsc;
 use tracing::debug;
 use tracing::{error, info, warn};
 
+/// Minimum number of 법조인 search results before auto-releasing search input
+/// mode so the user can browse results while the background scan continues.
+const PERSON_SEARCH_BROWSE_THRESHOLD: usize = 20;
+
 // ── View / Mode enums ─────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,6 +124,16 @@ pub enum Message {
     PrecedentContentError {
         id: String,
         error: String,
+    },
+    /// A 법조인 (person) search found a match in a precedent.
+    PersonSearchHit {
+        /// Sequence number to discard stale results.
+        seq: u64,
+        entry: PrecedentEntry,
+    },
+    /// 법조인 search finished scanning all candidates.
+    PersonSearchDone {
+        seq: u64,
     },
     /// All synthesis and playback for a batch session is done.
     #[cfg(feature = "tts")]
@@ -288,6 +302,19 @@ pub struct App {
 
     /// Cross-reference matches for the currently viewed precedent (참조조문 → law).
     pub precedent_crossref_matches: Vec<LawMatch>,
+
+    // ── Person (법조인) search ─────────────────────────────────
+    /// Sequence counter to discard stale person search results.
+    pub person_search_seq: u64,
+    /// True while a background person search is in progress.
+    pub person_search_active: bool,
+    /// Entries discovered by the current person search (displayed in place of
+    /// the normal filtered list while active).
+    pub person_search_results: Vec<PrecedentEntry>,
+    /// Selected index within `person_search_results`.
+    pub person_search_selected: usize,
+    /// Scroll offset for person search results list.
+    pub person_search_offset: usize,
 }
 
 impl App {
@@ -395,6 +422,11 @@ impl App {
             precedent_detail_rendered_lines: Vec::new(),
             precedents_loaded: false,
             precedent_crossref_matches: Vec::new(),
+            person_search_seq: 0,
+            person_search_active: false,
+            person_search_results: Vec::new(),
+            person_search_selected: 0,
+            person_search_offset: 0,
         }
     }
 
@@ -1014,6 +1046,42 @@ end tell"#
                 self.status_message = Some(format!("Error loading {id}: {error}"));
                 error!(id, error, "Failed to load precedent");
             }
+            Message::PersonSearchHit { seq, entry } => {
+                if seq != self.person_search_seq {
+                    return; // stale result from a previous search
+                }
+                self.person_search_results.push(entry);
+                // Once we have enough results, exit search input mode so the
+                // user can browse while the background search continues.
+                if self.person_search_results.len() == PERSON_SEARCH_BROWSE_THRESHOLD
+                    && self.input_mode == InputMode::Search
+                {
+                    self.input_mode = InputMode::Normal;
+                }
+            }
+            Message::PersonSearchDone { seq } => {
+                if seq != self.person_search_seq {
+                    return;
+                }
+                self.person_search_active = false;
+                let count = self.person_search_results.len();
+                if count == 0 {
+                    self.status_message = Some(format!(
+                        "법조인 \"{}\" — 0 matches",
+                        self.precedent_search_query
+                    ));
+                } else {
+                    self.status_message = Some(format!(
+                        "법조인 \"{}\" — {count} match(es)",
+                        self.precedent_search_query
+                    ));
+                }
+                info!(
+                    query = %self.precedent_search_query,
+                    count,
+                    "Person search complete"
+                );
+            }
         }
     }
 
@@ -1271,9 +1339,46 @@ end tell"#
 
     /// Get the currently selected precedent entry (if any).
     pub fn selected_precedent(&self) -> Option<&PrecedentEntry> {
+        // When person search results are active, use those instead.
+        if !self.person_search_results.is_empty() {
+            return self.person_search_results.get(self.person_search_selected);
+        }
         self.precedent_filtered_indices
             .get(self.precedent_list_selected)
             .map(|&i| &self.all_precedents[i])
+    }
+
+    /// Whether the precedent list is currently showing 법조인 search results
+    /// rather than the normal filtered metadata list.
+    pub fn in_person_search_mode(&self) -> bool {
+        self.person_search_active || !self.person_search_results.is_empty()
+    }
+
+    /// Number of items in the currently visible precedent list (normal or person search).
+    pub fn precedent_visible_count(&self) -> usize {
+        if self.in_person_search_mode() {
+            self.person_search_results.len()
+        } else {
+            self.precedent_filtered_indices.len()
+        }
+    }
+
+    /// Current cursor position in the precedent list (normal or person search).
+    pub fn precedent_cursor(&self) -> usize {
+        if self.in_person_search_mode() {
+            self.person_search_selected
+        } else {
+            self.precedent_list_selected
+        }
+    }
+
+    /// Set cursor position in the precedent list (normal or person search).
+    pub fn set_precedent_cursor(&mut self, pos: usize) {
+        if self.in_person_search_mode() {
+            self.person_search_selected = pos;
+        } else {
+            self.precedent_list_selected = pos;
+        }
     }
 
     /// Open the selected precedent: fetch or load from cache.
@@ -1309,7 +1414,12 @@ end tell"#
     fn on_precedent_content_loaded(&mut self, id: &str, content: &str) {
         self.pending_precedent_id = None;
 
-        let entry = self.all_precedents.iter().find(|e| e.id == id).cloned();
+        let entry = self
+            .all_precedents
+            .iter()
+            .chain(self.person_search_results.iter())
+            .find(|e| e.id == id)
+            .cloned();
         let Some(mut entry) = entry else {
             warn!(id, "Precedent not found in entries");
             self.precedent_detail_loading = false;
