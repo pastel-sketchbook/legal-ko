@@ -26,7 +26,7 @@
 #
 # Environment:
 #   ZMD_CACHE_DIR   — cache root (default: ~/.cache/legal-ko/zmd)
-#   ZMD_BATCH_SIZE  — files per zmd update call (default: 100)
+#   ZMD_BATCH_SIZE  — files per zmd update call (default: 50)
 #
 set -euo pipefail
 
@@ -45,7 +45,7 @@ PRECEDENT_CLONE="$REPOS_DIR/precedent-kr"
 LAWS_STAGE="$STAGE_DIR/laws"
 PRECEDENT_STAGE="$STAGE_DIR/precedents"
 
-BATCH_SIZE="${ZMD_BATCH_SIZE:-100}"
+BATCH_SIZE="${ZMD_BATCH_SIZE:-50}"
 
 # Case types to include for precedents (add more here to expand scope)
 PRECEDENT_CASE_TYPES=("민사" "형사")
@@ -334,7 +334,7 @@ Commands:
 
 Configuration (env vars):
   ZMD_CACHE_DIR    Cache root (default: ~/.cache/legal-ko/zmd)
-  ZMD_BATCH_SIZE   Files per zmd update call (default: 100)
+  ZMD_BATCH_SIZE   Files per zmd update call (default: 50)
 
 Scope (edit arrays at top of script to expand):
   PRECEDENT_CASE_TYPES  Case types to include (default: 민사 형사)
