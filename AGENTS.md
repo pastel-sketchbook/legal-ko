@@ -44,7 +44,7 @@ cp target/release/legal-ko-cli ~/bin/legal-ko-cli
 Workspace deps: `ratatui`, `crossterm`, `tokio` (full), `reqwest` (json),
 `serde`/`serde_json`, `clap` (derive), `anyhow`, `tracing`,
 `tracing-subscriber`, `dirs`, `sha2`, `unicode-width`, `futures`, `rayon`,
-`meilisearch-sdk` (optional, behind `meilisearch` feature).
+`indicatif`, `meilisearch-sdk` (optional, behind `meilisearch` feature).
 
 ## Architecture
 

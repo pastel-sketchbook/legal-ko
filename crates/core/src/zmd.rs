@@ -29,8 +29,29 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
+use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use tracing::{info, warn};
+
+// ── Spinner helper ────────────────────────────────────────────
+
+/// Create a spinner on stderr with an elapsed-time display.
+///
+/// The spinner is hidden automatically when stderr is not a TTY
+/// (e.g. when `--json` output is piped), so callers don't need to
+/// check for JSON mode.
+fn spinner(msg: &str) -> ProgressBar {
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        // Invariant: template string is a compile-time literal with valid indicatif placeholders.
+        ProgressStyle::with_template("{spinner:.cyan} {msg} {elapsed}")
+            .expect("valid template")
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+    );
+    pb.set_message(msg.to_string());
+    pb.enable_steady_tick(std::time::Duration::from_millis(100));
+    pb
+}
 
 // ── Configuration ─────────────────────────────────────────────
 
@@ -199,6 +220,7 @@ fn clone_or_pull(url: &str, dir: &Path, name: &str) -> Result<()> {
             warn!(%name, %stderr, "git pull failed (non-fatal)");
         }
     } else {
+        let sp = spinner(&format!("Cloning {name} (shallow)"));
         info!(%name, %url, "Cloning (shallow)");
         if let Some(parent) = dir.parent() {
             std::fs::create_dir_all(parent)
@@ -209,6 +231,7 @@ fn clone_or_pull(url: &str, dir: &Path, name: &str) -> Result<()> {
             .arg(dir)
             .output()
             .with_context(|| format!("Failed to clone {name}"))?;
+        sp.finish_and_clear();
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             bail!("git clone failed for {name}: {stderr}");
@@ -375,9 +398,16 @@ where
     );
 
     if to_link.is_empty() {
-        info!("All files already staged — nothing to do");
-        // Still call zmd update once to catch any staged-but-not-indexed files.
+        info!(
+            total = files.len(),
+            "All {} files already staged — running zmd update to verify index",
+            files.len()
+        );
         let update = run_zmd_update()?;
+        info!(
+            secs = format!("{:.1}", update.elapsed_secs),
+            "Index verification complete — nothing new to index"
+        );
         on_batch(&BatchProgress {
             batch_num: 0,
             batch_new: 0,
@@ -493,11 +523,13 @@ fn register_collection(name: &str, path: &Path) -> Result<()> {
 
 /// Run `zmd update` and return timing + output.
 fn run_zmd_update() -> Result<UpdateResult> {
+    let sp = spinner("Running zmd update...");
     let start = Instant::now();
     let output = Command::new("zmd")
         .arg("update")
         .output()
         .context("Failed to run zmd update")?;
+    sp.finish_and_clear();
 
     let elapsed = start.elapsed().as_secs_f64();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
