@@ -147,14 +147,7 @@ impl ZmdDb {
             }
         }
 
-        conn.execute_batch(
-            "PRAGMA journal_mode = WAL;\
-             PRAGMA foreign_keys = ON;\
-             PRAGMA synchronous = NORMAL;\
-             PRAGMA temp_store = MEMORY;\
-             PRAGMA cache_size = -200000;\
-             PRAGMA mmap_size = 268435456;",
-        )?;
+        conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
         init_schema(&conn)?;
 
         Ok(Self { conn })
@@ -286,6 +279,15 @@ impl ZmdDb {
         if total == 0 {
             return Ok(IndexStats::default());
         }
+
+        // Bulk-load PRAGMAs — only set during indexing so query-only
+        // callers keep the lightweight defaults from open().
+        self.conn.execute_batch(
+            "PRAGMA synchronous = NORMAL;\
+             PRAGMA temp_store = MEMORY;\
+             PRAGMA cache_size = -200000;\
+             PRAGMA mmap_size = 268435456;",
+        )?;
 
         info!(collection, total, "starting native indexing");
 
@@ -502,7 +504,10 @@ impl ZmdDb {
                   FROM content_vectors;",
             )?;
         } else {
-            info!(collection, "skipping FTS/vector rebuild (no content changes)");
+            info!(
+                collection,
+                "skipping FTS/vector rebuild (no content changes)"
+            );
         }
 
         // ── Re-create FTS triggers for future incremental updates ─
@@ -531,6 +536,14 @@ impl ZmdDb {
                          (SELECT doc FROM content WHERE hash = new.hash)
                   WHERE new.active = 1;
               END;",
+        )?;
+
+        // Reset bulk-load PRAGMAs to conservative defaults.
+        self.conn.execute_batch(
+            "PRAGMA synchronous = FULL;\
+             PRAGMA temp_store = DEFAULT;\
+             PRAGMA cache_size = -2000;\
+             PRAGMA mmap_size = 0;",
         )?;
 
         info!(
