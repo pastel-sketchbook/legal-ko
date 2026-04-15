@@ -1,6 +1,6 @@
 //! Native zmd-compatible indexer.
 //!
-//! Replaces the external `zmd update` subprocess with a direct SQLite writer
+//! Replaces the external `zmd update` subprocess with a direct `SQLite` writer
 //! that produces an identical database.  All algorithms (SHA-256 hashing,
 //! title extraction, text normalization, FNV-384 embedding, boundary-aware
 //! chunking) are ported from the Zig reference implementation so that
@@ -11,7 +11,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use rayon::prelude::*;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 use tracing::{debug, info};
 
@@ -43,6 +43,12 @@ const TIMESTAMP: &str = "2024-01-01T00:00:00Z";
 
 /// Model name written for fallback FNV embeddings.
 const MODEL_NAME: &str = "fallback-fnv";
+
+/// FNV offset basis (FNV-1a 32-bit).
+const FNV_OFFSET_BASIS: u32 = 2_166_136_261;
+
+/// FNV prime (FNV-1a 32-bit).
+const FNV_PRIME: u32 = 16_777_619;
 
 // ── Public types ─────────────────────────────────────────────────
 
@@ -86,6 +92,12 @@ pub struct ZmdDb {
 
 impl ZmdDb {
     /// Open (or create) the database at `path` and initialise the schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the parent directory cannot be created, the
+    /// database cannot be opened, sqlite-vec fails to initialise, or
+    /// schema creation fails.
     pub fn open(path: &Path) -> Result<Self> {
         // Ensure parent directory exists.
         if let Some(parent) = path.parent() {
@@ -96,10 +108,14 @@ impl ZmdDb {
         let conn =
             Connection::open(path).with_context(|| format!("open database {}", path.display()))?;
 
-        // Load sqlite-vec extension (compiled from vendored C sources via build.rs).
+        // SAFETY: `sqlite3_vec_init` is compiled from vendored C sources via
+        // build.rs and linked into this binary.  `conn.handle()` returns a
+        // valid `*mut sqlite3` pointer that is cast to `*mut c_void` for the
+        // FFI boundary.  The remaining args are null (no error message buffer
+        // or API pointer needed when compiled as `SQLITE_CORE`).
         unsafe {
             let rc = sqlite3_vec_init(
-                conn.handle() as *mut std::ffi::c_void,
+                conn.handle().cast::<std::ffi::c_void>(),
                 std::ptr::null_mut(),
                 std::ptr::null(),
             );
@@ -125,6 +141,10 @@ impl ZmdDb {
     /// Collect the set of content hashes already present in the `content`
     /// table.  Used as a bloom filter so Rayon workers can skip
     /// chunking/embedding for unchanged files.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
     pub fn existing_hashes(&self) -> Result<std::collections::HashSet<String>> {
         let mut stmt = self.conn.prepare("SELECT hash FROM content")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
@@ -138,6 +158,10 @@ impl ZmdDb {
     /// Register (or update) a collection in `store_collections`.
     ///
     /// This is the native equivalent of `zmd collection add <name> <path>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the SQL statement fails.
     pub fn register_collection(&self, name: &str, path: &Path) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO store_collections (name, path, pattern) VALUES (?1, ?2, '**/*.md')",
@@ -147,13 +171,20 @@ impl ZmdDb {
     }
 
     /// Count the number of active documents in a collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
     pub fn document_count(&self, collection: &str) -> Result<usize> {
         let count: i64 = self.conn.query_row(
             "SELECT count(*) FROM documents WHERE collection = ?1 AND active = 1",
             params![collection],
             |row| row.get(0),
         )?;
-        Ok(count as usize)
+        // count(*) is always non-negative, safe to cast.
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let result = count.min(i64::from(u32::MAX)) as usize;
+        Ok(result)
     }
 
     // ── Writes (single-thread, called inside a transaction) ──────
@@ -180,7 +211,7 @@ impl ZmdDb {
         Ok(())
     }
 
-    /// Upsert a single embedding vector (content_vectors + vec0 index).
+    /// Upsert a single embedding vector (`content_vectors` + vec0 index).
     #[allow(dead_code)]
     fn upsert_vector(&self, hash: &str, seq: i64, embedding: &[f32]) -> Result<()> {
         let emb_json = embedding_to_json(embedding);
@@ -214,6 +245,11 @@ impl ZmdDb {
     ///
     /// The `progress_cb` callback is invoked after each document is written
     /// with `(current_count, total_count)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading hashes, the transaction, or any SQL
+    /// statement fails.
     pub fn index_collection<F>(
         &mut self,
         collection: &str,
@@ -271,13 +307,11 @@ impl ZmdDb {
 
         for (i, p) in processed.into_iter().enumerate() {
             // Insert content (dedup by hash).
-            let _content_changed = {
-                let doc_str = std::str::from_utf8(&p.content).unwrap_or("");
-                tx.execute(
-                    "INSERT OR IGNORE INTO content (hash, doc, created_at) VALUES (?1, ?2, ?3)",
-                    params![&p.hash, doc_str, TIMESTAMP],
-                )? > 0
-            };
+            let doc_str = std::str::from_utf8(&p.content).unwrap_or("");
+            tx.execute(
+                "INSERT OR IGNORE INTO content (hash, doc, created_at) VALUES (?1, ?2, ?3)",
+                params![&p.hash, doc_str, TIMESTAMP],
+            )?;
 
             // Insert document (triggers FTS5 sync).
             tx.execute(
@@ -292,17 +326,20 @@ impl ZmdDb {
                 debug_assert_eq!(chunks.len(), embeddings.len());
                 for (seq, emb) in embeddings.iter().enumerate() {
                     let emb_json = embedding_to_json(emb);
+                    // Chunk indices are always small (< 1000), safe to cast.
+                    #[allow(clippy::cast_possible_wrap)]
+                    let seq_i64 = seq as i64;
                     tx.execute(
                         "INSERT OR REPLACE INTO content_vectors (hash, seq, pos, model, embedding, embedded_at) VALUES (?1, ?2, 0, ?3, ?4, ?5)",
-                        params![&p.hash, seq as i64, MODEL_NAME, &emb_json, TIMESTAMP],
+                        params![&p.hash, seq_i64, MODEL_NAME, &emb_json, TIMESTAMP],
                     )?;
                     tx.execute(
                         "DELETE FROM content_vectors_idx WHERE hash = ?1 AND seq = ?2 AND pos = 0",
-                        params![&p.hash, seq as i64],
+                        params![&p.hash, seq_i64],
                     )?;
                     tx.execute(
                         "INSERT INTO content_vectors_idx(embedding, hash, model, seq, pos) VALUES(vec_f32(?1), ?2, ?3, ?4, 0)",
-                        params![&emb_json, &p.hash, MODEL_NAME, seq as i64],
+                        params![&emb_json, &p.hash, MODEL_NAME, seq_i64],
                     )?;
                 }
                 stats.new += 1;
@@ -329,7 +366,7 @@ impl ZmdDb {
 
 fn init_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
-        r#"
+        r"
         CREATE TABLE IF NOT EXISTS content (
             hash       TEXT PRIMARY KEY,
             doc        TEXT NOT NULL,
@@ -415,13 +452,13 @@ fn init_schema(conn: &Connection) -> Result<()> {
                    (SELECT doc FROM content WHERE hash = new.hash)
             WHERE new.active = 1;
         END;
-        "#,
+        ",
     )?;
 
     // vec0 virtual table must be created separately (not in execute_batch
     // because some SQLite wrappers split on `;` and fail on virtual table DDL).
     conn.execute_batch(
-        r#"
+        r"
         CREATE VIRTUAL TABLE IF NOT EXISTS content_vectors_idx USING vec0(
             embedding float[384],
             hash TEXT,
@@ -429,7 +466,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
             +seq INTEGER,
             +pos INTEGER
         );
-        "#,
+        ",
     )?;
 
     Ok(())
@@ -438,6 +475,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
 // ── SHA-256 ──────────────────────────────────────────────────────
 
 /// Compute the SHA-256 hex digest of `data` (64 lowercase hex chars).
+#[must_use]
 pub fn sha256_hex(data: &[u8]) -> String {
     let hash = Sha256::digest(data);
     hex_encode(&hash)
@@ -459,6 +497,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// 2. First markdown `# heading`
 /// 3. First non-blank line
 /// 4. `"Untitled"`
+#[must_use]
 pub fn extract_title(content: &[u8]) -> String {
     let text = std::str::from_utf8(content).unwrap_or("");
     let mut lines = text.lines();
@@ -523,6 +562,7 @@ pub fn extract_title(content: &[u8]) -> String {
 
 /// Collapse whitespace, truncate at `EMBEDDING_MAX_TEXT_LEN` bytes,
 /// and prepend `"passage: "`.
+#[must_use]
 pub fn format_doc_for_embedding(text: &[u8]) -> Vec<u8> {
     let normalized = normalize_embedding_text(text, EMBEDDING_MAX_TEXT_LEN);
     let mut out = Vec::with_capacity(b"passage: ".len() + normalized.len());
@@ -572,16 +612,24 @@ fn normalize_embedding_text(text: &[u8], max_len: usize) -> Vec<u8> {
 /// value = (h & 0xFFFF) as f32 / 65535.0 - 0.5
 /// ```
 /// Then L2-normalise the entire vector.
+#[must_use]
 pub fn fnv_embed(text: &[u8]) -> Vec<f32> {
     let mut embedding = vec![0.0f32; EMBEDDING_DIM];
 
     for (i, slot) in embedding.iter_mut().enumerate() {
-        let mut h: u32 = 2166136261;
+        let mut h: u32 = FNV_OFFSET_BASIS;
         for &c in text {
-            h = h.wrapping_add(c as u32).wrapping_mul(16777619);
+            h = h.wrapping_add(u32::from(c)).wrapping_mul(FNV_PRIME);
         }
-        h = h.wrapping_add(i as u32).wrapping_mul(16777619);
-        *slot = (h & 0xFFFF) as f32 / 65535.0 - 0.5;
+        // Dimension index is always < 384, fits in u32.
+        #[allow(clippy::cast_possible_truncation)]
+        let dim = i as u32;
+        h = h.wrapping_add(dim).wrapping_mul(FNV_PRIME);
+        // Only the low 16 bits are used; max value is 65535 which fits
+        // in f32 without precision loss.
+        #[allow(clippy::cast_precision_loss)]
+        let val = (h & 0xFFFF) as f32 / 65535.0 - 0.5;
+        *slot = val;
     }
 
     // L2 normalise.
@@ -600,6 +648,7 @@ pub fn fnv_embed(text: &[u8]) -> Vec<f32> {
 /// Split content into chunks of approximately `CHUNK_SIZE` bytes,
 /// using `find_best_cutoff` to find natural line boundaries.
 /// Matches zmd's `chunker.chunkDocument` exactly.
+#[must_use]
 pub fn chunk_document(content: &[u8]) -> Vec<Vec<u8>> {
     if content.len() <= CHUNK_SIZE {
         return vec![content.to_vec()];
@@ -635,7 +684,7 @@ pub fn chunk_document(content: &[u8]) -> Vec<Vec<u8>> {
 }
 
 /// Score newline positions within `[window_start, window_end)` for
-/// proximity to the midpoint, with a 3× boost for heading lines.
+/// proximity to the midpoint, with a 3x boost for heading lines.
 fn find_best_cutoff(content: &[u8], window_start: usize, window_end: usize) -> usize {
     if window_end <= window_start {
         return window_start;
@@ -656,7 +705,7 @@ fn find_best_cutoff(content: &[u8], window_start: usize, window_end: usize) -> u
                 line_start -= 1;
             }
             let line_len = pos - line_start;
-            if line_len < 3 || line_len > 200 {
+            if !(3..=200).contains(&line_len) {
                 pos += 1;
                 continue;
             }
@@ -664,6 +713,9 @@ fn find_best_cutoff(content: &[u8], window_start: usize, window_end: usize) -> u
             // Check if the line is a heading (starts with '#').
             let is_heading = line_start + 1 < content.len() && content[line_start + 1] == b'#';
 
+            // Positions are always within a single document chunk (< 4 KiB),
+            // so usize→f64 is lossless on all practical architectures.
+            #[allow(clippy::cast_precision_loss)]
             let dist_from_mid = (pos as f64 - window_start as f64)
                 - (window_end as f64 - window_start as f64) / 2.0;
             let mut score = 1.0 / (1.0 + dist_from_mid * dist_from_mid / 100.0);
@@ -702,12 +754,17 @@ fn embedding_to_json(embedding: &[f32]) -> String {
 // ── Helpers ──────────────────────────────────────────────────────
 
 /// Default zmd database path: `.qmd/data.db` under the current directory.
+#[must_use]
 pub fn default_db_path() -> std::path::PathBuf {
     std::path::PathBuf::from(".qmd/data.db")
 }
 
 /// Read all `.md` files from a directory (non-recursively for stage dirs,
 /// or recursively for repo dirs) and return `FileEntry` items.
+///
+/// # Errors
+///
+/// Returns an error if the directory cannot be read or a file cannot be read.
 pub fn read_staged_files(dir: &Path) -> Result<Vec<FileEntry>> {
     let mut entries = Vec::new();
     for entry in std::fs::read_dir(dir).with_context(|| format!("read dir {}", dir.display()))? {
@@ -731,6 +788,10 @@ pub fn read_staged_files(dir: &Path) -> Result<Vec<FileEntry>> {
 }
 
 /// Recursively read all `.md` files from a directory tree.
+///
+/// # Errors
+///
+/// Returns an error if a directory cannot be read or a file cannot be read.
 pub fn read_staged_files_recursive(dir: &Path) -> Result<Vec<FileEntry>> {
     let mut entries = Vec::new();
     walk_dir_recursive(dir, dir, &mut entries)?;
@@ -744,17 +805,17 @@ fn walk_dir_recursive(root: &Path, dir: &Path, entries: &mut Vec<FileEntry>) -> 
         let path = entry.path();
         if ft.is_dir() {
             walk_dir_recursive(root, &path, entries)?;
-        } else if ft.is_file() || ft.is_symlink() {
-            if path.extension().and_then(|e| e.to_str()) == Some("md") {
-                let rel = path
-                    .strip_prefix(root)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .to_string();
-                let content =
-                    std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-                entries.push(FileEntry { path: rel, content });
-            }
+        } else if (ft.is_file() || ft.is_symlink())
+            && path.extension().and_then(|e| e.to_str()) == Some("md")
+        {
+            let rel = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .to_string();
+            let content =
+                std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+            entries.push(FileEntry { path: rel, content });
         }
     }
     Ok(())

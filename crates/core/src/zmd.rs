@@ -367,14 +367,12 @@ fn scan_existing_paths(root: &Path) -> std::collections::HashSet<PathBuf> {
 }
 
 fn scan_existing_paths_inner(dir: &Path, set: &mut std::collections::HashSet<PathBuf>) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
     };
     for entry in entries.flatten() {
-        let ft = match entry.file_type() {
-            Ok(ft) => ft,
-            Err(_) => continue,
+        let Ok(ft) = entry.file_type() else {
+            continue;
         };
         if ft.is_dir() {
             scan_existing_paths_inner(&entry.path(), set);
@@ -426,7 +424,7 @@ fn hardlink_batch(batch: &[(PathBuf, PathBuf)]) -> usize {
 /// The native indexer:
 /// - Skips already-indexed content (SHA-256 dedup, same as zmd)
 /// - Processes files in parallel (Rayon) for hashing, chunking, embedding
-/// - Writes everything in a single SQLite transaction
+/// - Writes everything in a single `SQLite` transaction
 ///
 /// Already-staged files are skipped for linking (no re-linking needed).
 /// Safe to interrupt and re-run — picks up where it left off.
@@ -452,7 +450,11 @@ where
     );
 
     // ── Stage phase: hardlink all unstaged files at once ──────────
-    let newly_staged = if to_link.is_empty() { 0 } else { hardlink_batch(&to_link) };
+    let newly_staged = if to_link.is_empty() {
+        0
+    } else {
+        hardlink_batch(&to_link)
+    };
 
     // ── Index phase: native indexer over the entire stage dir ─────
     let db_path = crate::native_indexer::default_db_path();
@@ -531,9 +533,8 @@ fn walkdir(dir: &Path) -> usize {
     let mut count = 0;
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
-            let ft = match entry.file_type() {
-                Ok(ft) => ft,
-                Err(_) => continue,
+            let Ok(ft) = entry.file_type() else {
+                continue;
             };
             if ft.is_dir() {
                 count += walkdir(&entry.path());
@@ -717,7 +718,6 @@ where
 ///
 /// Returns an error if git operations fail or any indexing phase fails.
 pub fn index_all(cfg: &ZmdConfig) -> Result<()> {
-
     info!("Phase 1/2: Laws (법률 only)");
     let law_result = index_laws(cfg, |bp| {
         if bp.batch_num > 0 {
@@ -778,7 +778,6 @@ pub fn index_all(cfg: &ZmdConfig) -> Result<()> {
 ///
 /// Returns an error if git operations fail or any indexing phase fails.
 pub fn sync(cfg: &ZmdConfig) -> Result<()> {
-
     if cfg.laws_clone().join(".git").is_dir() {
         info!("Syncing laws...");
         let result = index_laws(cfg, |bp| {
