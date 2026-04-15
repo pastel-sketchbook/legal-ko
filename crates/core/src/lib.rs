@@ -6,6 +6,7 @@ pub mod context;
 pub mod crossref;
 pub mod enrichment;
 pub mod models;
+pub mod native_indexer;
 pub mod parser;
 pub mod person_index;
 pub mod preferences;

@@ -277,6 +277,10 @@ enum ZmdCommand {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+
+        /// Skip git pull (use existing repo as-is)
+        #[arg(long)]
+        skip_pull: bool,
     },
     /// Index precedent files into zmd
     Precedents {
@@ -291,12 +295,20 @@ enum ZmdCommand {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+
+        /// Skip git pull (use existing repo as-is)
+        #[arg(long)]
+        skip_pull: bool,
     },
     /// Run all phases: laws then precedents
     All {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+
+        /// Skip git pull (use existing repos as-is)
+        #[arg(long)]
+        skip_pull: bool,
     },
     /// Pull latest from upstream repos and re-index
     Sync {
@@ -1437,21 +1449,23 @@ async fn cmd_speak(
 
 fn cmd_zmd(cmd: ZmdCommand) -> Result<()> {
     match cmd {
-        ZmdCommand::Laws { json } => cmd_zmd_laws(json),
+        ZmdCommand::Laws { json, skip_pull } => cmd_zmd_laws(json, skip_pull),
         ZmdCommand::Precedents {
             case_type,
             court,
             json,
-        } => cmd_zmd_precedents(case_type, court, json),
-        ZmdCommand::All { json } => cmd_zmd_all(json),
+            skip_pull,
+        } => cmd_zmd_precedents(case_type, court, json, skip_pull),
+        ZmdCommand::All { json, skip_pull } => cmd_zmd_all(json, skip_pull),
         ZmdCommand::Sync { json } => cmd_zmd_sync(json),
         ZmdCommand::Status { json } => cmd_zmd_status(json),
         ZmdCommand::Reset { json } => cmd_zmd_reset(json),
     }
 }
 
-fn cmd_zmd_laws(as_json: bool) -> Result<()> {
-    let cfg = zmd::ZmdConfig::default_config()?;
+fn cmd_zmd_laws(as_json: bool, skip_pull: bool) -> Result<()> {
+    let mut cfg = zmd::ZmdConfig::default_config()?;
+    cfg.skip_pull = skip_pull;
     let result = zmd::index_laws(&cfg, |bp| {
         if !as_json && bp.batch_num > 0 {
             eprintln!(
@@ -1483,8 +1497,14 @@ fn cmd_zmd_laws(as_json: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_zmd_precedents(case_types: Vec<String>, courts: Vec<String>, as_json: bool) -> Result<()> {
+fn cmd_zmd_precedents(
+    case_types: Vec<String>,
+    courts: Vec<String>,
+    as_json: bool,
+    skip_pull: bool,
+) -> Result<()> {
     let mut cfg = zmd::ZmdConfig::default_config()?;
+    cfg.skip_pull = skip_pull;
     if !case_types.is_empty() {
         cfg.case_types = case_types;
     }
@@ -1542,8 +1562,9 @@ fn cmd_zmd_precedents(case_types: Vec<String>, courts: Vec<String>, as_json: boo
     Ok(())
 }
 
-fn cmd_zmd_all(as_json: bool) -> Result<()> {
-    let cfg = zmd::ZmdConfig::default_config()?;
+fn cmd_zmd_all(as_json: bool, skip_pull: bool) -> Result<()> {
+    let mut cfg = zmd::ZmdConfig::default_config()?;
+    cfg.skip_pull = skip_pull;
 
     if as_json {
         let law_result = zmd::index_laws(&cfg, |_| {})?;

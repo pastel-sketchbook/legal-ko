@@ -66,9 +66,10 @@ const DEFAULT_COURTS: &[&str] = &["대법원"];
 
 /// Default batch size: number of files to stage before each `zmd update` call.
 ///
-/// zmd indexes at ~60-100ms per *new* file (FTS + chunk + embed), so 300 files
-/// ≈ 20-30s per batch — enough for visible progress and safe interruption.
-const DEFAULT_BATCH_SIZE: usize = 300;
+/// Smaller batches reduce per-update scan overhead (zmd checks every staged
+/// file, not just the new ones) and give more frequent progress updates.
+/// 100 files ≈ 6-10s per batch on first index.
+const DEFAULT_BATCH_SIZE: usize = 100;
 
 // ── Public types ──────────────────────────────────────────────
 
@@ -83,6 +84,8 @@ pub struct ZmdConfig {
     pub courts: Vec<String>,
     /// Files to stage per `zmd update` call.
     pub batch_size: usize,
+    /// Skip `git pull` when the repo already exists (avoids network round-trip).
+    pub skip_pull: bool,
 }
 
 impl ZmdConfig {
@@ -115,6 +118,7 @@ impl ZmdConfig {
                 .collect(),
             courts: DEFAULT_COURTS.iter().map(|s| (*s).to_string()).collect(),
             batch_size,
+            skip_pull: false,
         })
     }
 
@@ -203,8 +207,15 @@ pub struct ZmdStatus {
 // ── Git helpers ───────────────────────────────────────────────
 
 /// Clone a repo (shallow, depth=1) or fast-forward pull if already cloned.
-fn clone_or_pull(url: &str, dir: &Path, name: &str) -> Result<()> {
+///
+/// When `skip_pull` is true and the repo already exists, the pull is
+/// skipped entirely — useful when the caller knows the repo is fresh.
+fn clone_or_pull(url: &str, dir: &Path, name: &str, skip_pull: bool) -> Result<()> {
     if dir.join(".git").is_dir() {
+        if skip_pull {
+            info!(%name, "Repo exists — skipping pull (--skip-pull)");
+            return Ok(());
+        }
         info!(%name, "Pulling latest");
         let output = Command::new("git")
             .args(["-C"])
@@ -272,6 +283,7 @@ fn collect_md_files(src_root: &Path, pattern: &FilePattern<'_>) -> Vec<PathBuf> 
             let kr_dir = src_root.join("kr");
             if let Ok(entries) = std::fs::read_dir(&kr_dir) {
                 for entry in entries.flatten() {
+                    // Each entry is a directory like kr/<law_name>/; check for 법률.md inside.
                     let law_file = entry.path().join("법률.md");
                     if law_file.is_file() {
                         files.push(law_file);
@@ -286,7 +298,10 @@ fn collect_md_files(src_root: &Path, pattern: &FilePattern<'_>) -> Vec<PathBuf> 
             {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) == Some("md") && path.is_file() {
+                    if path.extension().and_then(|e| e.to_str()) == Some("md")
+                        // Use file_type() from DirEntry (no extra stat on most platforms)
+                        && entry.file_type().is_ok_and(|ft| ft.is_file())
+                    {
                         files.push(path);
                     }
                 }
@@ -309,6 +324,10 @@ enum FilePattern<'a> {
 ///
 /// Returns `(already_staged_count, to_link)` where `to_link` is a vec
 /// of `(src, dst)` pairs for files that need hardlinking.
+///
+/// Scans the stage directory once (via `read_dir`) to build a set of
+/// existing filenames, then checks membership — O(1) per file instead
+/// of one `stat()` syscall per file.
 fn classify_files(
     files: &[PathBuf],
     src_root: &Path,
@@ -316,6 +335,10 @@ fn classify_files(
 ) -> Result<(usize, Vec<(PathBuf, PathBuf)>)> {
     std::fs::create_dir_all(stage_root)
         .with_context(|| format!("Failed to create stage dir {}", stage_root.display()))?;
+
+    // Build a set of all paths that already exist in the stage tree.
+    // We walk the stage directory once instead of calling stat() per file.
+    let existing = scan_existing_paths(stage_root);
 
     let mut to_link = Vec::new();
     let mut already_staged = 0usize;
@@ -326,7 +349,7 @@ fn classify_files(
             .with_context(|| format!("File {} not under {}", src.display(), src_root.display()))?;
         let dst = stage_root.join(rel);
 
-        if dst.exists() {
+        if existing.contains(dst.as_path()) {
             already_staged += 1;
         } else {
             to_link.push((src.clone(), dst));
@@ -334,6 +357,31 @@ fn classify_files(
     }
 
     Ok((already_staged, to_link))
+}
+
+/// Recursively scan a directory and collect all file paths into a `HashSet`.
+fn scan_existing_paths(root: &Path) -> std::collections::HashSet<PathBuf> {
+    let mut set = std::collections::HashSet::new();
+    scan_existing_paths_inner(root, &mut set);
+    set
+}
+
+fn scan_existing_paths_inner(dir: &Path, set: &mut std::collections::HashSet<PathBuf>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let ft = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => continue,
+        };
+        if ft.is_dir() {
+            scan_existing_paths_inner(&entry.path(), set);
+        } else if ft.is_file() {
+            set.insert(entry.path());
+        }
+    }
 }
 
 /// Hardlink a batch of `(src, dst)` pairs in parallel via Rayon.
@@ -368,20 +416,26 @@ fn hardlink_batch(batch: &[(PathBuf, PathBuf)]) -> usize {
     linked.load(Ordering::Relaxed)
 }
 
-/// Stage files in batches and call `zmd update` after each batch.
+/// Stage files and index using the native indexer.
 ///
-/// This is the core indexing loop.  For each batch of `batch_size` files:
-/// 1. Hardlink the batch into the stage directory (Rayon parallel).
-/// 2. Call `zmd update` (indexes only the newly staged files).
-/// 3. Report progress via `on_batch` callback.
+/// This is the core indexing loop.  All files are hardlinked into the
+/// stage directory (Rayon parallel), then the entire collection is
+/// indexed in a single pass using the native Rust indexer that writes
+/// directly to `.qmd/data.db`.
 ///
-/// Already-staged files are skipped entirely (no re-linking, no re-indexing).
+/// The native indexer:
+/// - Skips already-indexed content (SHA-256 dedup, same as zmd)
+/// - Processes files in parallel (Rayon) for hashing, chunking, embedding
+/// - Writes everything in a single SQLite transaction
+///
+/// Already-staged files are skipped for linking (no re-linking needed).
 /// Safe to interrupt and re-run — picks up where it left off.
 fn stage_and_index_batched<F>(
     files: &[PathBuf],
     src_root: &Path,
     stage_root: &Path,
-    batch_size: usize,
+    collection_name: &str,
+    _batch_size: usize,
     mut on_batch: F,
 ) -> Result<IndexResult>
 where
@@ -393,66 +447,75 @@ where
         total = files.len(),
         already_staged,
         to_stage = to_link.len(),
-        batch_size,
-        "Starting batched stage+index"
+        collection = collection_name,
+        "Starting native stage+index"
     );
 
-    if to_link.is_empty() {
-        info!(
-            total = files.len(),
-            "All {} files already staged — running zmd update to verify index",
-            files.len()
-        );
-        let update = run_zmd_update()?;
-        info!(
-            secs = format!("{:.1}", update.elapsed_secs),
-            "Index verification complete — nothing new to index"
-        );
-        on_batch(&BatchProgress {
-            batch_num: 0,
-            batch_new: 0,
-            total_staged: already_staged,
-            total_files: files.len(),
-            update_secs: update.elapsed_secs,
-            update_output: update.output,
-        });
-        return Ok(IndexResult {
-            total_files: files.len(),
-            already_staged,
-            newly_staged: 0,
-            batches: 1,
-            total_update_secs: update.elapsed_secs,
-        });
-    }
+    // ── Stage phase: hardlink all unstaged files at once ──────────
+    let newly_staged = if to_link.is_empty() { 0 } else { hardlink_batch(&to_link) };
 
-    let mut total_newly_staged = 0usize;
-    let mut total_update_secs = 0.0f64;
-    let mut batch_num = 0usize;
+    // ── Index phase: native indexer over the entire stage dir ─────
+    let db_path = crate::native_indexer::default_db_path();
+    let mut db = crate::native_indexer::ZmdDb::open(&db_path)
+        .context("Failed to open zmd database for native indexing")?;
 
-    for chunk in to_link.chunks(batch_size) {
-        batch_num += 1;
-        let linked = hardlink_batch(chunk);
-        total_newly_staged += linked;
+    // Register the collection (idempotent, same as `zmd collection add`).
+    db.register_collection(collection_name, stage_root)?;
 
-        let update = run_zmd_update()?;
-        total_update_secs += update.elapsed_secs;
+    // Read all staged .md files.
+    let file_entries = crate::native_indexer::read_staged_files(stage_root)
+        .context("Failed to read staged files")?;
+    let total_files = file_entries.len();
 
-        on_batch(&BatchProgress {
-            batch_num,
-            batch_new: linked,
-            total_staged: already_staged + total_newly_staged,
-            total_files: files.len(),
-            update_secs: update.elapsed_secs,
-            update_output: update.output,
-        });
-    }
+    info!(
+        collection = collection_name,
+        staged_files = total_files,
+        "Starting native indexing"
+    );
+
+    let start = Instant::now();
+
+    // Create a progress bar.
+    let pb = ProgressBar::new(total_files as u64);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.cyan} Indexing {msg} [{bar:30.cyan/dim}] {pos}/{len} {elapsed}",
+        )
+        .expect("valid template")
+        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+        .progress_chars("━╸─"),
+    );
+    pb.set_message(collection_name.to_string());
+    pb.enable_steady_tick(std::time::Duration::from_millis(100));
+
+    let stats = db.index_collection(collection_name, file_entries, |current, _total| {
+        pb.set_position(current as u64);
+    })?;
+
+    pb.finish_and_clear();
+    let elapsed = start.elapsed().as_secs_f64();
+
+    let output = format!(
+        "Indexed {} documents ({} new, {} unchanged) in {elapsed:.1}s",
+        stats.indexed, stats.new, stats.skipped
+    );
+    info!(collection = collection_name, %output, "Native indexing complete");
+
+    on_batch(&BatchProgress {
+        batch_num: 1,
+        batch_new: stats.new,
+        total_staged: already_staged + newly_staged,
+        total_files: files.len(),
+        update_secs: elapsed,
+        update_output: output,
+    });
 
     Ok(IndexResult {
         total_files: files.len(),
         already_staged,
-        newly_staged: total_newly_staged,
-        batches: batch_num,
-        total_update_secs,
+        newly_staged,
+        batches: 1,
+        total_update_secs: elapsed,
     })
 }
 
@@ -468,10 +531,15 @@ fn walkdir(dir: &Path) -> usize {
     let mut count = 0;
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                count += walkdir(&path);
-            } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
+            let ft = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            if ft.is_dir() {
+                count += walkdir(&entry.path());
+            } else if ft.is_file()
+                && entry.path().extension().and_then(|e| e.to_str()) == Some("md")
+            {
                 count += 1;
             }
         }
@@ -481,87 +549,17 @@ fn walkdir(dir: &Path) -> usize {
 
 // ── zmd CLI wrappers ──────────────────────────────────────────
 
-/// Check if `zmd` is available on PATH.
-fn zmd_available() -> bool {
-    Command::new("zmd")
+/// Check that `zmd` is on PATH; bail with a clear message if not.
+fn ensure_zmd() -> Result<()> {
+    let ok = Command::new("zmd")
         .arg("version")
         .output()
         .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-/// Register a collection with zmd (idempotent: skips if already registered).
-fn register_collection(name: &str, path: &Path) -> Result<()> {
-    let list_output = Command::new("zmd")
-        .args(["collection", "list"])
-        .output()
-        .context("Failed to run zmd collection list")?;
-    let list_text = String::from_utf8_lossy(&list_output.stdout);
-
-    let pattern = format!("{name}:");
-    if list_text
-        .lines()
-        .any(|line| line.trim_start().starts_with(&pattern))
-    {
-        info!(%name, "Collection already registered");
-        return Ok(());
-    }
-
-    info!(%name, path = %path.display(), "Registering collection");
-    let output = Command::new("zmd")
-        .args(["collection", "add", name])
-        .arg(path)
-        .output()
-        .context("Failed to run zmd collection add")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("zmd collection add failed: {stderr}");
+        .unwrap_or(false);
+    if !ok {
+        bail!("zmd is not installed or not on PATH");
     }
     Ok(())
-}
-
-/// Run `zmd update` and return timing + output.
-fn run_zmd_update() -> Result<UpdateResult> {
-    let sp = spinner("Running zmd update...");
-    let start = Instant::now();
-    let output = Command::new("zmd")
-        .arg("update")
-        .output()
-        .context("Failed to run zmd update")?;
-    sp.finish_and_clear();
-
-    let elapsed = start.elapsed().as_secs_f64();
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    if !output.status.success() {
-        warn!(stderr = %stderr, "zmd update reported errors (non-fatal)");
-    }
-
-    let combined = if stderr.is_empty() {
-        stdout
-    } else if stdout.is_empty() {
-        stderr
-    } else {
-        format!("{stdout}\n{stderr}")
-    };
-
-    info!(
-        elapsed_secs = format!("{elapsed:.1}"),
-        "zmd update complete"
-    );
-    Ok(UpdateResult {
-        elapsed_secs: elapsed,
-        output: combined,
-    })
-}
-
-/// Result of a single `zmd update` call.
-#[derive(Debug, Clone)]
-struct UpdateResult {
-    elapsed_secs: f64,
-    output: String,
 }
 
 /// Run `zmd status` and return the raw output.
@@ -583,10 +581,11 @@ fn run_zmd_collection_list() -> Result<String> {
 }
 
 /// Remove a zmd collection by name (idempotent).
-fn remove_collection(name: &str) -> Result<()> {
-    let list = run_zmd_collection_list().unwrap_or_default();
+///
+/// Accepts a pre-fetched `zmd collection list` output.
+fn remove_collection(name: &str, cached_list: &str) -> Result<()> {
     let pattern = format!("{name}:");
-    if !list
+    if !cached_list
         .lines()
         .any(|line| line.trim_start().starts_with(&pattern))
     {
@@ -629,21 +628,21 @@ pub fn index_laws<F>(cfg: &ZmdConfig, on_batch: F) -> Result<IndexResult>
 where
     F: FnMut(&BatchProgress),
 {
-    if !zmd_available() {
-        bail!("zmd is not installed or not on PATH");
-    }
-
-    clone_or_pull(LAWS_REPO, &cfg.laws_clone(), "legalize-kr (laws)")?;
+    clone_or_pull(
+        LAWS_REPO,
+        &cfg.laws_clone(),
+        "legalize-kr (laws)",
+        cfg.skip_pull,
+    )?;
 
     let files = collect_md_files(&cfg.laws_clone(), &FilePattern::Laws);
     info!(count = files.len(), "Found 법률.md files");
-
-    register_collection("laws", &cfg.laws_stage())?;
 
     stage_and_index_batched(
         &files,
         &cfg.laws_clone(),
         &cfg.laws_stage(),
+        "laws",
         cfg.batch_size,
         on_batch,
     )
@@ -670,17 +669,12 @@ where
     F: FnMut(&str, &str, &BatchProgress),
     G: FnMut(&str, &str, usize),
 {
-    if !zmd_available() {
-        bail!("zmd is not installed or not on PATH");
-    }
-
     clone_or_pull(
         PRECEDENT_REPO,
         &cfg.precedent_clone(),
         "precedent-kr (precedents)",
+        cfg.skip_pull,
     )?;
-
-    register_collection("precedents", &cfg.precedent_stage())?;
 
     let mut results = Vec::new();
 
@@ -704,6 +698,7 @@ where
                 &files,
                 &cfg.precedent_clone(),
                 &cfg.precedent_stage(),
+                "precedents",
                 cfg.batch_size,
                 |bp| on_batch(&ct, &co, bp),
             )?;
@@ -720,11 +715,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error if zmd is not installed or any indexing phase fails.
+/// Returns an error if git operations fail or any indexing phase fails.
 pub fn index_all(cfg: &ZmdConfig) -> Result<()> {
-    if !zmd_available() {
-        bail!("zmd is not installed or not on PATH");
-    }
 
     info!("Phase 1/2: Laws (법률 only)");
     let law_result = index_laws(cfg, |bp| {
@@ -784,11 +776,8 @@ pub fn index_all(cfg: &ZmdConfig) -> Result<()> {
 ///
 /// # Errors
 ///
-/// Returns an error if zmd is not installed or any indexing phase fails.
+/// Returns an error if git operations fail or any indexing phase fails.
 pub fn sync(cfg: &ZmdConfig) -> Result<()> {
-    if !zmd_available() {
-        bail!("zmd is not installed or not on PATH");
-    }
 
     if cfg.laws_clone().join(".git").is_dir() {
         info!("Syncing laws...");
@@ -876,14 +865,13 @@ pub fn status(cfg: &ZmdConfig) -> Result<ZmdStatus> {
 ///
 /// Returns an error if zmd is not installed or cleanup/removal fails.
 pub fn reset(cfg: &ZmdConfig) -> Result<()> {
-    if !zmd_available() {
-        bail!("zmd is not installed or not on PATH");
-    }
+    ensure_zmd()?;
 
     info!("Removing zmd collections and staged data");
 
-    remove_collection("laws")?;
-    remove_collection("precedents")?;
+    let collection_list = run_zmd_collection_list().unwrap_or_default();
+    remove_collection("laws", &collection_list)?;
+    remove_collection("precedents", &collection_list)?;
 
     let stage = cfg.stage_dir();
     if stage.is_dir() {
@@ -892,7 +880,6 @@ pub fn reset(cfg: &ZmdConfig) -> Result<()> {
     }
 
     run_zmd_cleanup();
-    let _ = run_zmd_update();
 
     info!(
         repos = %cfg.repos_dir().display(),
