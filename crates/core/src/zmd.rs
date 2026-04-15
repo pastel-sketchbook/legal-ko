@@ -462,7 +462,8 @@ fn scan_existing_paths_inner(dir: &Path, set: &mut std::collections::HashSet<Pat
 /// Hardlink a batch of `(src, dst)` pairs in parallel via Rayon.
 ///
 /// Creates necessary parent directories first (sequential), then
-/// hardlinks all files in parallel.  Returns count of successful links.
+/// hardlinks all files in parallel, replacing stale staged files when
+/// needed. Returns count of successful links.
 fn hardlink_batch(batch: &[(PathBuf, PathBuf)]) -> usize {
     // Collect unique parent dirs needed.
     let mut dirs_needed = std::collections::HashSet::new();
@@ -480,7 +481,7 @@ fn hardlink_batch(batch: &[(PathBuf, PathBuf)]) -> usize {
     let linked = AtomicUsize::new(0);
     batch
         .par_iter()
-        .for_each(|(src, dst)| match std::fs::hard_link(src, dst) {
+        .for_each(|(src, dst)| match replace_hard_link(src, dst) {
             Ok(()) => {
                 linked.fetch_add(1, Ordering::Relaxed);
             }
@@ -489,6 +490,17 @@ fn hardlink_batch(batch: &[(PathBuf, PathBuf)]) -> usize {
             }
         });
     linked.load(Ordering::Relaxed)
+}
+
+fn replace_hard_link(src: &Path, dst: &Path) -> std::io::Result<()> {
+    match std::fs::hard_link(src, dst) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            std::fs::remove_file(dst)?;
+            std::fs::hard_link(src, dst)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Stage files and index using the native indexer.
@@ -1072,6 +1084,24 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(2));
         std::fs::write(&src, "two two").unwrap();
         assert!(!paths_match(&src, &dst));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_replace_hard_link_replaces_existing_file() {
+        let root = std::env::temp_dir().join(format!("zmd_replace_link_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let src = root.join("src.md");
+        let dst = root.join("dst.md");
+        std::fs::write(&src, "fresh").unwrap();
+        std::fs::write(&dst, "stale").unwrap();
+
+        replace_hard_link(&src, &dst).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&dst).unwrap(), "fresh");
 
         let _ = std::fs::remove_dir_all(&root);
     }
