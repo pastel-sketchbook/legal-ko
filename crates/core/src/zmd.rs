@@ -191,12 +191,12 @@ fn clone_or_pull(url: &str, dir: &Path, name: &str) -> Result<()> {
             .args(["pull", "--ff-only", "--depth", "1"])
             .output()
             .with_context(|| format!("Failed to run git pull for {name}"))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            warn!(%name, %stderr, "git pull failed (non-fatal)");
-        } else {
+        if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             info!(%name, result = stdout.trim(), "Pull complete");
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!(%name, %stderr, "git pull failed (non-fatal)");
         }
     } else {
         info!(%name, %url, "Cloning (shallow)");
@@ -242,9 +242,9 @@ fn repo_commit_summary(dir: &Path) -> Option<String> {
 ///
 /// For laws: finds `**/법률.md` up to depth 2 under `kr/`.
 /// For precedents: finds `*.md` at depth 1 under each `case_type/court/`.
-fn collect_md_files(src_root: &Path, pattern: FilePattern<'_>) -> Vec<PathBuf> {
+fn collect_md_files(src_root: &Path, pattern: &FilePattern<'_>) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    match pattern {
+    match *pattern {
         FilePattern::Laws => {
             let kr_dir = src_root.join("kr");
             if let Ok(entries) = std::fs::read_dir(&kr_dir) {
@@ -574,9 +574,8 @@ fn remove_collection(name: &str) -> Result<()> {
 }
 
 /// Run `zmd cleanup` (remove orphaned entries).
-fn run_zmd_cleanup() -> Result<()> {
+fn run_zmd_cleanup() {
     let _ = Command::new("zmd").arg("cleanup").output();
-    Ok(())
 }
 
 // ── Public API ────────────────────────────────────────────────
@@ -589,6 +588,11 @@ fn run_zmd_cleanup() -> Result<()> {
 /// 4. Call `zmd update` after each batch.
 ///
 /// The `on_batch` callback fires after each batch completes.
+///
+/// # Errors
+///
+/// Returns an error if zmd is not installed, git operations fail, or
+/// staging/indexing encounters an I/O error.
 pub fn index_laws<F>(cfg: &ZmdConfig, on_batch: F) -> Result<IndexResult>
 where
     F: FnMut(&BatchProgress),
@@ -599,7 +603,7 @@ where
 
     clone_or_pull(LAWS_REPO, &cfg.laws_clone(), "legalize-kr (laws)")?;
 
-    let files = collect_md_files(&cfg.laws_clone(), FilePattern::Laws);
+    let files = collect_md_files(&cfg.laws_clone(), &FilePattern::Laws);
     info!(count = files.len(), "Found 법률.md files");
 
     register_collection("laws", &cfg.laws_stage())?;
@@ -616,10 +620,15 @@ where
 /// Index precedent files into zmd.
 ///
 /// 1. Clone/pull the precedent-kr repo.
-/// 2. For each case_type × court, find `.md` files and stage in batches.
+/// 2. For each `case_type` × court, find `.md` files and stage in batches.
 /// 3. Call `zmd update` after each batch.
 ///
 /// `on_batch` fires after each batch. `on_court` fires when a new court starts.
+///
+/// # Errors
+///
+/// Returns an error if zmd is not installed, git operations fail, or
+/// staging/indexing encounters an I/O error.
 pub fn index_precedents<F, G>(
     cfg: &ZmdConfig,
     mut on_court: G,
@@ -647,7 +656,7 @@ where
         for court in &cfg.courts {
             let files = collect_md_files(
                 &cfg.precedent_clone(),
-                FilePattern::Precedents { case_type, court },
+                &FilePattern::Precedents { case_type, court },
             );
 
             if files.is_empty() {
@@ -676,39 +685,51 @@ where
 }
 
 /// Run both laws and precedents indexing.
+///
+/// # Errors
+///
+/// Returns an error if zmd is not installed or any indexing phase fails.
 pub fn index_all(cfg: &ZmdConfig) -> Result<()> {
     if !zmd_available() {
         bail!("zmd is not installed or not on PATH");
     }
 
-    eprintln!("Phase 1/2: Laws (법률 only)");
+    info!("Phase 1/2: Laws (법률 only)");
     let law_result = index_laws(cfg, |bp| {
         if bp.batch_num > 0 {
-            eprintln!(
-                "  batch {}: +{} files ({} staged) — {:.0}s",
-                bp.batch_num, bp.batch_new, bp.total_staged, bp.update_secs,
+            info!(
+                batch = bp.batch_num,
+                new = bp.batch_new,
+                staged = bp.total_staged,
+                secs = format!("{:.0}", bp.update_secs),
+                "laws batch complete",
             );
         }
     })?;
-    eprintln!(
-        "  Laws done: {} total, {} new, {} existing — {:.0}s",
-        law_result.total_files,
-        law_result.newly_staged,
-        law_result.already_staged,
-        law_result.total_update_secs,
+    info!(
+        total = law_result.total_files,
+        new = law_result.newly_staged,
+        existing = law_result.already_staged,
+        secs = format!("{:.0}", law_result.total_update_secs),
+        "Laws done",
     );
 
-    eprintln!("\nPhase 2/2: Precedents");
+    info!("Phase 2/2: Precedents");
     let prec_results = index_precedents(
         cfg,
         |ct, court, count| {
-            eprintln!("  {ct}/{court}: {count} files");
+            info!(%ct, %court, count, "precedent court");
         },
         |ct, court, bp| {
             if bp.batch_num > 0 {
-                eprintln!(
-                    "    {ct}/{court} batch {}: +{} files ({} staged) — {:.0}s",
-                    bp.batch_num, bp.batch_new, bp.total_staged, bp.update_secs,
+                info!(
+                    %ct,
+                    %court,
+                    batch = bp.batch_num,
+                    new = bp.batch_new,
+                    staged = bp.total_staged,
+                    secs = format!("{:.0}", bp.update_secs),
+                    "precedent batch complete",
                 );
             }
         },
@@ -717,56 +738,80 @@ pub fn index_all(cfg: &ZmdConfig) -> Result<()> {
     let total_new: usize = prec_results.iter().map(|(_, r)| r.newly_staged).sum();
     let total_files: usize = prec_results.iter().map(|(_, r)| r.total_files).sum();
     let total_secs: f64 = prec_results.iter().map(|(_, r)| r.total_update_secs).sum();
-    eprintln!("  Precedents done: {total_files} files, {total_new} new — {total_secs:.0}s",);
+    info!(
+        total_files,
+        total_new,
+        secs = format!("{total_secs:.0}"),
+        "Precedents done",
+    );
 
     Ok(())
 }
 
 /// Pull latest from upstream repos and re-index.
+///
+/// # Errors
+///
+/// Returns an error if zmd is not installed or any indexing phase fails.
 pub fn sync(cfg: &ZmdConfig) -> Result<()> {
     if !zmd_available() {
         bail!("zmd is not installed or not on PATH");
     }
 
     if cfg.laws_clone().join(".git").is_dir() {
-        eprintln!("Syncing laws...");
+        info!("Syncing laws...");
         let result = index_laws(cfg, |bp| {
             if bp.batch_new > 0 {
-                eprintln!(
-                    "  batch {}: +{} new — {:.0}s",
-                    bp.batch_num, bp.batch_new, bp.update_secs,
+                info!(
+                    batch = bp.batch_num,
+                    new = bp.batch_new,
+                    secs = format!("{:.0}", bp.update_secs),
+                    "sync laws batch",
                 );
             }
         })?;
-        eprintln!(
-            "  Laws: {} new — {:.0}s",
-            result.newly_staged, result.total_update_secs
+        info!(
+            new = result.newly_staged,
+            secs = format!("{:.0}", result.total_update_secs),
+            "Laws sync complete",
         );
     }
 
     if cfg.precedent_clone().join(".git").is_dir() {
-        eprintln!("Syncing precedents...");
+        info!("Syncing precedents...");
         let results = index_precedents(
             cfg,
             |_, _, _| {},
             |ct, court, bp| {
                 if bp.batch_new > 0 {
-                    eprintln!(
-                        "  {ct}/{court} batch {}: +{} new — {:.0}s",
-                        bp.batch_num, bp.batch_new, bp.update_secs,
+                    info!(
+                        %ct,
+                        %court,
+                        batch = bp.batch_num,
+                        new = bp.batch_new,
+                        secs = format!("{:.0}", bp.update_secs),
+                        "sync precedent batch",
                     );
                 }
             },
         )?;
         let total_new: usize = results.iter().map(|(_, r)| r.newly_staged).sum();
         let total_secs: f64 = results.iter().map(|(_, r)| r.total_update_secs).sum();
-        eprintln!("  Precedents: {total_new} new — {total_secs:.0}s");
+        info!(
+            total_new,
+            secs = format!("{total_secs:.0}"),
+            "Precedents sync complete",
+        );
     }
 
     Ok(())
 }
 
 /// Gather status information about repos, staged files, and zmd state.
+///
+/// # Errors
+///
+/// Returns an error if zmd CLI commands fail unexpectedly.
 pub fn status(cfg: &ZmdConfig) -> Result<ZmdStatus> {
     let mut precedent_staged = Vec::new();
     let mut precedent_total = 0usize;
@@ -794,6 +839,10 @@ pub fn status(cfg: &ZmdConfig) -> Result<ZmdStatus> {
 }
 
 /// Remove all zmd collections and staged data.  Preserves repo clones.
+///
+/// # Errors
+///
+/// Returns an error if zmd is not installed or cleanup/removal fails.
 pub fn reset(cfg: &ZmdConfig) -> Result<()> {
     if !zmd_available() {
         bail!("zmd is not installed or not on PATH");
@@ -810,7 +859,7 @@ pub fn reset(cfg: &ZmdConfig) -> Result<()> {
             .with_context(|| format!("Failed to remove {}", stage.display()))?;
     }
 
-    run_zmd_cleanup()?;
+    run_zmd_cleanup();
     let _ = run_zmd_update();
 
     info!(
@@ -826,7 +875,7 @@ mod tests {
 
     #[test]
     fn test_file_pattern_laws() {
-        let files = collect_md_files(Path::new("/nonexistent"), FilePattern::Laws);
+        let files = collect_md_files(Path::new("/nonexistent"), &FilePattern::Laws);
         assert!(files.is_empty());
     }
 
@@ -834,7 +883,7 @@ mod tests {
     fn test_file_pattern_precedents() {
         let files = collect_md_files(
             Path::new("/nonexistent"),
-            FilePattern::Precedents {
+            &FilePattern::Precedents {
                 case_type: "민사",
                 court: "대법원",
             },

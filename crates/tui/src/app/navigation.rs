@@ -176,6 +176,7 @@ impl App {
                 return;
             }
         }
+        // Invariant: `precedent_detail_sections` is non-empty (checked by early return at line 170).
         self.precedent_detail_scroll = self
             .precedent_detail_sections
             .last()

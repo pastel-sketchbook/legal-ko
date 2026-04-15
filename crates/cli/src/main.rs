@@ -1537,10 +1537,7 @@ fn cmd_zmd_precedents(case_types: Vec<String>, courts: Vec<String>, as_json: boo
         let total_new: usize = results.iter().map(|(_, r)| r.newly_staged).sum();
         let total_files: usize = results.iter().map(|(_, r)| r.total_files).sum();
         let total_secs: f64 = results.iter().map(|(_, r)| r.total_update_secs).sum();
-        println!(
-            "Precedents: {} total, {} new — {:.0}s",
-            total_files, total_new, total_secs,
-        );
+        println!("Precedents: {total_files} total, {total_new} new — {total_secs:.0}s",);
     }
     Ok(())
 }
@@ -1641,13 +1638,13 @@ fn cmd_zmd_status(as_json: bool) -> Result<()> {
         } else {
             println!("  laws: not staged");
         }
-        if !s.precedent_staged.is_empty() {
+        if s.precedent_staged.is_empty() {
+            println!("  precedents: not staged");
+        } else {
             for (label, count) in &s.precedent_staged {
                 println!("  precedents/{label}: {count} files");
             }
             println!("  precedents total: {} files", s.precedent_total);
-        } else {
-            println!("  precedents: not staged");
         }
         println!();
         println!("=== zmd ===");
