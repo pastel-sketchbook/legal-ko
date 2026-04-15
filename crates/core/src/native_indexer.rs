@@ -70,6 +70,9 @@ struct Processed {
     chunks: Option<Vec<Vec<u8>>>,
     /// Parallel-computed embeddings, one per chunk.
     embeddings: Option<Vec<Vec<f32>>>,
+    /// `true` when the document row already maps this path to the same
+    /// content hash — no SQL writes needed at all.
+    doc_unchanged: bool,
 }
 
 /// Statistics returned after an indexing run.
@@ -155,6 +158,27 @@ impl ZmdDb {
         Ok(set)
     }
 
+    /// Snapshot existing `(collection, path) → hash` mappings for a
+    /// collection.  Used to skip `INSERT OR REPLACE` for documents whose
+    /// content hasn't changed — avoiding the costly FTS5 trigger storm.
+    fn existing_doc_hashes(
+        &self,
+        collection: &str,
+    ) -> Result<std::collections::HashMap<String, String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path, hash FROM documents WHERE collection = ?1 AND active = 1")?;
+        let rows = stmt.query_map(params![collection], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut map = std::collections::HashMap::new();
+        for pair in rows {
+            let (path, hash) = pair?;
+            map.insert(path, hash);
+        }
+        Ok(map)
+    }
+
     /// Register (or update) a collection in `store_collections`.
     ///
     /// This is the native equivalent of `zmd collection add <name> <path>`.
@@ -187,79 +211,33 @@ impl ZmdDb {
         Ok(result)
     }
 
-    // ── Writes (single-thread, called inside a transaction) ──────
-
-    /// Insert content blob if not already present.  Returns `true` when
-    /// a new row was inserted.
-    #[allow(dead_code)]
-    fn insert_content(&self, hash: &str, doc: &[u8]) -> Result<bool> {
-        let doc_str = std::str::from_utf8(doc).unwrap_or("");
-        let changed = self.conn.execute(
-            "INSERT OR IGNORE INTO content (hash, doc, created_at) VALUES (?1, ?2, ?3)",
-            params![hash, doc_str, TIMESTAMP],
-        )?;
-        Ok(changed > 0)
-    }
-
-    /// Insert or replace a document row (triggers auto-sync FTS5).
-    #[allow(dead_code)]
-    fn insert_document(&self, collection: &str, path: &str, title: &str, hash: &str) -> Result<()> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO documents (collection, path, title, hash, created_at, modified_at, active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)",
-            params![collection, path, title, hash, TIMESTAMP, TIMESTAMP],
-        )?;
-        Ok(())
-    }
-
-    /// Upsert a single embedding vector (`content_vectors` + vec0 index).
-    #[allow(dead_code)]
-    fn upsert_vector(&self, hash: &str, seq: i64, embedding: &[f32]) -> Result<()> {
-        let emb_json = embedding_to_json(embedding);
-
-        // content_vectors table
-        self.conn.execute(
-            "INSERT OR REPLACE INTO content_vectors (hash, seq, pos, model, embedding, embedded_at) VALUES (?1, ?2, 0, ?3, ?4, ?5)",
-            params![hash, seq, MODEL_NAME, emb_json, TIMESTAMP],
-        )?;
-
-        // vec0 index: delete then insert (no upsert for virtual tables)
-        self.conn.execute(
-            "DELETE FROM content_vectors_idx WHERE hash = ?1 AND seq = ?2 AND pos = 0",
-            params![hash, seq],
-        )?;
-        self.conn.execute(
-            "INSERT INTO content_vectors_idx(embedding, hash, model, seq, pos) VALUES(vec_f32(?1), ?2, ?3, ?4, 0)",
-            params![emb_json, hash, MODEL_NAME, seq],
-        )?;
-
-        Ok(())
-    }
-
     // ── High-level batch pipeline ────────────────────────────────
 
-    /// Index a collection of files.
-    ///
-    /// 1. Reads existing hashes so Rayon workers can skip unchanged files.
-    /// 2. On Rayon threads: hash, extract title, optionally chunk + embed.
-    /// 3. On the main thread: write everything inside a single transaction.
-    ///
-    /// The `progress_cb` callback is invoked after each document is written
-    /// with `(current_count, total_count)`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if reading hashes, the transaction, or any SQL
-    /// statement fails.
     /// Default batch size for `index_collection`: process and commit this
     /// many files per iteration.  Small enough to keep memory bounded and
     /// give frequent progress updates; large enough to amortise transaction
     /// overhead.
     const INDEX_BATCH_SIZE: usize = 500;
 
+    /// Index a set of files into the given collection.
+    ///
+    /// For each file, computes a SHA-256 content hash, extracts a title,
+    /// and (for new/changed content) chunks the text and generates FNV-384
+    /// embeddings.  Unchanged documents (same path→hash mapping) are
+    /// skipped entirely — no SQL writes, no FTS5 trigger churn.
+    ///
+    /// The `progress_cb` callback is invoked after each document is
+    /// processed with `(current_count, total_count)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading hashes, the transaction, or any SQL
+    /// statement fails.
+    #[allow(clippy::too_many_lines)]
     pub fn index_collection<F>(
         &mut self,
         collection: &str,
-        files: Vec<FileEntry>,
+        files: &[FileEntry],
         progress_cb: F,
     ) -> Result<IndexStats>
     where
@@ -276,6 +254,15 @@ impl ZmdDb {
         let mut known = self.existing_hashes()?;
         debug!(known_hashes = known.len(), "loaded existing content hashes");
 
+        // Snapshot of existing document (path → hash) mappings so we can
+        // skip the costly INSERT OR REPLACE (and its FTS5 trigger storm)
+        // for documents whose content is unchanged.
+        let doc_hashes = self.existing_doc_hashes(collection)?;
+        debug!(
+            known_docs = doc_hashes.len(),
+            "loaded existing document hashes"
+        );
+
         let mut stats = IndexStats::default();
         let mut global_idx = 0usize;
 
@@ -287,6 +274,12 @@ impl ZmdDb {
                     let hash = sha256_hex(&entry.content);
                     let title = extract_title(&entry.content);
                     let need_embed = !known.contains(&hash);
+                    // Check whether the document row already points to the
+                    // same hash — if so, we can skip the INSERT OR REPLACE
+                    // entirely (no FTS5 trigger churn).
+                    let doc_unchanged = doc_hashes
+                        .get(&entry.path)
+                        .is_some_and(|existing| existing == &hash);
                     let (chunks, embeddings) = if need_embed {
                         let ch = chunk_document(&entry.content);
                         let embs: Vec<Vec<f32>> = ch
@@ -307,6 +300,7 @@ impl ZmdDb {
                         content: entry.content.clone(),
                         chunks,
                         embeddings,
+                        doc_unchanged,
                     }
                 })
                 .collect();
@@ -315,6 +309,15 @@ impl ZmdDb {
             let tx = self.conn.transaction()?;
 
             for p in &processed {
+                if p.doc_unchanged {
+                    // Document path already points to the same content
+                    // hash — no SQL writes needed, skip entirely.
+                    stats.skipped += 1;
+                    global_idx += 1;
+                    progress_cb(global_idx, total);
+                    continue;
+                }
+
                 // Insert content (dedup by hash).
                 let doc_str = std::str::from_utf8(&p.content).unwrap_or("");
                 tx.execute(
@@ -351,8 +354,6 @@ impl ZmdDb {
                         )?;
                     }
                     stats.new += 1;
-                } else {
-                    stats.skipped += 1;
                 }
 
                 global_idx += 1;

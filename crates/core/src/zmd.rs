@@ -500,18 +500,33 @@ where
         hardlink_batch(&to_link)
     };
 
-    // ── Index phase: native indexer over the entire stage dir ─────
+    // ── Index phase: native indexer over exactly the scoped files ─
+    //
+    // Build FileEntry list from the known `files` list rather than
+    // recursively scanning the entire stage directory.  This ensures we
+    // only index the files belonging to the current scope (e.g. one
+    // case_type/court combination) instead of re-indexing every file
+    // ever staged into the shared stage tree.
+    let file_entries: Vec<crate::native_indexer::FileEntry> = files
+        .par_iter()
+        .filter_map(|src| {
+            let rel = src.strip_prefix(src_root).ok()?;
+            let staged = stage_root.join(rel);
+            let content = std::fs::read(&staged).ok()?;
+            Some(crate::native_indexer::FileEntry {
+                path: rel.to_string_lossy().to_string(),
+                content,
+            })
+        })
+        .collect();
+    let total_files = file_entries.len();
+
     let db_path = crate::native_indexer::default_db_path();
     let mut db = crate::native_indexer::ZmdDb::open(&db_path)
         .context("Failed to open zmd database for native indexing")?;
 
     // Register the collection (idempotent, same as `zmd collection add`).
     db.register_collection(collection_name, stage_root)?;
-
-    // Read all staged .md files.
-    let file_entries = crate::native_indexer::read_staged_files_recursive(stage_root)
-        .context("Failed to read staged files")?;
-    let total_files = file_entries.len();
 
     info!(
         collection = collection_name,
@@ -523,6 +538,7 @@ where
 
     // Create a progress bar.
     let pb = ProgressBar::new(total_files as u64);
+    // Invariant: template string is a compile-time literal with valid indicatif placeholders.
     pb.set_style(
         ProgressStyle::with_template(
             "{spinner:.cyan} Indexing {msg} [{bar:30.cyan/dim}] {pos}/{len} {elapsed}",
@@ -534,7 +550,7 @@ where
     pb.set_message(collection_name.to_string());
     pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
-    let stats = db.index_collection(collection_name, file_entries, |current, _total| {
+    let stats = db.index_collection(collection_name, &file_entries, |current, _total| {
         pb.set_position(current as u64);
     })?;
 
@@ -721,7 +737,9 @@ where
         cfg.skip_pull,
     )?;
 
-    let mut results = Vec::new();
+    // ── Phase 1: Collect files for all case_type × court combos ──
+    let mut all_files: Vec<PathBuf> = Vec::new();
+    let mut court_counts: Vec<(String, String, usize)> = Vec::new();
 
     for case_type in &cfg.case_types {
         for court in &cfg.courts {
@@ -736,21 +754,65 @@ where
             }
 
             on_court(case_type, court, files.len());
-
-            let ct = case_type.clone();
-            let co = court.clone();
-            let result = stage_and_index_batched(
-                &files,
-                &cfg.precedent_clone(),
-                &cfg.precedent_stage(),
-                "precedents",
-                cfg.batch_size,
-                |bp| on_batch(&ct, &co, bp),
-            )?;
-
-            let label = format!("{case_type}/{court}");
-            results.push((label, result));
+            court_counts.push((case_type.clone(), court.clone(), files.len()));
+            all_files.extend(files);
         }
+    }
+
+    if all_files.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // ── Phase 2: Stage + index all files in a single pass ────────
+    let total_files = all_files.len();
+    let result = stage_and_index_batched(
+        &all_files,
+        &cfg.precedent_clone(),
+        &cfg.precedent_stage(),
+        "precedents",
+        cfg.batch_size,
+        |bp| {
+            // Report the batch to the first court (for backward compat).
+            if let Some((ct, co, _)) = court_counts.first() {
+                on_batch(ct, co, bp);
+            }
+        },
+    )?;
+
+    // Build per-court results for backward-compatible JSON output.
+    let mut results = Vec::new();
+    for (ct, co, count) in &court_counts {
+        let label = format!("{ct}/{co}");
+        // Proportion this court's share of the totals.
+        // Precision loss from usize→f64 is acceptable for display-only stats.
+        #[allow(clippy::cast_precision_loss)]
+        let fraction = if total_files > 0 {
+            *count as f64 / total_files as f64
+        } else {
+            0.0
+        };
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
+        let proportional_staged = (result.already_staged as f64 * fraction) as usize;
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
+        let proportional_new = (result.newly_staged as f64 * fraction) as usize;
+        results.push((
+            label,
+            IndexResult {
+                total_files: *count,
+                already_staged: proportional_staged,
+                newly_staged: proportional_new,
+                batches: 1,
+                total_update_secs: result.total_update_secs * fraction,
+            },
+        ));
     }
 
     Ok(results)
