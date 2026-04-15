@@ -303,9 +303,9 @@ impl ZmdDb {
 
         // ── Disable FTS triggers during bulk ingest ──────────────
         self.conn.execute_batch(
-            "DROP TRIGGER IF EXISTS documents_ai;\
-             DROP TRIGGER IF EXISTS documents_ad;\
-             DROP TRIGGER IF EXISTS documents_au;",
+            r"DROP TRIGGER IF EXISTS documents_ai;
+              DROP TRIGGER IF EXISTS documents_ad;
+              DROP TRIGGER IF EXISTS documents_au;",
         )?;
 
         let mut stats = IndexStats::default();
@@ -442,11 +442,7 @@ impl ZmdDb {
                             #[allow(clippy::cast_possible_wrap)]
                             let seq_i64 = seq as i64;
                             stmt_vec.execute(params![
-                                &p.hash,
-                                seq_i64,
-                                MODEL_NAME,
-                                &emb_json,
-                                TIMESTAMP,
+                                &p.hash, seq_i64, MODEL_NAME, &emb_json, TIMESTAMP,
                             ])?;
                         }
                         stats.new += 1;
@@ -473,62 +469,68 @@ impl ZmdDb {
             );
         }
 
-        // ── Rebuild FTS5 index from base tables ──────────────────
-        info!(collection, "rebuilding FTS5 index");
-        self.conn.execute_batch(
-            "DELETE FROM documents_fts;\
-             INSERT INTO documents_fts(rowid, filepath, title, body)\
-             SELECT d.id,\
-                    d.collection || '/' || d.path,\
-                    d.title,\
-                    c.doc\
-             FROM documents d\
-             JOIN content c ON c.hash = d.hash\
-             WHERE d.active = 1;",
-        )?;
+        let needs_rebuild = stats.new > 0 || stats.content_rehashed > 0;
 
-        // ── Rebuild vec0 index from content_vectors ──────────────
-        info!(collection, "rebuilding vector index");
-        self.conn.execute_batch(
-            "DROP TABLE IF EXISTS content_vectors_idx;\
-             CREATE VIRTUAL TABLE content_vectors_idx USING vec0(\
-                 embedding float[384],\
-                 hash TEXT,\
-                 model TEXT,\
-                 +seq INTEGER,\
-                 +pos INTEGER\
-             );\
-             INSERT INTO content_vectors_idx(embedding, hash, model, seq, pos)\
-             SELECT vec_f32(embedding), hash, model, seq, pos\
-             FROM content_vectors;",
-        )?;
+        if needs_rebuild {
+            // ── Rebuild FTS5 index from base tables ──────────────────
+            info!(collection, "rebuilding FTS5 index");
+            self.conn.execute_batch(
+                r"DELETE FROM documents_fts;
+                  INSERT INTO documents_fts(rowid, filepath, title, body)
+                  SELECT d.id,
+                         d.collection || '/' || d.path,
+                         d.title,
+                         c.doc
+                  FROM documents d
+                  JOIN content c ON c.hash = d.hash
+                  WHERE d.active = 1;",
+            )?;
+
+            // ── Rebuild vec0 index from content_vectors ──────────────
+            info!(collection, "rebuilding vector index");
+            self.conn.execute_batch(
+                r"DROP TABLE IF EXISTS content_vectors_idx;
+                  CREATE VIRTUAL TABLE content_vectors_idx USING vec0(
+                      embedding float[384],
+                      hash TEXT,
+                      model TEXT,
+                      +seq INTEGER,
+                      +pos INTEGER
+                  );
+                  INSERT INTO content_vectors_idx(embedding, hash, model, seq, pos)
+                  SELECT vec_f32(embedding), hash, model, seq, pos
+                  FROM content_vectors;",
+            )?;
+        } else {
+            info!(collection, "skipping FTS/vector rebuild (no content changes)");
+        }
 
         // ── Re-create FTS triggers for future incremental updates ─
         self.conn.execute_batch(
-            "CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents\
-             WHEN new.active = 1\
-             BEGIN\
-                 INSERT INTO documents_fts(rowid, filepath, title, body)\
-                 SELECT new.id,\
-                        new.collection || '/' || new.path,\
-                        new.title,\
-                        (SELECT doc FROM content WHERE hash = new.hash)\
-                 WHERE new.active = 1;\
-             END;\
-             CREATE TRIGGER IF NOT EXISTS documents_ad AFTER DELETE ON documents\
-             BEGIN\
-                 DELETE FROM documents_fts WHERE rowid = old.id;\
-             END;\
-             CREATE TRIGGER IF NOT EXISTS documents_au AFTER UPDATE OF collection, path, title, hash, active ON documents\
-             BEGIN\
-                 DELETE FROM documents_fts WHERE rowid = old.id AND new.active = 0;\
-                 INSERT OR REPLACE INTO documents_fts(rowid, filepath, title, body)\
-                 SELECT new.id,\
-                        new.collection || '/' || new.path,\
-                        new.title,\
-                        (SELECT doc FROM content WHERE hash = new.hash)\
-                 WHERE new.active = 1;\
-             END;",
+            r"CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents
+              WHEN new.active = 1
+              BEGIN
+                  INSERT INTO documents_fts(rowid, filepath, title, body)
+                  SELECT new.id,
+                         new.collection || '/' || new.path,
+                         new.title,
+                         (SELECT doc FROM content WHERE hash = new.hash)
+                  WHERE new.active = 1;
+              END;
+              CREATE TRIGGER IF NOT EXISTS documents_ad AFTER DELETE ON documents
+              BEGIN
+                  DELETE FROM documents_fts WHERE rowid = old.id;
+              END;
+              CREATE TRIGGER IF NOT EXISTS documents_au AFTER UPDATE OF collection, path, title, hash, active ON documents
+              BEGIN
+                  DELETE FROM documents_fts WHERE rowid = old.id AND new.active = 0;
+                  INSERT OR REPLACE INTO documents_fts(rowid, filepath, title, body)
+                  SELECT new.id,
+                         new.collection || '/' || new.path,
+                         new.title,
+                         (SELECT doc FROM content WHERE hash = new.hash)
+                  WHERE new.active = 1;
+              END;",
         )?;
 
         info!(
