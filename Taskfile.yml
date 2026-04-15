@@ -90,6 +90,10 @@ tasks:
     desc: Build release and copy binaries to ~/bin
     deps: [build]
     cmds:
+      # Remove before copy to force a new inode. macOS caches code
+      # signatures by inode; overwriting in-place (same inode) can cause
+      # SIGKILL (exit 137) when the binary content changes.
+      - rm -f ~/bin/$PGM_NAME ~/bin/$CLI_NAME
       - cp target/release/$PGM_NAME ~/bin
       - cp target/release/$CLI_NAME ~/bin
 

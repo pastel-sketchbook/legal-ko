@@ -250,6 +250,12 @@ impl ZmdDb {
     ///
     /// Returns an error if reading hashes, the transaction, or any SQL
     /// statement fails.
+    /// Default batch size for `index_collection`: process and commit this
+    /// many files per iteration.  Small enough to keep memory bounded and
+    /// give frequent progress updates; large enough to amortise transaction
+    /// overhead.
+    const INDEX_BATCH_SIZE: usize = 500;
+
     pub fn index_collection<F>(
         &mut self,
         collection: &str,
@@ -267,90 +273,106 @@ impl ZmdDb {
         info!(collection, total, "starting native indexing");
 
         // Snapshot of known hashes (for skip optimisation).
-        let known = self.existing_hashes()?;
+        let mut known = self.existing_hashes()?;
         debug!(known_hashes = known.len(), "loaded existing content hashes");
 
-        // ── Parallel phase (CPU-bound, no DB access) ──────────────
-        let processed: Vec<Processed> = files
-            .into_par_iter()
-            .map(|entry| {
-                let hash = sha256_hex(&entry.content);
-                let title = extract_title(&entry.content);
-                let need_embed = !known.contains(&hash);
-                let (chunks, embeddings) = if need_embed {
-                    let ch = chunk_document(&entry.content);
-                    let embs: Vec<Vec<f32>> = ch
-                        .iter()
-                        .map(|chunk| {
-                            let normalized = format_doc_for_embedding(chunk);
-                            fnv_embed(&normalized)
-                        })
-                        .collect();
-                    (Some(ch), Some(embs))
-                } else {
-                    (None, None)
-                };
-                Processed {
-                    path: entry.path,
-                    hash,
-                    title,
-                    content: entry.content,
-                    chunks,
-                    embeddings,
-                }
-            })
-            .collect();
-
-        // ── Sequential write phase (single transaction) ───────────
-        let tx = self.conn.transaction()?;
         let mut stats = IndexStats::default();
+        let mut global_idx = 0usize;
 
-        for (i, p) in processed.into_iter().enumerate() {
-            // Insert content (dedup by hash).
-            let doc_str = std::str::from_utf8(&p.content).unwrap_or("");
-            tx.execute(
-                "INSERT OR IGNORE INTO content (hash, doc, created_at) VALUES (?1, ?2, ?3)",
-                params![&p.hash, doc_str, TIMESTAMP],
-            )?;
+        for batch in files.chunks(Self::INDEX_BATCH_SIZE) {
+            // ── Parallel phase (CPU-bound, no DB access) ──────────
+            let processed: Vec<Processed> = batch
+                .par_iter()
+                .map(|entry| {
+                    let hash = sha256_hex(&entry.content);
+                    let title = extract_title(&entry.content);
+                    let need_embed = !known.contains(&hash);
+                    let (chunks, embeddings) = if need_embed {
+                        let ch = chunk_document(&entry.content);
+                        let embs: Vec<Vec<f32>> = ch
+                            .iter()
+                            .map(|chunk| {
+                                let normalized = format_doc_for_embedding(chunk);
+                                fnv_embed(&normalized)
+                            })
+                            .collect();
+                        (Some(ch), Some(embs))
+                    } else {
+                        (None, None)
+                    };
+                    Processed {
+                        path: entry.path.clone(),
+                        hash,
+                        title,
+                        content: entry.content.clone(),
+                        chunks,
+                        embeddings,
+                    }
+                })
+                .collect();
 
-            // Insert document (triggers FTS5 sync).
-            tx.execute(
-                "INSERT OR REPLACE INTO documents (collection, path, title, hash, created_at, modified_at, active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)",
-                params![collection, &p.path, &p.title, &p.hash, TIMESTAMP, TIMESTAMP],
-            )?;
+            // ── Sequential write phase (one transaction per batch) ─
+            let tx = self.conn.transaction()?;
 
-            stats.indexed += 1;
+            for p in &processed {
+                // Insert content (dedup by hash).
+                let doc_str = std::str::from_utf8(&p.content).unwrap_or("");
+                tx.execute(
+                    "INSERT OR IGNORE INTO content (hash, doc, created_at) VALUES (?1, ?2, ?3)",
+                    params![&p.hash, doc_str, TIMESTAMP],
+                )?;
 
-            // Write embeddings only for new/changed content.
-            if let (Some(chunks), Some(embeddings)) = (&p.chunks, &p.embeddings) {
-                debug_assert_eq!(chunks.len(), embeddings.len());
-                for (seq, emb) in embeddings.iter().enumerate() {
-                    let emb_json = embedding_to_json(emb);
-                    // Chunk indices are always small (< 1000), safe to cast.
-                    #[allow(clippy::cast_possible_wrap)]
-                    let seq_i64 = seq as i64;
-                    tx.execute(
-                        "INSERT OR REPLACE INTO content_vectors (hash, seq, pos, model, embedding, embedded_at) VALUES (?1, ?2, 0, ?3, ?4, ?5)",
-                        params![&p.hash, seq_i64, MODEL_NAME, &emb_json, TIMESTAMP],
-                    )?;
-                    tx.execute(
-                        "DELETE FROM content_vectors_idx WHERE hash = ?1 AND seq = ?2 AND pos = 0",
-                        params![&p.hash, seq_i64],
-                    )?;
-                    tx.execute(
-                        "INSERT INTO content_vectors_idx(embedding, hash, model, seq, pos) VALUES(vec_f32(?1), ?2, ?3, ?4, 0)",
-                        params![&emb_json, &p.hash, MODEL_NAME, seq_i64],
-                    )?;
+                // Insert document (triggers FTS5 sync).
+                tx.execute(
+                    "INSERT OR REPLACE INTO documents (collection, path, title, hash, created_at, modified_at, active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)",
+                    params![collection, &p.path, &p.title, &p.hash, TIMESTAMP, TIMESTAMP],
+                )?;
+
+                stats.indexed += 1;
+
+                // Write embeddings only for new/changed content.
+                if let (Some(chunks), Some(embeddings)) = (&p.chunks, &p.embeddings) {
+                    debug_assert_eq!(chunks.len(), embeddings.len());
+                    for (seq, emb) in embeddings.iter().enumerate() {
+                        let emb_json = embedding_to_json(emb);
+                        #[allow(clippy::cast_possible_wrap)]
+                        let seq_i64 = seq as i64;
+                        tx.execute(
+                            "INSERT OR REPLACE INTO content_vectors (hash, seq, pos, model, embedding, embedded_at) VALUES (?1, ?2, 0, ?3, ?4, ?5)",
+                            params![&p.hash, seq_i64, MODEL_NAME, &emb_json, TIMESTAMP],
+                        )?;
+                        tx.execute(
+                            "DELETE FROM content_vectors_idx WHERE hash = ?1 AND seq = ?2 AND pos = 0",
+                            params![&p.hash, seq_i64],
+                        )?;
+                        tx.execute(
+                            "INSERT INTO content_vectors_idx(embedding, hash, model, seq, pos) VALUES(vec_f32(?1), ?2, ?3, ?4, 0)",
+                            params![&emb_json, &p.hash, MODEL_NAME, seq_i64],
+                        )?;
+                    }
+                    stats.new += 1;
+                } else {
+                    stats.skipped += 1;
                 }
-                stats.new += 1;
-            } else {
-                stats.skipped += 1;
+
+                global_idx += 1;
+                progress_cb(global_idx, total);
             }
 
-            progress_cb(i + 1, total);
+            tx.commit()?;
+
+            // Update known hashes so the next batch can skip already-indexed content.
+            for p in &processed {
+                known.insert(p.hash.clone());
+            }
+
+            debug!(
+                batch_size = batch.len(),
+                indexed = stats.indexed,
+                "batch committed"
+            );
         }
 
-        tx.commit()?;
         info!(
             collection,
             indexed = stats.indexed,

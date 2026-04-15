@@ -465,7 +465,7 @@ where
     db.register_collection(collection_name, stage_root)?;
 
     // Read all staged .md files.
-    let file_entries = crate::native_indexer::read_staged_files(stage_root)
+    let file_entries = crate::native_indexer::read_staged_files_recursive(stage_root)
         .context("Failed to read staged files")?;
     let total_files = file_entries.len();
 

@@ -1858,7 +1858,7 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
 name = "legal-ko-cli"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1871,7 +1871,7 @@ dependencies = [
 
 [[package]]
 name = "legal-ko-core"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "cc",
@@ -1896,7 +1896,7 @@ dependencies = [
 
 [[package]]
 name = "legal-ko-tui"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "crossterm",
