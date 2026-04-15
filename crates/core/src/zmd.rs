@@ -503,6 +503,55 @@ fn replace_hard_link(src: &Path, dst: &Path) -> std::io::Result<()> {
     }
 }
 
+#[derive(Default)]
+struct FileEntryPlan {
+    entries: Vec<crate::native_indexer::FileEntry>,
+    unchanged_by_metadata: usize,
+}
+
+fn build_file_entry_plan(
+    files: &[PathBuf],
+    src_root: &Path,
+    existing_docs: &std::collections::HashMap<String, crate::native_indexer::ExistingDoc>,
+) -> FileEntryPlan {
+    let mut entries = Vec::new();
+    let mut unchanged_by_metadata = 0usize;
+
+    for src in files {
+        let Ok(rel) = src.strip_prefix(src_root) else {
+            continue;
+        };
+        let Ok(metadata) = std::fs::metadata(src) else {
+            continue;
+        };
+        let source_size = metadata.len();
+        let source_mtime_ns = metadata
+            .modified()
+            .map(crate::native_indexer::system_time_to_unix_nanos)
+            .unwrap_or_default();
+        let rel_path = rel.to_string_lossy().to_string();
+
+        if existing_docs.get(&rel_path).is_some_and(|doc| {
+            doc.source_size == Some(source_size) && doc.source_mtime_ns == Some(source_mtime_ns)
+        }) {
+            unchanged_by_metadata += 1;
+            continue;
+        }
+
+        entries.push(crate::native_indexer::FileEntry {
+            path: rel_path,
+            staged_path: src.to_path_buf(),
+            source_size,
+            source_mtime_ns,
+        });
+    }
+
+    FileEntryPlan {
+        entries,
+        unchanged_by_metadata,
+    }
+}
+
 /// Stage files and index using the native indexer.
 ///
 /// This is the core indexing loop.  All files are hardlinked into the
@@ -545,33 +594,6 @@ where
         hardlink_batch(&to_link)
     };
 
-    // ── Index phase: native indexer over exactly the scoped files ─
-    //
-    // Build FileEntry list from the known `files` list rather than
-    // recursively scanning the entire stage directory.  This ensures we
-    // only index the files belonging to the current scope (e.g. one
-    // case_type/court combination) instead of re-indexing every file
-    // ever staged into the shared stage tree.
-    let file_entries: Vec<crate::native_indexer::FileEntry> = files
-        .par_iter()
-        .filter_map(|src| {
-            let rel = src.strip_prefix(src_root).ok()?;
-            let staged = stage_root.join(rel);
-            let metadata = std::fs::metadata(src).ok()?;
-            let source_mtime_ns = metadata
-                .modified()
-                .map(crate::native_indexer::system_time_to_unix_nanos)
-                .unwrap_or_default();
-            Some(crate::native_indexer::FileEntry {
-                path: rel.to_string_lossy().to_string(),
-                staged_path: staged,
-                source_size: metadata.len(),
-                source_mtime_ns,
-            })
-        })
-        .collect();
-    let total_files = file_entries.len();
-
     let db_path = crate::native_indexer::default_db_path();
     let mut db = crate::native_indexer::ZmdDb::open(&db_path)
         .context("Failed to open zmd database for native indexing")?;
@@ -579,11 +601,40 @@ where
     // Register the collection (idempotent, same as `zmd collection add`).
     db.register_collection(collection_name, stage_root)?;
 
+    let existing_docs = db.existing_docs(collection_name)?;
+    let plan = build_file_entry_plan(files, src_root, &existing_docs);
+    let total_files = plan.entries.len();
+
     info!(
         collection = collection_name,
-        staged_files = total_files,
+        candidate_files = total_files,
+        unchanged_by_metadata = plan.unchanged_by_metadata,
+        total_source_files = files.len(),
         "Starting native indexing"
     );
+
+    if plan.entries.is_empty() {
+        let output = format!(
+            "Indexed 0 documents (0 new, {} unchanged by metadata) in 0.0s",
+            plan.unchanged_by_metadata
+        );
+        info!(collection = collection_name, %output, "Native indexing complete");
+        on_batch(&BatchProgress {
+            batch_num: 1,
+            batch_new: 0,
+            total_staged: already_staged + newly_staged,
+            total_files: files.len(),
+            update_secs: 0.0,
+            update_output: output,
+        });
+        return Ok(IndexResult {
+            total_files: files.len(),
+            already_staged,
+            newly_staged,
+            batches: 1,
+            total_update_secs: 0.0,
+        });
+    }
 
     let start = Instant::now();
 
@@ -601,7 +652,7 @@ where
     pb.set_message(collection_name.to_string());
     pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
-    let stats = db.index_collection(collection_name, &file_entries, |current, _total| {
+    let stats = db.index_collection(collection_name, &plan.entries, |current, _total| {
         pb.set_position(current as u64);
     })?;
 
@@ -609,8 +660,12 @@ where
     let elapsed = start.elapsed().as_secs_f64();
 
     let output = format!(
-        "Indexed {} documents ({} new, {} unchanged) in {elapsed:.1}s",
-        stats.indexed, stats.new, stats.skipped
+        "Indexed {} documents ({} new, {} metadata refresh, {} rehashed, {} unchanged by metadata) in {elapsed:.1}s",
+        stats.indexed,
+        stats.new,
+        stats.metadata_refreshed,
+        stats.content_rehashed,
+        plan.unchanged_by_metadata
     );
     info!(collection = collection_name, %output, "Native indexing complete");
 

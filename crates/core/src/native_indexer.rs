@@ -67,11 +67,11 @@ pub struct FileEntry {
     pub source_mtime_ns: i64,
 }
 
-#[derive(Clone)]
-struct ExistingDoc {
-    hash: String,
-    source_size: Option<u64>,
-    source_mtime_ns: Option<i64>,
+#[derive(Debug, Clone)]
+pub struct ExistingDoc {
+    pub hash: String,
+    pub source_size: Option<u64>,
+    pub source_mtime_ns: Option<i64>,
 }
 
 /// Result of processing a single file on a Rayon thread.
@@ -99,6 +99,8 @@ pub struct IndexStats {
     pub indexed: usize,
     pub new: usize,
     pub skipped: usize,
+    pub metadata_refreshed: usize,
+    pub content_rehashed: usize,
 }
 
 // ── Database wrapper ─────────────────────────────────────────────
@@ -177,7 +179,7 @@ impl ZmdDb {
     }
 
     /// Snapshot existing document metadata for a collection.
-    fn existing_docs(
+    pub fn existing_docs(
         &self,
         collection: &str,
     ) -> Result<std::collections::HashMap<String, ExistingDoc>> {
@@ -370,12 +372,14 @@ impl ZmdDb {
                         params![source_size, p.source_mtime_ns, TIMESTAMP, collection, &p.path],
                     )?;
                     stats.indexed += 1;
+                    stats.metadata_refreshed += 1;
                     global_idx += 1;
                     progress_cb(global_idx, total);
                     continue;
                 }
 
                 // Insert content (dedup by hash).
+                stats.content_rehashed += 1;
                 let doc_str = std::str::from_utf8(&p.content).unwrap_or("");
                 tx.execute(
                     "INSERT OR IGNORE INTO content (hash, doc, created_at) VALUES (?1, ?2, ?3)",
@@ -438,6 +442,8 @@ impl ZmdDb {
             indexed = stats.indexed,
             new = stats.new,
             skipped = stats.skipped,
+            metadata_refreshed = stats.metadata_refreshed,
+            content_rehashed = stats.content_rehashed,
             "native indexing complete"
         );
         Ok(stats)
