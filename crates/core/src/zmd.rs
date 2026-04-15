@@ -227,8 +227,52 @@ fn clone_or_pull(url: &str, dir: &Path, name: &str, skip_pull: bool) -> Result<(
             let stdout = String::from_utf8_lossy(&output.stdout);
             info!(%name, result = stdout.trim(), "Pull complete");
         } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            warn!(%name, %stderr, "git pull failed (non-fatal)");
+            // Fast-forward failed — likely a diverged shallow clone.
+            // These are read-only data repos so we can safely force-sync.
+            warn!(%name, "Fast-forward pull failed; resetting to origin");
+            let fetch = Command::new("git")
+                .args(["-C"])
+                .arg(dir)
+                .args(["fetch", "--depth", "1", "origin"])
+                .output()
+                .with_context(|| format!("Failed to git fetch for {name}"))?;
+            if fetch.status.success() {
+                // Detect the default branch from the remote HEAD.
+                let head_ref = Command::new("git")
+                    .args(["-C"])
+                    .arg(dir)
+                    .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
+                    .output()
+                    .ok()
+                    .and_then(|o| {
+                        if o.status.success() {
+                            String::from_utf8(o.stdout).ok().and_then(|s| {
+                                s.trim()
+                                    .strip_prefix("refs/remotes/origin/")
+                                    .map(String::from)
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_else(|| "main".to_string());
+
+                let reset = Command::new("git")
+                    .args(["-C"])
+                    .arg(dir)
+                    .args(["reset", "--hard", &format!("origin/{head_ref}")])
+                    .output()
+                    .with_context(|| format!("Failed to git reset for {name}"))?;
+                if reset.status.success() {
+                    info!(%name, branch = %head_ref, "Reset to origin complete");
+                } else {
+                    let stderr = String::from_utf8_lossy(&reset.stderr);
+                    warn!(%name, %stderr, "git reset --hard failed (non-fatal)");
+                }
+            } else {
+                let stderr = String::from_utf8_lossy(&fetch.stderr);
+                warn!(%name, %stderr, "git fetch failed (non-fatal)");
+            }
         }
     } else {
         let sp = spinner(&format!("Cloning {name} (shallow)"));
