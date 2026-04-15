@@ -12,6 +12,7 @@ pub mod preferences;
 pub mod search;
 #[cfg(feature = "tts")]
 pub mod tts;
+pub mod zmd;
 
 // Re-export reqwest::Client so downstream crates don't need a direct dependency.
 pub use reqwest;

@@ -9,7 +9,7 @@ use legal_ko_core::models::{
 use legal_ko_core::search::{self, Searcher};
 #[cfg(feature = "tts")]
 use legal_ko_core::tts;
-use legal_ko_core::{client, crossref, enrichment, parser, person_index, reqwest};
+use legal_ko_core::{client, crossref, enrichment, parser, person_index, reqwest, zmd};
 
 #[derive(Parser)]
 #[command(
@@ -259,6 +259,63 @@ enum Command {
         #[arg(long, default_value = "20")]
         limit: usize,
     },
+
+    // ── zmd collection management ──────────────────────────
+    /// Manage zmd collections: clone repos, stage files, and index.
+    ///
+    /// Replaces scripts/zmd-collections.sh with a faster native implementation.
+    /// Stages all files in a single pass via hardlinks, then calls `zmd update`
+    /// once (zmd handles incremental indexing internally).
+    #[command(subcommand)]
+    Zmd(ZmdCommand),
+}
+
+#[derive(Subcommand)]
+enum ZmdCommand {
+    /// Index law files (법률 only) into zmd
+    Laws {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Index precedent files into zmd
+    Precedents {
+        /// Case types to include (default: 민사 형사)
+        #[arg(long)]
+        case_type: Vec<String>,
+
+        /// Court levels to include (default: 대법원)
+        #[arg(long)]
+        court: Vec<String>,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run all phases: laws then precedents
+    All {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Pull latest from upstream repos and re-index
+    Sync {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show current state (repos, staged files, zmd collections)
+    Status {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove collections and staged data (keeps repo clones)
+    Reset {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[tokio::main]
@@ -328,6 +385,9 @@ async fn main() -> Result<()> {
             json,
             limit,
         } => cmd_precedent_search_person(&client, &name, role, case_type, court, json, limit).await,
+
+        // ── zmd collection management ──────────────────────
+        Command::Zmd(zmd_cmd) => cmd_zmd(zmd_cmd),
     }
 }
 
@@ -1370,5 +1430,250 @@ async fn cmd_speak(
         }
     }
 
+    Ok(())
+}
+
+// ── zmd collection management ─────────────────────────────────
+
+fn cmd_zmd(cmd: ZmdCommand) -> Result<()> {
+    match cmd {
+        ZmdCommand::Laws { json } => cmd_zmd_laws(json),
+        ZmdCommand::Precedents {
+            case_type,
+            court,
+            json,
+        } => cmd_zmd_precedents(case_type, court, json),
+        ZmdCommand::All { json } => cmd_zmd_all(json),
+        ZmdCommand::Sync { json } => cmd_zmd_sync(json),
+        ZmdCommand::Status { json } => cmd_zmd_status(json),
+        ZmdCommand::Reset { json } => cmd_zmd_reset(json),
+    }
+}
+
+fn cmd_zmd_laws(as_json: bool) -> Result<()> {
+    let cfg = zmd::ZmdConfig::default_config()?;
+    let result = zmd::index_laws(&cfg, |bp| {
+        if !as_json && bp.batch_num > 0 {
+            eprintln!(
+                "  batch {}: +{} files ({}/{} staged) — {:.0}s",
+                bp.batch_num, bp.batch_new, bp.total_staged, bp.total_files, bp.update_secs,
+            );
+        }
+    })?;
+
+    if as_json {
+        let obj = json!({
+            "total": result.total_files,
+            "newly_staged": result.newly_staged,
+            "already_staged": result.already_staged,
+            "batches": result.batches,
+            "elapsed_secs": result.total_update_secs,
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+    } else {
+        println!(
+            "Laws: {} total, {} new, {} existing — {:.0}s ({} batches)",
+            result.total_files,
+            result.newly_staged,
+            result.already_staged,
+            result.total_update_secs,
+            result.batches,
+        );
+    }
+    Ok(())
+}
+
+fn cmd_zmd_precedents(case_types: Vec<String>, courts: Vec<String>, as_json: bool) -> Result<()> {
+    let mut cfg = zmd::ZmdConfig::default_config()?;
+    if !case_types.is_empty() {
+        cfg.case_types = case_types;
+    }
+    if !courts.is_empty() {
+        cfg.courts = courts;
+    }
+
+    let results = zmd::index_precedents(
+        &cfg,
+        |ct, court, count| {
+            if !as_json {
+                eprintln!("  {ct}/{court}: {count} files");
+            }
+        },
+        |ct, court, bp| {
+            if !as_json && bp.batch_num > 0 {
+                eprintln!(
+                    "    {ct}/{court} batch {}: +{} files ({} staged) — {:.0}s",
+                    bp.batch_num, bp.batch_new, bp.total_staged, bp.update_secs,
+                );
+            }
+        },
+    )?;
+
+    if as_json {
+        let courts_json: Vec<_> = results
+            .iter()
+            .map(|(label, r)| {
+                json!({
+                    "label": label,
+                    "total": r.total_files,
+                    "newly_staged": r.newly_staged,
+                    "already_staged": r.already_staged,
+                    "batches": r.batches,
+                    "elapsed_secs": r.total_update_secs,
+                })
+            })
+            .collect();
+        let total_new: usize = results.iter().map(|(_, r)| r.newly_staged).sum();
+        let total_files: usize = results.iter().map(|(_, r)| r.total_files).sum();
+        let total_secs: f64 = results.iter().map(|(_, r)| r.total_update_secs).sum();
+        let obj = json!({
+            "courts": courts_json,
+            "total_files": total_files,
+            "total_new": total_new,
+            "elapsed_secs": total_secs,
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+    } else {
+        let total_new: usize = results.iter().map(|(_, r)| r.newly_staged).sum();
+        let total_files: usize = results.iter().map(|(_, r)| r.total_files).sum();
+        let total_secs: f64 = results.iter().map(|(_, r)| r.total_update_secs).sum();
+        println!(
+            "Precedents: {} total, {} new — {:.0}s",
+            total_files, total_new, total_secs,
+        );
+    }
+    Ok(())
+}
+
+fn cmd_zmd_all(as_json: bool) -> Result<()> {
+    let cfg = zmd::ZmdConfig::default_config()?;
+
+    if as_json {
+        let law_result = zmd::index_laws(&cfg, |_| {})?;
+        let prec_results = zmd::index_precedents(&cfg, |_, _, _| {}, |_, _, _| {})?;
+
+        let prec_new: usize = prec_results.iter().map(|(_, r)| r.newly_staged).sum();
+        let prec_total: usize = prec_results.iter().map(|(_, r)| r.total_files).sum();
+        let prec_secs: f64 = prec_results.iter().map(|(_, r)| r.total_update_secs).sum();
+
+        let obj = json!({
+            "laws": {
+                "total": law_result.total_files,
+                "newly_staged": law_result.newly_staged,
+                "already_staged": law_result.already_staged,
+                "batches": law_result.batches,
+                "elapsed_secs": law_result.total_update_secs,
+            },
+            "precedents": {
+                "total_files": prec_total,
+                "total_new": prec_new,
+                "elapsed_secs": prec_secs,
+            },
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+    } else {
+        zmd::index_all(&cfg)?;
+    }
+    Ok(())
+}
+
+fn cmd_zmd_sync(as_json: bool) -> Result<()> {
+    let cfg = zmd::ZmdConfig::default_config()?;
+
+    if as_json {
+        let mut result = json!({});
+        if cfg.laws_clone().join(".git").is_dir() {
+            let r = zmd::index_laws(&cfg, |_| {})?;
+            result["laws"] = json!({
+                "newly_staged": r.newly_staged,
+                "elapsed_secs": r.total_update_secs,
+            });
+        }
+        if cfg.precedent_clone().join(".git").is_dir() {
+            let results = zmd::index_precedents(&cfg, |_, _, _| {}, |_, _, _| {})?;
+            let total_new: usize = results.iter().map(|(_, r)| r.newly_staged).sum();
+            let total_secs: f64 = results.iter().map(|(_, r)| r.total_update_secs).sum();
+            result["precedents"] = json!({
+                "total_new": total_new,
+                "elapsed_secs": total_secs,
+            });
+        }
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        zmd::sync(&cfg)?;
+    }
+    Ok(())
+}
+
+fn cmd_zmd_status(as_json: bool) -> Result<()> {
+    let cfg = zmd::ZmdConfig::default_config()?;
+    let s = zmd::status(&cfg)?;
+
+    if as_json {
+        let obj = json!({
+            "cache_dir": cfg.cache_dir.display().to_string(),
+            "repos": {
+                "laws": s.laws_repo,
+                "precedents": s.precedent_repo,
+            },
+            "staged": {
+                "laws": s.laws_staged,
+                "precedents": s.precedent_staged,
+                "precedent_total": s.precedent_total,
+            },
+            "zmd_status": s.zmd_status.trim(),
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+    } else {
+        println!("=== Cache ===");
+        println!("  Cache dir: {}", cfg.cache_dir.display());
+        println!();
+        println!("=== Repos ===");
+        println!("  laws: {}", s.laws_repo.as_deref().unwrap_or("not cloned"));
+        println!(
+            "  precedents: {}",
+            s.precedent_repo.as_deref().unwrap_or("not cloned")
+        );
+        println!();
+        println!("=== Staged Files ===");
+        if s.laws_staged > 0 {
+            println!("  laws: {} files", s.laws_staged);
+        } else {
+            println!("  laws: not staged");
+        }
+        if !s.precedent_staged.is_empty() {
+            for (label, count) in &s.precedent_staged {
+                println!("  precedents/{label}: {count} files");
+            }
+            println!("  precedents total: {} files", s.precedent_total);
+        } else {
+            println!("  precedents: not staged");
+        }
+        println!();
+        println!("=== zmd ===");
+        println!("{}", s.collections.trim());
+        println!();
+        println!("{}", s.zmd_status.trim());
+    }
+    Ok(())
+}
+
+fn cmd_zmd_reset(as_json: bool) -> Result<()> {
+    let cfg = zmd::ZmdConfig::default_config()?;
+    zmd::reset(&cfg)?;
+
+    if as_json {
+        let obj = json!({
+            "status": "reset_complete",
+            "repos_preserved": cfg.repos_dir().display().to_string(),
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+    } else {
+        println!(
+            "Reset complete. Repo clones preserved at {}",
+            cfg.repos_dir().display()
+        );
+        println!("To also remove clones: rm -rf {}", cfg.cache_dir.display());
+    }
     Ok(())
 }

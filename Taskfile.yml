@@ -179,3 +179,46 @@ tasks:
     cmds:
       - git tag -a "v{{.VERSION}}" -m "v{{.VERSION}}"
       - echo "Tagged v{{.VERSION}}"
+
+  zmd:sh:
+    desc: Run zmd via bash wrapper script
+    cmds:
+      - ./scripts/zmd-collections.sh {{.CLI_ARGS}}
+
+  # ── zmd collection management ──────────────────────────────
+
+  zmd:
+    desc: Run all zmd phases (laws + precedents)
+    deps: [install]
+    cmds:
+      - $CLI_NAME zmd all
+
+  zmd:laws:
+    desc: Stage and index law files into zmd
+    deps: [install]
+    cmds:
+      - $CLI_NAME zmd laws
+
+  zmd:precedents:
+    desc: Stage and index precedent files into zmd
+    deps: [install]
+    cmds:
+      - $CLI_NAME zmd precedents
+
+  zmd:sync:
+    desc: Pull latest repos and re-index zmd
+    deps: [install]
+    cmds:
+      - $CLI_NAME zmd sync
+
+  zmd:status:
+    desc: Show zmd collection status
+    deps: [install]
+    cmds:
+      - $CLI_NAME zmd status
+
+  zmd:reset:
+    desc: Remove zmd collections and staged data
+    deps: [install]
+    cmds:
+      - $CLI_NAME zmd reset

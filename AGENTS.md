@@ -15,7 +15,7 @@ Use `cargo` for all build/test/run tasks.
 
 | Crate | Type | Binary | Purpose |
 |-------|------|--------|---------|
-| `legal-ko-core` | lib | — | Shared logic: models, HTTP client, caching, parser, crossref, person index, bookmarks, context, preferences, AI agent definitions |
+| `legal-ko-core` | lib | — | Shared logic: models, HTTP client, caching, parser, crossref, person index, bookmarks, context, preferences, zmd collection management, AI agent definitions |
 | `legal-ko-tui` | bin | `legal-ko` | Human-facing ratatui TUI |
 | `legal-ko-cli` | bin | `legal-ko-cli` | LLM-facing CLI with `--json` output |
 
@@ -43,7 +43,7 @@ cp target/release/legal-ko-cli ~/bin/legal-ko-cli
 
 Workspace deps: `ratatui`, `crossterm`, `tokio` (full), `reqwest` (json),
 `serde`/`serde_json`, `clap` (derive), `anyhow`, `tracing`,
-`tracing-subscriber`, `dirs`, `sha2`, `unicode-width`, `futures`,
+`tracing-subscriber`, `dirs`, `sha2`, `unicode-width`, `futures`, `rayon`,
 `meilisearch-sdk` (optional, behind `meilisearch` feature).
 
 ## Architecture
@@ -62,6 +62,7 @@ crates/
     context.rs      — TUI↔Agent context (TuiContext, TuiCommand, read/write/take)
     preferences.rs  — Theme & agent preference persistence to ~/.config/legal-ko/preferences.json
     search.rs       — Meilisearch integration (feature-gated), naive fallback search
+    zmd.rs          — zmd collection management: clone repos, stage files via hardlinks (Rayon parallel), invoke zmd CLI for indexing
   tui/src/
     main.rs         — entry point, terminal setup, tokio runtime, event loop
     app/
@@ -77,7 +78,7 @@ crates/
       styles.rs     — Badge-style key hints, status bar helpers
       help.rs       — Keybinding overlay popup
   cli/src/
-    main.rs         — clap subcommands: list, search, show, articles, bookmarks, context, navigate, speak, precedent-list, precedent-search, precedent-show, precedent-sections, precedent-persons, precedent-search-person, precedent-laws, law-precedents (all with --json)
+    main.rs         — clap subcommands: list, search, show, articles, bookmarks, context, navigate, speak, precedent-list, precedent-search, precedent-show, precedent-sections, precedent-persons, precedent-search-person, precedent-laws, law-precedents, zmd (all with --json)
 ```
 
 ## CLI Subcommands
@@ -98,6 +99,12 @@ crates/
 - `legal-ko-cli law-precedents <law_name> [--article X] [--json] [--limit N]` — reverse: find precedents citing a law
 - `legal-ko-cli precedent-persons <id> [--json]` — extract 법조인 (judges, attorneys, prosecutors) from a precedent
 - `legal-ko-cli precedent-search-person <name> [--role judge|attorney|prosecutor] [--case-type X] [--court X] [--json] [--limit N]` — search precedents by 법조인 name; uses cached person index (~/.cache/legal-ko/person_index.json) for instant repeat lookups, builds index concurrently on first run
+- `legal-ko-cli zmd laws [--json]` — clone/pull legalize-kr, stage 법률.md files via hardlinks, run `zmd update`
+- `legal-ko-cli zmd precedents [--case-type X] [--court X] [--json]` — clone/pull precedent-kr, stage precedent files, run `zmd update`
+- `legal-ko-cli zmd all [--json]` — run both laws and precedents phases
+- `legal-ko-cli zmd sync [--json]` — pull latest from upstream repos and re-index
+- `legal-ko-cli zmd status [--json]` — show repos, staged files, zmd collections
+- `legal-ko-cli zmd reset [--json]` — remove collections and staged data (keeps repo clones)
 
 ## Key Design Decisions
 
