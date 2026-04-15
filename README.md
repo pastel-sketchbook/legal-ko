@@ -122,19 +122,32 @@ legal-ko-cli bookmarks --json
 | `precedent-laws <id>` | Cross-reference: find laws cited by a precedent (4-approach fallback) |
 | `law-precedents <law_name>` | Reverse: find precedents citing a law (`--article` for specific article) |
 
+#### zmd Commands
+
+| Command | Description |
+|---------|-------------|
+| `zmd laws` | Clone legalize-kr, stage + index law files |
+| `zmd precedents` | Clone precedent-kr, stage + index precedents (`--case-type`, `--court`) |
+| `zmd all` | Run both laws and precedents |
+| `zmd sync` | Pull latest from upstream repos + re-index |
+| `zmd status` | Show repos, staged files, collection status |
+| `zmd reset` | Remove collections and staged data |
+
 Law IDs follow the path format: `kr/{법령명}/{유형}` (e.g., `kr/형법/법률`)
 
 Precedent IDs follow: `{사건종류}/{법원명}/{사건번호}` (e.g., `민사/대법원/2000다10048`)
 
 ## LLM Skills
 
-Two skills enable AI agents to search Korean legal data:
+Three skills enable AI agents to search Korean legal data:
 
 - **Law Search** (`.agents/skills/legal-ko-search/`) — Find statutes and
   specific articles from natural language questions
 - **Precedent Search** (`.agents/skills/legal-ko-precedent/`) — Find court
   rulings, extract sections, cross-reference with statutes, and search by
   법조인 (judge/attorney/prosecutor) names
+- **zmd Search** (`.agents/skills/legal-ko-zmd/`) — Hybrid local search
+  (full-text + vector + reranking) over indexed law and precedent collections
 
 **Example:** "전세 문제가 있어. 관련 법을 찾아줘."
 
@@ -144,6 +157,61 @@ disclaimer that results are not legal advice. See
 [law search SKILL.md](.agents/skills/legal-ko-search/SKILL.md) and
 [precedent SKILL.md](.agents/skills/legal-ko-precedent/SKILL.md) for full
 workflows.
+
+## zmd (Local Hybrid Search)
+
+[zmd](https://github.com/nicksenger/zmd) provides local hybrid search
+(full-text + vector + reranking) over Korean law and precedent collections.
+The `legal-ko-cli zmd` subcommands clone the upstream repos, stage files as
+hardlinks, and index them via a native Rust indexer that writes directly to
+the zmd database.
+
+### Quick Start
+
+```bash
+# Prerequisite: install zmd and ensure it's on $PATH
+zmd version
+
+# Index laws + default precedents (민사+형사 대법원)
+task zmd
+
+# Search
+zmd query "전세 보증금 반환" --rerank --json
+```
+
+### Collections
+
+| Collection | Scope | Files | Source |
+|-----------|-------|-------|--------|
+| `laws` | 법률 (Acts) only | ~1,711 | [legalize-kr](https://github.com/legalize-kr/legalize-kr) |
+| `precedents` | 민사 + 형사, 대법원 (default) | ~43K | [precedent-kr](https://github.com/legalize-kr/precedent-kr) |
+
+### Taskfile Tasks
+
+| Task | Description |
+|------|-------------|
+| `task zmd` | Index laws + default precedents |
+| `task zmd:laws` | Index laws only (~1,711 files) |
+| `task zmd:precedents` | Default precedents: 민사+형사 대법원 (~43K) |
+| `task zmd:precedents:all` | All 8 case types + all courts (~123K) |
+| `task zmd:precedents:민사` | 민사 civil — 대법원 + 하급심 (~42K) |
+| `task zmd:precedents:형사` | 형사 criminal (~22K) |
+| `task zmd:precedents:일반행정` | 일반행정 admin (~45K) |
+| `task zmd:precedents:세무` | 세무 tax (~10K) |
+| `task zmd:precedents:특허` | 특허 patent (~3K) |
+| `task zmd:precedents:가사` | 가사 family (~1.4K) |
+| `task zmd:precedents:선거` | 선거·특별 election (~8) |
+| `task zmd:precedents:기타` | 기타 other (~11) |
+| `task zmd:sync` | Pull latest repos + re-index (incremental) |
+| `task zmd:status` | Show collection status |
+| `task zmd:reset` | Remove collections and staged data |
+
+Re-runs are incremental — unchanged files are skipped by stored source
+metadata (size + mtime). After initial indexing, re-runs with no upstream
+changes complete in under 2 seconds.
+
+See [zmd SKILL.md](.agents/skills/legal-ko-zmd/SKILL.md) for detailed
+search workflows, query syntax, and the full collection path reference.
 
 ## AI Agent Integration
 

@@ -204,10 +204,66 @@ tasks:
       - $CLI_NAME zmd laws
 
   zmd:precedents:
-    desc: Stage and index precedent files into zmd
+    desc: Stage and index precedent files into zmd (default 민사·형사/대법원)
     deps: [install]
     cmds:
       - $CLI_NAME zmd precedents
+
+  zmd:precedents:all:
+    desc: Index ALL precedent case types and courts (~123K files)
+    deps: [install]
+    cmds:
+      - $CLI_NAME zmd precedents --case-type 민사 --case-type 형사 --case-type 일반행정 --case-type 세무 --case-type 특허 --case-type 가사 --case-type 선거·특별 --case-type 기타 --court 대법원 --court 하급심 --court 미분류
+
+  # ── per case-type precedent tasks ──────────────────────────
+
+  zmd:precedents:민사:
+    desc: "Index 민사 (civil) — 대법원 + 하급심 (~42K files)"
+    deps: [install]
+    cmds:
+      - $CLI_NAME zmd precedents --case-type 민사 --court 대법원 --court 하급심
+
+  zmd:precedents:형사:
+    desc: "Index 형사 (criminal) — 대법원 + 하급심 (~22K files)"
+    deps: [install]
+    cmds:
+      - $CLI_NAME zmd precedents --case-type 형사 --court 대법원 --court 하급심
+
+  zmd:precedents:일반행정:
+    desc: "Index 일반행정 (admin) — 대법원 + 하급심 (~45K files)"
+    deps: [install]
+    cmds:
+      - $CLI_NAME zmd precedents --case-type 일반행정 --court 대법원 --court 하급심
+
+  zmd:precedents:세무:
+    desc: "Index 세무 (tax) — 대법원 + 하급심 (~10K files)"
+    deps: [install]
+    cmds:
+      - $CLI_NAME zmd precedents --case-type 세무 --court 대법원 --court 하급심
+
+  zmd:precedents:특허:
+    desc: "Index 특허 (patent) — 대법원 + 하급심 (~3K files)"
+    deps: [install]
+    cmds:
+      - $CLI_NAME zmd precedents --case-type 특허 --court 대법원 --court 하급심
+
+  zmd:precedents:가사:
+    desc: "Index 가사 (family) — 대법원 + 하급심 (~1.4K files)"
+    deps: [install]
+    cmds:
+      - $CLI_NAME zmd precedents --case-type 가사 --court 대법원 --court 하급심
+
+  zmd:precedents:선거:
+    desc: "Index 선거·특별 (election/special) — 하급심 (~8 files)"
+    deps: [install]
+    cmds:
+      - $CLI_NAME zmd precedents --case-type 선거·특별 --court 하급심
+
+  zmd:precedents:기타:
+    desc: "Index 기타 (other) — 대법원 + 하급심 + 미분류 (~11 files)"
+    deps: [install]
+    cmds:
+      - $CLI_NAME zmd precedents --case-type 기타 --court 대법원 --court 하급심 --court 미분류
 
   zmd:sync:
     desc: Pull latest repos and re-index zmd

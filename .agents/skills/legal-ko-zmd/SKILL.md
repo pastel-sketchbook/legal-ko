@@ -29,7 +29,7 @@ reranking over locally indexed markdown collections.
 | **Tool** | `zmd` (v0.3.0+) |
 | **Data source** | Two collections indexed locally from GitHub |
 | **Collections** | `laws` → [legalize-kr](https://github.com/legalize-kr/legalize-kr), `precedents` → [precedent-kr](https://github.com/legalize-kr/precedent-kr) |
-| **Scope** | Laws: 법률 (Acts) only (~1,711 docs). Precedents: 민사 + 형사 대법원 only (~35K docs). Expandable. |
+| **Scope** | Laws: 법률 (Acts) only (~1,711 docs). Precedents: 민사 + 형사 대법원 by default (~43K docs); expandable to all 8 case types + 하급심 (~123K docs). |
 | **Search modes** | FTS (`search`), vector (`vsearch`), hybrid (`query`), context snippets (`context`) |
 | **Output** | Markdown by default; `--json`, `--csv`, `--md` flags available |
 | **Language** | Respond in the same language the user used (Korean or English) |
@@ -46,66 +46,89 @@ zmd version
 
 ### Building the Index
 
-Collections are built using `scripts/zmd-collections.sh`, which:
+Collections are built using `legal-ko-cli zmd` subcommands (or Taskfile tasks),
+which:
 
-1. Clones the upstream repos (shallow) into `~/.cache/legal-ko/zmd/repos/`
-2. Stages filtered files as hardlinks into `~/.cache/legal-ko/zmd/stage/`
-3. Registers the staged dirs as local zmd collections
-4. Indexes in batches of 100 files (configurable), calling `zmd update` per batch
+1. Clone the upstream repos (shallow) into `~/.cache/legal-ko/zmd/repos/`
+2. Stage filtered files as hardlinks into `~/.cache/legal-ko/zmd/stage/`
+3. Index via the native Rust indexer (writes directly to `.qmd/data.db`)
+4. Skip unchanged files by stored source metadata (size + mtime) — re-runs are instant
 
 ```bash
 # From the legal-ko workspace root:
 
 # Index laws only (법률 ~1,711 docs)
-./scripts/zmd-collections.sh laws
+task zmd:laws
 
-# Index precedents only (민사+형사 대법원 ~35K docs)
-./scripts/zmd-collections.sh precedents
+# Index default precedents (민사+형사 대법원 ~43K docs)
+task zmd:precedents
 
-# Index everything
-./scripts/zmd-collections.sh all
+# Index ALL precedent case types and courts (~123K docs)
+task zmd:precedents:all
+
+# Index a specific case type with both court levels
+task zmd:precedents:일반행정
+task zmd:precedents:세무
+
+# Index everything (laws + default precedents)
+task zmd
 ```
 
 > **Resumable:** If interrupted (Ctrl-C, timeout, etc.), re-run the same command.
-> Already-indexed files are skipped automatically. Progress is shown per batch.
+> Already-indexed files are skipped automatically (source metadata check).
 
-> **Timing:** Indexing speed depends on embedding generation. Expect ~1-20s/file
-> depending on document size. Laws (~1,711 files) takes ~25-60 min.
-> Precedents (~35K files) takes many hours. Run in a dedicated terminal.
+> **Timing:** First-run indexing speed depends on file count and hashing/embedding.
+> Laws (~1,711 files) takes ~5-10 min. Default precedents (~43K files) takes
+> ~30-60 min. Full precedents (~123K files) takes several hours.
+> Re-runs with no changes complete in under 2 seconds.
 
 Check progress at any time:
 
 ```bash
-./scripts/zmd-collections.sh status
+task zmd:status
 # or
 zmd status
 ```
 
 ### Collection Scope
 
-The script indexes a curated subset by default:
+The default configuration indexes a curated subset:
 
 | Collection | Scope | File count | Source |
 |-----------|-------|-----------|--------|
 | `laws` | 법률 (Acts) only | ~1,711 | `legalize-kr` — `kr/*/법률.md` |
-| `precedents` | 민사 + 형사, 대법원 only | ~35,000 | `precedent-kr` — `{민사,형사}/대법원/*.md` |
+| `precedents` | 민사 + 형사, 대법원 only | ~43,491 | `precedent-kr` — `{민사,형사}/대법원/*.md` |
 
-**Excluded by default:**
+**Expandable via Taskfile tasks:**
+
+| Task | Case type | Courts | ~Files |
+|------|-----------|--------|--------|
+| `task zmd:precedents` | 민사, 형사 | 대법원 | 43K |
+| `task zmd:precedents:민사` | 민사 (civil) | 대법원 + 하급심 | 42K |
+| `task zmd:precedents:형사` | 형사 (criminal) | 대법원 + 하급심 | 22K |
+| `task zmd:precedents:일반행정` | 일반행정 (admin) | 대법원 + 하급심 | 45K |
+| `task zmd:precedents:세무` | 세무 (tax) | 대법원 + 하급심 | 10K |
+| `task zmd:precedents:특허` | 특허 (patent) | 대법원 + 하급심 | 3K |
+| `task zmd:precedents:가사` | 가사 (family) | 대법원 + 하급심 | 1.4K |
+| `task zmd:precedents:선거` | 선거·특별 (election) | 하급심 | 8 |
+| `task zmd:precedents:기타` | 기타 (other) | 대법원 + 하급심 + 미분류 | 11 |
+| `task zmd:precedents:all` | **All 8 case types** | **All courts** | **~123K** |
+
+**Not indexed by default:**
 - Laws: 대통령령 (시행령), 부령 (시행규칙), and other regulation types
-- Precedents: 가사, 세무, 일반행정, 특허, 기타, 선거·특별 case types
+- Precedents: 일반행정, 세무, 특허, 가사, 선거·특별, 기타 case types
 - Precedents: 하급심 (lower court) rulings
 
-**To expand scope**, edit the arrays at the top of `scripts/zmd-collections.sh`:
+To expand scope, run the corresponding Taskfile task or pass `--case-type` and
+`--court` flags directly:
 
 ```bash
-# Add lower courts
-PRECEDENT_COURTS=("대법원" "하급심")
+# Via Taskfile
+task zmd:precedents:일반행정
 
-# Add more case types
-PRECEDENT_CASE_TYPES=("민사" "형사" "세무" "일반행정")
+# Via CLI directly
+legal-ko-cli zmd precedents --case-type 일반행정 --court 대법원 --court 하급심
 ```
-
-Then re-run `./scripts/zmd-collections.sh precedents`.
 
 ### Syncing Updates
 
@@ -113,11 +136,12 @@ The upstream repositories are updated periodically. To pull new/changed
 documents and re-index:
 
 ```bash
-./scripts/zmd-collections.sh sync
+task zmd:sync
 ```
 
-This does a `git pull` on both repos, re-stages any new files, and runs
-`zmd update` (incremental — only new/changed files are processed).
+This does a `git pull` on both repos, re-stages any new/changed files, and
+re-indexes (incremental — only changed files are processed, unchanged files
+are skipped by stored source metadata).
 
 ## When to Use
 
@@ -334,15 +358,18 @@ Only 법률 (Acts passed by the National Assembly) are indexed. 대통령령,
 Document paths follow the pattern: `precedents/{사건종류}/{법원명}/{사건번호}.md`
 
 Only 민사 (civil) and 형사 (criminal) Supreme Court (대법원) cases are indexed
-by default. Expand scope via the script configuration.
+by default (~43K docs). Expand scope using Taskfile tasks (see Collection Scope above).
 
 | Example Path | Description |
 |-------------|-------------|
 | `precedents/민사/대법원/2000다10048.md` | Civil Supreme Court case |
 | `precedents/형사/대법원/2020도12017.md` | Criminal Supreme Court case |
+| `precedents/일반행정/대법원/2019두30304.md` | Admin Supreme Court case (after expansion) |
+| `precedents/민사/하급심/2015나12345.md` | Civil lower court case (after expansion) |
 
-> **Not indexed by default:** 가사 (family), 세무 (tax), 일반행정 (admin),
-> 특허 (patent), 하급심 (lower court) cases. Use `legal-ko-cli` for those.
+> **Not indexed by default:** 일반행정, 세무, 특허, 가사, 선거·특별, 기타 case
+> types, and all 하급심 (lower court) cases. Run `task zmd:precedents:all` to
+> index everything, or individual tasks like `task zmd:precedents:세무`.
 
 ## Topic → Search Term Reference
 
@@ -393,36 +420,52 @@ legal-ko-cli law-precedents "주택임대차보호법" --article "제3조" --jso
 legal-ko-cli navigate "kr/주택임대차보호법/법률" --article "제3조"
 ```
 
-## Script Reference
+## CLI & Taskfile Reference
 
-### `scripts/zmd-collections.sh`
+### `legal-ko-cli zmd` subcommands
 
-| Command | Purpose |
-|---------|---------|
-| `all` | Run all phases: laws then precedents (default) |
-| `laws` | Clone + stage + index laws (법률 only, ~1,711 docs) |
-| `precedents` | Clone + stage + index precedents (민사+형사 대법원, ~35K docs) |
+| Subcommand | Purpose |
+|------------|---------|
+| `laws` | Clone legalize-kr, stage 법률.md files, index via native indexer |
+| `precedents` | Clone precedent-kr, stage + index precedents (default: 민사+형사 대법원) |
+| `all` | Run both `laws` and `precedents` phases |
 | `sync` | Pull latest from upstream repos + re-stage + re-index |
-| `status` | Show current state (repos, staged files, zmd collections) |
+| `status` | Show repos, staged files, collection document counts |
 | `reset` | Remove collections and staged data (keeps repo clones) |
-| `help` | Show help |
 
-| Env Var | Default | Purpose |
-|---------|---------|---------|
-| `ZMD_CACHE_DIR` | `~/.cache/legal-ko/zmd` | Cache root for repos, staged files |
-| `ZMD_BATCH_SIZE` | `100` | Files per `zmd update` call |
+Precedent scope is controlled via `--case-type` and `--court` flags (repeatable).
 
-### How Batching Works
+### Taskfile tasks
 
-1. The script finds all matching files (e.g. `kr/*/법률.md`)
-2. Stages them as **hardlinks** into the collection dir (zero disk overhead)
-3. Calls `zmd update` every `BATCH_SIZE` files
-4. `zmd update` skips already-indexed docs, so only new files are processed
-5. On re-run, already-staged files are also skipped
+| Task | Equivalent CLI | Purpose |
+|------|---------------|---------|
+| `task zmd` | `legal-ko-cli zmd all` | Laws + default precedents |
+| `task zmd:laws` | `legal-ko-cli zmd laws` | Index laws (~1,711 files) |
+| `task zmd:precedents` | `legal-ko-cli zmd precedents` | Default precedents (~43K) |
+| `task zmd:precedents:all` | `legal-ko-cli zmd precedents --case-type ... --court ...` | All 8 case types + all courts (~123K) |
+| `task zmd:precedents:민사` | `legal-ko-cli zmd precedents --case-type 민사 --court 대법원 --court 하급심` | Civil (~42K) |
+| `task zmd:precedents:형사` | — | Criminal (~22K) |
+| `task zmd:precedents:일반행정` | — | Administrative (~45K) |
+| `task zmd:precedents:세무` | — | Tax (~10K) |
+| `task zmd:precedents:특허` | — | Patent (~3K) |
+| `task zmd:precedents:가사` | — | Family (~1.4K) |
+| `task zmd:precedents:선거` | — | Election/special (~8) |
+| `task zmd:precedents:기타` | — | Other (~11) |
+| `task zmd:sync` | `legal-ko-cli zmd sync` | Pull + re-index |
+| `task zmd:status` | `legal-ko-cli zmd status` | Show status |
+| `task zmd:reset` | `legal-ko-cli zmd reset` | Remove collections |
+
+### How Indexing Works
+
+1. Clone/pull upstream repo (shallow) into `~/.cache/legal-ko/zmd/repos/`
+2. Stage matching files as **hardlinks** into `~/.cache/legal-ko/zmd/stage/` (zero disk overhead)
+3. **Pre-filter**: compare each staged file's size + mtime against stored `source_size`/`source_mtime_ns` in the database — unchanged files are skipped before any read or hash
+4. **Index**: changed/new files are read, hashed (SHA-256), embedded (fnv_embed), and written to `.qmd/data.db` via the native Rust indexer
+5. **Bulk mode**: FTS5 triggers are dropped during indexing and rebuilt afterward; prepared statements and batch inserts minimize SQLite overhead
 
 This means:
-- Each batch completes in 1-5 min (not hours)
-- Progress is visible after every batch
+- First run reads and indexes all files (minutes to hours depending on count)
+- Re-runs with no upstream changes complete in **under 2 seconds** (metadata-only check, no file reads)
 - Safe to interrupt — re-run picks up where it left off
 
 ### Directory Layout
@@ -448,11 +491,11 @@ This means:
 | Error | Cause | Resolution |
 |-------|-------|------------|
 | `command not found: zmd` | zmd not installed | Install zmd and add to `$PATH` |
-| `Failed to open database` | Database not initialized | Run `zmd update` or `./scripts/zmd-collections.sh laws` |
-| `Documents: 0` in status | Index not yet built | Run `./scripts/zmd-collections.sh laws` (or `all`) |
-| No search results | Query too specific or index incomplete | Check `zmd status`; try broader terms; verify collections with `zmd collection list` |
-| Stale results | Upstream repos updated since last sync | Run `./scripts/zmd-collections.sh sync` |
-| Precedent not found | Case type or court not in indexed scope | Check scope config; use `legal-ko-cli precedent-show` as fallback |
+| `Failed to open database` | Database not initialized | Run `task zmd:laws` (or `task zmd`) to build initial index |
+| `Documents: 0` in status | Index not yet built | Run `task zmd` to index laws + default precedents |
+| No search results | Query too specific or index incomplete | Check `task zmd:status`; try broader terms; verify collections with `zmd ls` |
+| Stale results | Upstream repos updated since last sync | Run `task zmd:sync` to pull and re-index |
+| Precedent not found | Case type or court not in indexed scope | Expand scope with `task zmd:precedents:all`; use `legal-ko-cli precedent-show` as fallback |
 
 ## Examples
 
