@@ -7,7 +7,10 @@
 //! `zmd search`, `zmd query`, `zmd vsearch`, and the MCP server all continue
 //! to work transparently.
 
-use std::path::Path;
+use std::{
+    path::{Path, PathBuf},
+    time::UNIX_EPOCH,
+};
 
 use anyhow::{Context, Result};
 use rayon::prelude::*;
@@ -52,17 +55,30 @@ const FNV_PRIME: u32 = 16_777_619;
 
 // ── Public types ─────────────────────────────────────────────────
 
-/// A file to be indexed: its collection-relative path and raw content.
+/// A file to be indexed.
 pub struct FileEntry {
     /// Path relative to the collection root (e.g. `"민법.md"`).
     pub path: String,
-    /// Raw file content bytes.
-    pub content: Vec<u8>,
+    /// Path to the staged file content.
+    pub staged_path: PathBuf,
+    /// Source file length in bytes.
+    pub source_size: u64,
+    /// Source file mtime as nanoseconds since the Unix epoch.
+    pub source_mtime_ns: i64,
+}
+
+#[derive(Clone)]
+struct ExistingDoc {
+    hash: String,
+    source_size: Option<u64>,
+    source_mtime_ns: Option<i64>,
 }
 
 /// Result of processing a single file on a Rayon thread.
 struct Processed {
     path: String,
+    source_size: u64,
+    source_mtime_ns: i64,
     hash: String,
     title: String,
     content: Vec<u8>,
@@ -71,8 +87,10 @@ struct Processed {
     /// Parallel-computed embeddings, one per chunk.
     embeddings: Option<Vec<Vec<f32>>>,
     /// `true` when the document row already maps this path to the same
-    /// content hash — no SQL writes needed at all.
+    /// source metadata — no file read or SQL writes needed at all.
     doc_unchanged: bool,
+    /// `true` when only stored source metadata needs to be refreshed.
+    metadata_only: bool,
 }
 
 /// Statistics returned after an indexing run.
@@ -158,23 +176,32 @@ impl ZmdDb {
         Ok(set)
     }
 
-    /// Snapshot existing `(collection, path) → hash` mappings for a
-    /// collection.  Used to skip `INSERT OR REPLACE` for documents whose
-    /// content hasn't changed — avoiding the costly FTS5 trigger storm.
-    fn existing_doc_hashes(
+    /// Snapshot existing document metadata for a collection.
+    fn existing_docs(
         &self,
         collection: &str,
-    ) -> Result<std::collections::HashMap<String, String>> {
+    ) -> Result<std::collections::HashMap<String, ExistingDoc>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT path, hash FROM documents WHERE collection = ?1 AND active = 1")?;
+            .prepare(
+                "SELECT path, hash, source_size, source_mtime_ns FROM documents WHERE collection = ?1 AND active = 1",
+            )?;
         let rows = stmt.query_map(params![collection], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                ExistingDoc {
+                    hash: row.get::<_, String>(1)?,
+                    source_size: row
+                        .get::<_, Option<i64>>(2)?
+                        .and_then(|size| u64::try_from(size).ok()),
+                    source_mtime_ns: row.get::<_, Option<i64>>(3)?,
+                },
+            ))
         })?;
         let mut map = std::collections::HashMap::new();
-        for pair in rows {
-            let (path, hash) = pair?;
-            map.insert(path, hash);
+        for row in rows {
+            let (path, doc) = row?;
+            map.insert(path, doc);
         }
         Ok(map)
     }
@@ -254,13 +281,12 @@ impl ZmdDb {
         let mut known = self.existing_hashes()?;
         debug!(known_hashes = known.len(), "loaded existing content hashes");
 
-        // Snapshot of existing document (path → hash) mappings so we can
-        // skip the costly INSERT OR REPLACE (and its FTS5 trigger storm)
-        // for documents whose content is unchanged.
-        let doc_hashes = self.existing_doc_hashes(collection)?;
+        // Snapshot of existing document metadata so unchanged files can be
+        // skipped before reading content from disk.
+        let existing_docs = self.existing_docs(collection)?;
         debug!(
-            known_docs = doc_hashes.len(),
-            "loaded existing document hashes"
+            known_docs = existing_docs.len(),
+            "loaded existing document metadata"
         );
 
         let mut stats = IndexStats::default();
@@ -271,17 +297,32 @@ impl ZmdDb {
             let processed: Vec<Processed> = batch
                 .par_iter()
                 .map(|entry| {
-                    let hash = sha256_hex(&entry.content);
-                    let title = extract_title(&entry.content);
+                    let existing = existing_docs.get(&entry.path);
+                    if existing.is_some_and(|doc| {
+                        doc.source_size == Some(entry.source_size)
+                            && doc.source_mtime_ns == Some(entry.source_mtime_ns)
+                    }) {
+                        return Processed {
+                            path: entry.path.clone(),
+                            source_size: entry.source_size,
+                            source_mtime_ns: entry.source_mtime_ns,
+                            hash: String::new(),
+                            title: String::new(),
+                            content: Vec::new(),
+                            chunks: None,
+                            embeddings: None,
+                            doc_unchanged: true,
+                            metadata_only: false,
+                        };
+                    }
+
+                    let content = std::fs::read(&entry.staged_path).unwrap_or_default();
+                    let hash = sha256_hex(&content);
+                    let title = extract_title(&content);
                     let need_embed = !known.contains(&hash);
-                    // Check whether the document row already points to the
-                    // same hash — if so, we can skip the INSERT OR REPLACE
-                    // entirely (no FTS5 trigger churn).
-                    let doc_unchanged = doc_hashes
-                        .get(&entry.path)
-                        .is_some_and(|existing| existing == &hash);
+                    let metadata_only = existing.is_some_and(|doc| doc.hash == hash);
                     let (chunks, embeddings) = if need_embed {
-                        let ch = chunk_document(&entry.content);
+                        let ch = chunk_document(&content);
                         let embs: Vec<Vec<f32>> = ch
                             .iter()
                             .map(|chunk| {
@@ -295,12 +336,15 @@ impl ZmdDb {
                     };
                     Processed {
                         path: entry.path.clone(),
+                        source_size: entry.source_size,
+                        source_mtime_ns: entry.source_mtime_ns,
                         hash,
                         title,
-                        content: entry.content.clone(),
+                        content,
                         chunks,
                         embeddings,
-                        doc_unchanged,
+                        doc_unchanged: false,
+                        metadata_only,
                     }
                 })
                 .collect();
@@ -310,9 +354,22 @@ impl ZmdDb {
 
             for p in &processed {
                 if p.doc_unchanged {
-                    // Document path already points to the same content
-                    // hash — no SQL writes needed, skip entirely.
+                    // Document metadata already matches the source file,
+                    // so there is nothing to read or write.
                     stats.skipped += 1;
+                    global_idx += 1;
+                    progress_cb(global_idx, total);
+                    continue;
+                }
+
+                if p.metadata_only {
+                    #[allow(clippy::cast_possible_wrap)]
+                    let source_size = p.source_size as i64;
+                    tx.execute(
+                        "UPDATE documents SET source_size = ?1, source_mtime_ns = ?2, modified_at = ?3 WHERE collection = ?4 AND path = ?5",
+                        params![source_size, p.source_mtime_ns, TIMESTAMP, collection, &p.path],
+                    )?;
+                    stats.indexed += 1;
                     global_idx += 1;
                     progress_cb(global_idx, total);
                     continue;
@@ -326,9 +383,11 @@ impl ZmdDb {
                 )?;
 
                 // Insert document (triggers FTS5 sync).
+                #[allow(clippy::cast_possible_wrap)]
+                let source_size = p.source_size as i64;
                 tx.execute(
-                    "INSERT OR REPLACE INTO documents (collection, path, title, hash, created_at, modified_at, active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)",
-                    params![collection, &p.path, &p.title, &p.hash, TIMESTAMP, TIMESTAMP],
+                    "INSERT OR REPLACE INTO documents (collection, path, title, hash, source_size, source_mtime_ns, created_at, modified_at, active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
+                    params![collection, &p.path, &p.title, &p.hash, source_size, p.source_mtime_ns, TIMESTAMP, TIMESTAMP],
                 )?;
 
                 stats.indexed += 1;
@@ -402,6 +461,8 @@ fn init_schema(conn: &Connection) -> Result<()> {
             path        TEXT NOT NULL,
             title       TEXT NOT NULL,
             hash        TEXT NOT NULL,
+            source_size INTEGER,
+            source_mtime_ns INTEGER,
             created_at  TEXT NOT NULL,
             modified_at TEXT NOT NULL,
             active      INTEGER NOT NULL DEFAULT 1,
@@ -492,7 +553,34 @@ fn init_schema(conn: &Connection) -> Result<()> {
         ",
     )?;
 
+    ensure_documents_column(conn, "source_size", "INTEGER")?;
+    ensure_documents_column(conn, "source_mtime_ns", "INTEGER")?;
+
     Ok(())
+}
+
+fn ensure_documents_column(conn: &Connection, column: &str, definition: &str) -> Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(documents)")?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for existing in columns {
+        if existing? == column {
+            return Ok(());
+        }
+    }
+
+    conn.execute(
+        &format!("ALTER TABLE documents ADD COLUMN {column} {definition}"),
+        [],
+    )?;
+    Ok(())
+}
+
+#[must_use]
+pub fn system_time_to_unix_nanos(time: std::time::SystemTime) -> i64 {
+    time.duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_nanos()).ok())
+        .unwrap_or_default()
 }
 
 // ── SHA-256 ──────────────────────────────────────────────────────
@@ -801,10 +889,19 @@ pub fn read_staged_files(dir: &Path) -> Result<Vec<FileEntry>> {
             continue;
         }
         let name = entry.file_name().to_string_lossy().to_string();
-        let content = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+        let metadata =
+            std::fs::metadata(&path).with_context(|| format!("stat {}", path.display()))?;
+        #[allow(clippy::cast_possible_wrap)]
+        let source_size = metadata.len() as i64;
+        let source_mtime_ns = metadata
+            .modified()
+            .map(system_time_to_unix_nanos)
+            .unwrap_or_default();
         entries.push(FileEntry {
             path: name,
-            content,
+            staged_path: path,
+            source_size: u64::try_from(source_size).unwrap_or_default(),
+            source_mtime_ns,
         });
     }
     Ok(entries)
@@ -836,9 +933,20 @@ fn walk_dir_recursive(root: &Path, dir: &Path, entries: &mut Vec<FileEntry>) -> 
                 .unwrap_or(&path)
                 .to_string_lossy()
                 .to_string();
-            let content =
-                std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-            entries.push(FileEntry { path: rel, content });
+            let metadata =
+                std::fs::metadata(&path).with_context(|| format!("stat {}", path.display()))?;
+            #[allow(clippy::cast_possible_wrap)]
+            let source_size = metadata.len() as i64;
+            let source_mtime_ns = metadata
+                .modified()
+                .map(system_time_to_unix_nanos)
+                .unwrap_or_default();
+            entries.push(FileEntry {
+                path: rel,
+                staged_path: path,
+                source_size: u64::try_from(source_size).unwrap_or_default(),
+                source_mtime_ns,
+            });
         }
     }
     Ok(())

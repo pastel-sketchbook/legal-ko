@@ -1512,7 +1512,7 @@ fn cmd_zmd_precedents(
         cfg.courts = courts;
     }
 
-    let results = zmd::index_precedents(
+    let result = zmd::index_precedents(
         &cfg,
         |ct, court, count| {
             if !as_json {
@@ -1530,33 +1530,29 @@ fn cmd_zmd_precedents(
     )?;
 
     if as_json {
-        let courts_json: Vec<_> = results
+        let courts_json: Vec<_> = result
+            .courts
             .iter()
-            .map(|(label, r)| {
+            .map(|court| {
                 json!({
-                    "label": label,
-                    "total": r.total_files,
-                    "newly_staged": r.newly_staged,
-                    "already_staged": r.already_staged,
-                    "batches": r.batches,
-                    "elapsed_secs": r.total_update_secs,
+                    "label": court.label,
+                    "total": court.total_files,
                 })
             })
             .collect();
-        let total_new: usize = results.iter().map(|(_, r)| r.newly_staged).sum();
-        let total_files: usize = results.iter().map(|(_, r)| r.total_files).sum();
-        let total_secs: f64 = results.iter().map(|(_, r)| r.total_update_secs).sum();
         let obj = json!({
             "courts": courts_json,
-            "total_files": total_files,
-            "total_new": total_new,
-            "elapsed_secs": total_secs,
+            "total_files": result.summary.total_files,
+            "total_new": result.summary.newly_staged,
+            "already_staged": result.summary.already_staged,
+            "elapsed_secs": result.summary.total_update_secs,
+            "batches": result.summary.batches,
         });
         println!("{}", serde_json::to_string_pretty(&obj)?);
     } else {
-        let total_new: usize = results.iter().map(|(_, r)| r.newly_staged).sum();
-        let total_files: usize = results.iter().map(|(_, r)| r.total_files).sum();
-        let total_secs: f64 = results.iter().map(|(_, r)| r.total_update_secs).sum();
+        let total_new = result.summary.newly_staged;
+        let total_files = result.summary.total_files;
+        let total_secs = result.summary.total_update_secs;
         println!("Precedents: {total_files} total, {total_new} new — {total_secs:.0}s",);
     }
     Ok(())
@@ -1568,11 +1564,7 @@ fn cmd_zmd_all(as_json: bool, skip_pull: bool) -> Result<()> {
 
     if as_json {
         let law_result = zmd::index_laws(&cfg, |_| {})?;
-        let prec_results = zmd::index_precedents(&cfg, |_, _, _| {}, |_, _, _| {})?;
-
-        let prec_new: usize = prec_results.iter().map(|(_, r)| r.newly_staged).sum();
-        let prec_total: usize = prec_results.iter().map(|(_, r)| r.total_files).sum();
-        let prec_secs: f64 = prec_results.iter().map(|(_, r)| r.total_update_secs).sum();
+        let prec_result = zmd::index_precedents(&cfg, |_, _, _| {}, |_, _, _| {})?;
 
         let obj = json!({
             "laws": {
@@ -1583,9 +1575,11 @@ fn cmd_zmd_all(as_json: bool, skip_pull: bool) -> Result<()> {
                 "elapsed_secs": law_result.total_update_secs,
             },
             "precedents": {
-                "total_files": prec_total,
-                "total_new": prec_new,
-                "elapsed_secs": prec_secs,
+                "total_files": prec_result.summary.total_files,
+                "total_new": prec_result.summary.newly_staged,
+                "already_staged": prec_result.summary.already_staged,
+                "elapsed_secs": prec_result.summary.total_update_secs,
+                "batches": prec_result.summary.batches,
             },
         });
         println!("{}", serde_json::to_string_pretty(&obj)?);
@@ -1608,12 +1602,12 @@ fn cmd_zmd_sync(as_json: bool) -> Result<()> {
             });
         }
         if cfg.precedent_clone().join(".git").is_dir() {
-            let results = zmd::index_precedents(&cfg, |_, _, _| {}, |_, _, _| {})?;
-            let total_new: usize = results.iter().map(|(_, r)| r.newly_staged).sum();
-            let total_secs: f64 = results.iter().map(|(_, r)| r.total_update_secs).sum();
+            let prec_result = zmd::index_precedents(&cfg, |_, _, _| {}, |_, _, _| {})?;
             result["precedents"] = json!({
-                "total_new": total_new,
-                "elapsed_secs": total_secs,
+                "total_new": prec_result.summary.newly_staged,
+                "already_staged": prec_result.summary.already_staged,
+                "elapsed_secs": prec_result.summary.total_update_secs,
+                "total_files": prec_result.summary.total_files,
             });
         }
         println!("{}", serde_json::to_string_pretty(&result)?);

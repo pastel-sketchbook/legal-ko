@@ -185,6 +185,20 @@ pub struct IndexResult {
     pub total_update_secs: f64,
 }
 
+/// One precedent source scope discovered during collection.
+#[derive(Debug, Clone)]
+pub struct PrecedentCourtCount {
+    pub label: String,
+    pub total_files: usize,
+}
+
+/// Result of a full precedent indexing run.
+#[derive(Debug, Clone)]
+pub struct PrecedentIndexResult {
+    pub courts: Vec<PrecedentCourtCount>,
+    pub summary: IndexResult,
+}
+
 /// Full status snapshot.
 #[derive(Debug, Clone, Default)]
 pub struct ZmdStatus {
@@ -393,7 +407,7 @@ fn classify_files(
             .with_context(|| format!("File {} not under {}", src.display(), src_root.display()))?;
         let dst = stage_root.join(rel);
 
-        if existing.contains(dst.as_path()) {
+        if existing.contains(dst.as_path()) && paths_match(src, &dst) {
             already_staged += 1;
         } else {
             to_link.push((src.clone(), dst));
@@ -401,6 +415,25 @@ fn classify_files(
     }
 
     Ok((already_staged, to_link))
+}
+
+fn paths_match(src: &Path, dst: &Path) -> bool {
+    let Ok(src_meta) = std::fs::metadata(src) else {
+        return false;
+    };
+    let Ok(dst_meta) = std::fs::metadata(dst) else {
+        return false;
+    };
+
+    src_meta.len() == dst_meta.len()
+        && src_meta
+            .modified()
+            .ok()
+            .map(crate::native_indexer::system_time_to_unix_nanos)
+            == dst_meta
+                .modified()
+                .ok()
+                .map(crate::native_indexer::system_time_to_unix_nanos)
 }
 
 /// Recursively scan a directory and collect all file paths into a `HashSet`.
@@ -512,10 +545,16 @@ where
         .filter_map(|src| {
             let rel = src.strip_prefix(src_root).ok()?;
             let staged = stage_root.join(rel);
-            let content = std::fs::read(&staged).ok()?;
+            let metadata = std::fs::metadata(src).ok()?;
+            let source_mtime_ns = metadata
+                .modified()
+                .map(crate::native_indexer::system_time_to_unix_nanos)
+                .unwrap_or_default();
             Some(crate::native_indexer::FileEntry {
                 path: rel.to_string_lossy().to_string(),
-                content,
+                staged_path: staged,
+                source_size: metadata.len(),
+                source_mtime_ns,
             })
         })
         .collect();
@@ -725,7 +764,7 @@ pub fn index_precedents<F, G>(
     cfg: &ZmdConfig,
     mut on_court: G,
     mut on_batch: F,
-) -> Result<Vec<(String, IndexResult)>>
+) -> Result<PrecedentIndexResult>
 where
     F: FnMut(&str, &str, &BatchProgress),
     G: FnMut(&str, &str, usize),
@@ -760,11 +799,19 @@ where
     }
 
     if all_files.is_empty() {
-        return Ok(Vec::new());
+        return Ok(PrecedentIndexResult {
+            courts: Vec::new(),
+            summary: IndexResult {
+                total_files: 0,
+                already_staged: 0,
+                newly_staged: 0,
+                batches: 0,
+                total_update_secs: 0.0,
+            },
+        });
     }
 
     // ── Phase 2: Stage + index all files in a single pass ────────
-    let total_files = all_files.len();
     let result = stage_and_index_batched(
         &all_files,
         &cfg.precedent_clone(),
@@ -779,43 +826,16 @@ where
         },
     )?;
 
-    // Build per-court results for backward-compatible JSON output.
-    let mut results = Vec::new();
-    for (ct, co, count) in &court_counts {
-        let label = format!("{ct}/{co}");
-        // Proportion this court's share of the totals.
-        // Precision loss from usize→f64 is acceptable for display-only stats.
-        #[allow(clippy::cast_precision_loss)]
-        let fraction = if total_files > 0 {
-            *count as f64 / total_files as f64
-        } else {
-            0.0
-        };
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_precision_loss
-        )]
-        let proportional_staged = (result.already_staged as f64 * fraction) as usize;
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_precision_loss
-        )]
-        let proportional_new = (result.newly_staged as f64 * fraction) as usize;
-        results.push((
-            label,
-            IndexResult {
-                total_files: *count,
-                already_staged: proportional_staged,
-                newly_staged: proportional_new,
-                batches: 1,
-                total_update_secs: result.total_update_secs * fraction,
-            },
-        ));
-    }
-
-    Ok(results)
+    Ok(PrecedentIndexResult {
+        courts: court_counts
+            .into_iter()
+            .map(|(ct, co, total_files)| PrecedentCourtCount {
+                label: format!("{ct}/{co}"),
+                total_files,
+            })
+            .collect(),
+        summary: result,
+    })
 }
 
 /// Run both laws and precedents indexing.
@@ -845,7 +865,7 @@ pub fn index_all(cfg: &ZmdConfig) -> Result<()> {
     );
 
     info!("Phase 2/2: Precedents");
-    let prec_results = index_precedents(
+    let prec_result = index_precedents(
         cfg,
         |ct, court, count| {
             info!(%ct, %court, count, "precedent court");
@@ -865,9 +885,9 @@ pub fn index_all(cfg: &ZmdConfig) -> Result<()> {
         },
     )?;
 
-    let total_new: usize = prec_results.iter().map(|(_, r)| r.newly_staged).sum();
-    let total_files: usize = prec_results.iter().map(|(_, r)| r.total_files).sum();
-    let total_secs: f64 = prec_results.iter().map(|(_, r)| r.total_update_secs).sum();
+    let total_new = prec_result.summary.newly_staged;
+    let total_files = prec_result.summary.total_files;
+    let total_secs = prec_result.summary.total_update_secs;
     info!(
         total_files,
         total_new,
@@ -905,7 +925,7 @@ pub fn sync(cfg: &ZmdConfig) -> Result<()> {
 
     if cfg.precedent_clone().join(".git").is_dir() {
         info!("Syncing precedents...");
-        let results = index_precedents(
+        let result = index_precedents(
             cfg,
             |_, _, _| {},
             |ct, court, bp| {
@@ -921,8 +941,8 @@ pub fn sync(cfg: &ZmdConfig) -> Result<()> {
                 }
             },
         )?;
-        let total_new: usize = results.iter().map(|(_, r)| r.newly_staged).sum();
-        let total_secs: f64 = results.iter().map(|(_, r)| r.total_update_secs).sum();
+        let total_new = result.summary.newly_staged;
+        let total_secs = result.summary.total_update_secs;
         info!(
             total_new,
             secs = format!("{total_secs:.0}"),
@@ -1033,5 +1053,26 @@ mod tests {
         let cfg = ZmdConfig::default_config().unwrap();
         assert!(cfg.batch_size > 0);
         assert!(cfg.batch_size <= 1000);
+    }
+
+    #[test]
+    fn test_paths_match_detects_changes() {
+        let root = std::env::temp_dir().join(format!("zmd_paths_match_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let src = root.join("src.md");
+        let dst = root.join("dst.md");
+        std::fs::write(&src, "one").unwrap();
+        std::fs::hard_link(&src, &dst).unwrap();
+        assert!(paths_match(&src, &dst));
+
+        std::fs::remove_file(&dst).unwrap();
+        std::fs::write(&dst, "one").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        std::fs::write(&src, "two two").unwrap();
+        assert!(!paths_match(&src, &dst));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
