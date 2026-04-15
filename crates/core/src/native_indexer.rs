@@ -147,7 +147,14 @@ impl ZmdDb {
             }
         }
 
-        conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;\
+             PRAGMA foreign_keys = ON;\
+             PRAGMA synchronous = NORMAL;\
+             PRAGMA temp_store = MEMORY;\
+             PRAGMA cache_size = -200000;\
+             PRAGMA mmap_size = 268435456;",
+        )?;
         init_schema(&conn)?;
 
         Ok(Self { conn })
@@ -243,17 +250,20 @@ impl ZmdDb {
     // ── High-level batch pipeline ────────────────────────────────
 
     /// Default batch size for `index_collection`: process and commit this
-    /// many files per iteration.  Small enough to keep memory bounded and
-    /// give frequent progress updates; large enough to amortise transaction
-    /// overhead.
-    const INDEX_BATCH_SIZE: usize = 500;
+    /// many files per iteration.  Large enough to amortise transaction
+    /// overhead while keeping memory bounded.
+    const INDEX_BATCH_SIZE: usize = 2000;
 
     /// Index a set of files into the given collection.
     ///
     /// For each file, computes a SHA-256 content hash, extracts a title,
     /// and (for new/changed content) chunks the text and generates FNV-384
     /// embeddings.  Unchanged documents (same path→hash mapping) are
-    /// skipped entirely — no SQL writes, no FTS5 trigger churn.
+    /// skipped entirely — no SQL writes.
+    ///
+    /// FTS5 triggers and vec0 index maintenance are disabled during bulk
+    /// ingest — they are rebuilt once at the end for dramatically better
+    /// throughput on large collections.
     ///
     /// The `progress_cb` callback is invoked after each document is
     /// processed with `(current_count, total_count)`.
@@ -290,6 +300,13 @@ impl ZmdDb {
             known_docs = existing_docs.len(),
             "loaded existing document metadata"
         );
+
+        // ── Disable FTS triggers during bulk ingest ──────────────
+        self.conn.execute_batch(
+            "DROP TRIGGER IF EXISTS documents_ai;\
+             DROP TRIGGER IF EXISTS documents_ad;\
+             DROP TRIGGER IF EXISTS documents_au;",
+        )?;
 
         let mut stats = IndexStats::default();
         let mut global_idx = 0usize;
@@ -352,82 +369,101 @@ impl ZmdDb {
                 .collect();
 
             // ── Sequential write phase (one transaction per batch) ─
+            //
+            // Prepared statements are cached for the lifetime of the
+            // transaction to avoid re-parsing SQL on every row.
             let tx = self.conn.transaction()?;
 
-            for p in &processed {
-                if p.doc_unchanged {
-                    // Document metadata already matches the source file,
-                    // so there is nothing to read or write.
-                    stats.skipped += 1;
-                    global_idx += 1;
-                    progress_cb(global_idx, total);
-                    continue;
-                }
+            {
+                let mut stmt_meta = tx.prepare_cached(
+                    "UPDATE documents SET source_size = ?1, source_mtime_ns = ?2, modified_at = ?3 WHERE collection = ?4 AND path = ?5",
+                )?;
+                let mut stmt_content = tx.prepare_cached(
+                    "INSERT OR IGNORE INTO content (hash, doc, created_at) VALUES (?1, ?2, ?3)",
+                )?;
+                let mut stmt_doc = tx.prepare_cached(
+                    "INSERT OR REPLACE INTO documents (collection, path, title, hash, source_size, source_mtime_ns, created_at, modified_at, active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
+                )?;
+                let mut stmt_vec = tx.prepare_cached(
+                    "INSERT OR REPLACE INTO content_vectors (hash, seq, pos, model, embedding, embedded_at) VALUES (?1, ?2, 0, ?3, ?4, ?5)",
+                )?;
 
-                if p.metadata_only {
+                for p in &processed {
+                    if p.doc_unchanged {
+                        stats.skipped += 1;
+                        global_idx += 1;
+                        progress_cb(global_idx, total);
+                        continue;
+                    }
+
+                    if p.metadata_only {
+                        #[allow(clippy::cast_possible_wrap)]
+                        let source_size = p.source_size as i64;
+                        stmt_meta.execute(params![
+                            source_size,
+                            p.source_mtime_ns,
+                            TIMESTAMP,
+                            collection,
+                            &p.path,
+                        ])?;
+                        stats.indexed += 1;
+                        stats.metadata_refreshed += 1;
+                        global_idx += 1;
+                        progress_cb(global_idx, total);
+                        continue;
+                    }
+
+                    // Insert content (dedup by hash).
+                    stats.content_rehashed += 1;
+                    let doc_str = std::str::from_utf8(&p.content).unwrap_or("");
+                    stmt_content.execute(params![&p.hash, doc_str, TIMESTAMP])?;
+
+                    // Insert document (no FTS trigger — rebuilt at end).
                     #[allow(clippy::cast_possible_wrap)]
                     let source_size = p.source_size as i64;
-                    tx.execute(
-                        "UPDATE documents SET source_size = ?1, source_mtime_ns = ?2, modified_at = ?3 WHERE collection = ?4 AND path = ?5",
-                        params![source_size, p.source_mtime_ns, TIMESTAMP, collection, &p.path],
-                    )?;
+                    stmt_doc.execute(params![
+                        collection,
+                        &p.path,
+                        &p.title,
+                        &p.hash,
+                        source_size,
+                        p.source_mtime_ns,
+                        TIMESTAMP,
+                        TIMESTAMP,
+                    ])?;
+
                     stats.indexed += 1;
-                    stats.metadata_refreshed += 1;
+
+                    // Write embeddings (no vec0 idx — rebuilt at end).
+                    if let (Some(chunks), Some(embeddings)) = (&p.chunks, &p.embeddings) {
+                        debug_assert_eq!(chunks.len(), embeddings.len());
+                        for (seq, emb) in embeddings.iter().enumerate() {
+                            let emb_json = embedding_to_json(emb);
+                            #[allow(clippy::cast_possible_wrap)]
+                            let seq_i64 = seq as i64;
+                            stmt_vec.execute(params![
+                                &p.hash,
+                                seq_i64,
+                                MODEL_NAME,
+                                &emb_json,
+                                TIMESTAMP,
+                            ])?;
+                        }
+                        stats.new += 1;
+                    }
+
                     global_idx += 1;
                     progress_cb(global_idx, total);
-                    continue;
                 }
-
-                // Insert content (dedup by hash).
-                stats.content_rehashed += 1;
-                let doc_str = std::str::from_utf8(&p.content).unwrap_or("");
-                tx.execute(
-                    "INSERT OR IGNORE INTO content (hash, doc, created_at) VALUES (?1, ?2, ?3)",
-                    params![&p.hash, doc_str, TIMESTAMP],
-                )?;
-
-                // Insert document (triggers FTS5 sync).
-                #[allow(clippy::cast_possible_wrap)]
-                let source_size = p.source_size as i64;
-                tx.execute(
-                    "INSERT OR REPLACE INTO documents (collection, path, title, hash, source_size, source_mtime_ns, created_at, modified_at, active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
-                    params![collection, &p.path, &p.title, &p.hash, source_size, p.source_mtime_ns, TIMESTAMP, TIMESTAMP],
-                )?;
-
-                stats.indexed += 1;
-
-                // Write embeddings only for new/changed content.
-                if let (Some(chunks), Some(embeddings)) = (&p.chunks, &p.embeddings) {
-                    debug_assert_eq!(chunks.len(), embeddings.len());
-                    for (seq, emb) in embeddings.iter().enumerate() {
-                        let emb_json = embedding_to_json(emb);
-                        #[allow(clippy::cast_possible_wrap)]
-                        let seq_i64 = seq as i64;
-                        tx.execute(
-                            "INSERT OR REPLACE INTO content_vectors (hash, seq, pos, model, embedding, embedded_at) VALUES (?1, ?2, 0, ?3, ?4, ?5)",
-                            params![&p.hash, seq_i64, MODEL_NAME, &emb_json, TIMESTAMP],
-                        )?;
-                        tx.execute(
-                            "DELETE FROM content_vectors_idx WHERE hash = ?1 AND seq = ?2 AND pos = 0",
-                            params![&p.hash, seq_i64],
-                        )?;
-                        tx.execute(
-                            "INSERT INTO content_vectors_idx(embedding, hash, model, seq, pos) VALUES(vec_f32(?1), ?2, ?3, ?4, 0)",
-                            params![&emb_json, &p.hash, MODEL_NAME, seq_i64],
-                        )?;
-                    }
-                    stats.new += 1;
-                }
-
-                global_idx += 1;
-                progress_cb(global_idx, total);
             }
 
             tx.commit()?;
 
             // Update known hashes so the next batch can skip already-indexed content.
             for p in &processed {
-                known.insert(p.hash.clone());
+                if !p.doc_unchanged {
+                    known.insert(p.hash.clone());
+                }
             }
 
             debug!(
@@ -436,6 +472,64 @@ impl ZmdDb {
                 "batch committed"
             );
         }
+
+        // ── Rebuild FTS5 index from base tables ──────────────────
+        info!(collection, "rebuilding FTS5 index");
+        self.conn.execute_batch(
+            "DELETE FROM documents_fts;\
+             INSERT INTO documents_fts(rowid, filepath, title, body)\
+             SELECT d.id,\
+                    d.collection || '/' || d.path,\
+                    d.title,\
+                    c.doc\
+             FROM documents d\
+             JOIN content c ON c.hash = d.hash\
+             WHERE d.active = 1;",
+        )?;
+
+        // ── Rebuild vec0 index from content_vectors ──────────────
+        info!(collection, "rebuilding vector index");
+        self.conn.execute_batch(
+            "DROP TABLE IF EXISTS content_vectors_idx;\
+             CREATE VIRTUAL TABLE content_vectors_idx USING vec0(\
+                 embedding float[384],\
+                 hash TEXT,\
+                 model TEXT,\
+                 +seq INTEGER,\
+                 +pos INTEGER\
+             );\
+             INSERT INTO content_vectors_idx(embedding, hash, model, seq, pos)\
+             SELECT vec_f32(embedding), hash, model, seq, pos\
+             FROM content_vectors;",
+        )?;
+
+        // ── Re-create FTS triggers for future incremental updates ─
+        self.conn.execute_batch(
+            "CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents\
+             WHEN new.active = 1\
+             BEGIN\
+                 INSERT INTO documents_fts(rowid, filepath, title, body)\
+                 SELECT new.id,\
+                        new.collection || '/' || new.path,\
+                        new.title,\
+                        (SELECT doc FROM content WHERE hash = new.hash)\
+                 WHERE new.active = 1;\
+             END;\
+             CREATE TRIGGER IF NOT EXISTS documents_ad AFTER DELETE ON documents\
+             BEGIN\
+                 DELETE FROM documents_fts WHERE rowid = old.id;\
+             END;\
+             CREATE TRIGGER IF NOT EXISTS documents_au AFTER UPDATE OF collection, path, title, hash, active ON documents\
+             BEGIN\
+                 DELETE FROM documents_fts WHERE rowid = old.id AND new.active = 0;\
+                 INSERT OR REPLACE INTO documents_fts(rowid, filepath, title, body)\
+                 SELECT new.id,\
+                        new.collection || '/' || new.path,\
+                        new.title,\
+                        (SELECT doc FROM content WHERE hash = new.hash)\
+                 WHERE new.active = 1;\
+             END;",
+        )?;
 
         info!(
             collection,
@@ -515,7 +609,8 @@ fn init_schema(conn: &Connection) -> Result<()> {
             tokenize='porter unicode61'
         );
 
-        -- FTS sync triggers
+        -- FTS sync triggers (drop old documents_au to upgrade to column-scoped version)
+        DROP TRIGGER IF EXISTS documents_au;
         CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents
         WHEN new.active = 1
         BEGIN
@@ -532,7 +627,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
             DELETE FROM documents_fts WHERE rowid = old.id;
         END;
 
-        CREATE TRIGGER IF NOT EXISTS documents_au AFTER UPDATE ON documents
+        CREATE TRIGGER IF NOT EXISTS documents_au AFTER UPDATE OF collection, path, title, hash, active ON documents
         BEGIN
             DELETE FROM documents_fts WHERE rowid = old.id AND new.active = 0;
             INSERT OR REPLACE INTO documents_fts(rowid, filepath, title, body)
@@ -733,15 +828,18 @@ fn normalize_embedding_text(text: &[u8], max_len: usize) -> Vec<u8> {
 pub fn fnv_embed(text: &[u8]) -> Vec<f32> {
     let mut embedding = vec![0.0f32; EMBEDDING_DIM];
 
+    // Compute the text-dependent base hash once instead of repeating the
+    // full text scan for each of the 384 dimensions.
+    let mut base: u32 = FNV_OFFSET_BASIS;
+    for &c in text {
+        base = base.wrapping_add(u32::from(c)).wrapping_mul(FNV_PRIME);
+    }
+
     for (i, slot) in embedding.iter_mut().enumerate() {
-        let mut h: u32 = FNV_OFFSET_BASIS;
-        for &c in text {
-            h = h.wrapping_add(u32::from(c)).wrapping_mul(FNV_PRIME);
-        }
         // Dimension index is always < 384, fits in u32.
         #[allow(clippy::cast_possible_truncation)]
         let dim = i as u32;
-        h = h.wrapping_add(dim).wrapping_mul(FNV_PRIME);
+        let h = base.wrapping_add(dim).wrapping_mul(FNV_PRIME);
         // Only the low 16 bits are used; max value is 65535 which fits
         // in f32 without precision loss.
         #[allow(clippy::cast_precision_loss)]
