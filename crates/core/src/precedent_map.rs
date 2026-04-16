@@ -154,17 +154,21 @@ pub fn entries_from_db(db_path: &Path) -> Result<Vec<crate::models::PrecedentEnt
         .with_context(|| format!("Failed to open {}", db_path.display()))?;
 
     let mut stmt = conn.prepare(
-        "SELECT path, title FROM documents WHERE collection = 'precedents' AND active = 1",
+        "SELECT d.path, d.title, substr(c.doc, 1, 500) \
+         FROM documents d \
+         JOIN content c ON d.hash = c.hash \
+         WHERE d.collection = 'precedents' AND d.active = 1",
     )?;
 
     let entries: Vec<crate::models::PrecedentEntry> = stmt
         .query_map([], |row| {
             let path: String = row.get(0)?;
             let case_name: String = row.get(1)?;
-            Ok((path, case_name))
+            let frontmatter_snippet: String = row.get(2)?;
+            Ok((path, case_name, frontmatter_snippet))
         })?
         .filter_map(|r| r.ok())
-        .map(|(path, case_name)| {
+        .map(|(path, case_name, fm_snippet)| {
             let id = path.strip_suffix(".md").unwrap_or(&path).to_string();
             // Parse path: "민사/대법원/2000다10048.md"
             let parts: Vec<&str> = id.split('/').collect();
@@ -177,14 +181,17 @@ pub fn entries_from_db(db_path: &Path) -> Result<Vec<crate::models::PrecedentEnt
             } else {
                 (String::new(), String::new(), id.clone())
             };
+            // Extract 선고일자 from the YAML frontmatter snippet
+            let ruling_date = extract_frontmatter_value(&fm_snippet, "선고일자");
+            let ruling_type = extract_frontmatter_value(&fm_snippet, "판결유형");
             crate::models::PrecedentEntry {
                 id,
                 case_name,
                 case_number,
-                ruling_date: String::new(),
+                ruling_date,
                 court_name,
                 case_type,
-                ruling_type: String::new(),
+                ruling_type,
                 path,
             }
         })
@@ -195,6 +202,31 @@ pub fn entries_from_db(db_path: &Path) -> Result<Vec<crate::models::PrecedentEnt
         "Built precedent entries from data.db"
     );
     Ok(entries)
+}
+
+/// Extract a value from a YAML frontmatter snippet by key.
+///
+/// Looks for `key: value` or `key: 'value'` lines within the `---` fences.
+fn extract_frontmatter_value(snippet: &str, key: &str) -> String {
+    for line in snippet.lines() {
+        if line == "---" {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix(key) {
+            let rest = rest.trim_start();
+            if let Some(val) = rest.strip_prefix(':') {
+                let val = val.trim();
+                // Strip surrounding quotes
+                let val = val
+                    .strip_prefix('\'')
+                    .and_then(|v| v.strip_suffix('\''))
+                    .or_else(|| val.strip_prefix('"').and_then(|v| v.strip_suffix('"')))
+                    .unwrap_or(val);
+                return val.to_string();
+            }
+        }
+    }
+    String::new()
 }
 
 /// Query the number of active precedent documents in `.qmd/data.db`.

@@ -229,7 +229,15 @@ fn render_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             ("/", "검색"),
             ("c", "사건종류"),
             ("d", "법원"),
-            ("S", "정렬"),
+            (
+                "S",
+                if app.precedent_sort_order == legal_ko_core::models::PrecedentSortOrder::RulingDate
+                {
+                    "정렬:판결일자"
+                } else {
+                    "정렬:사건명"
+                },
+            ),
             ("Tab", "법률"),
             ("t", "테마"),
             ("o", "AI 에이전트"),
