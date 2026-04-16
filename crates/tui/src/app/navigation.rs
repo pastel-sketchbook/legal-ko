@@ -209,7 +209,10 @@ impl App {
                 self.precedent_detail_scroll = 0;
                 self.precedent_detail_rendered_lines.clear();
             }
-            View::List | View::PrecedentList | View::Loading => {
+            View::PrecedentList => {
+                self.view = View::List;
+            }
+            View::List | View::Loading => {
                 self.should_quit = true;
             }
         }

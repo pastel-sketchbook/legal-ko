@@ -146,6 +146,8 @@ pub enum Message {
     },
     #[cfg(feature = "tts")]
     TtsSynthesisError(String),
+    /// Precedent entries loaded from local `.qmd/data.db` (instant).
+    PrecedentDbEntriesLoaded(Vec<PrecedentEntry>),
     /// Precedent→law mapping loaded (from cache or freshly built).
     PrecedentMapLoaded(PrecedentMap),
 }
@@ -1091,6 +1093,12 @@ end tell"#
                     "Person search complete"
                 );
             }
+            Message::PrecedentDbEntriesLoaded(entries) => {
+                if !self.precedents_loaded {
+                    info!(count = entries.len(), "Using DB-sourced precedent entries");
+                    self.load_precedent_metadata_from_entries(entries);
+                }
+            }
             Message::PrecedentMapLoaded(map) => {
                 info!(
                     laws = map.law_to_precedents.len(),
@@ -1181,6 +1189,16 @@ end tell"#
             if !db_path.exists() {
                 info!("No .qmd/data.db — skipping precedent map");
                 return;
+            }
+
+            // Load precedent entries from DB immediately (no network needed)
+            match precedent_map::entries_from_db(&db_path) {
+                Ok(entries) => {
+                    let _ = tx.send(Message::PrecedentDbEntriesLoaded(entries));
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to load precedent entries from DB");
+                }
             }
 
             // Check DB document count for cache validation
@@ -1394,7 +1412,10 @@ end tell"#
     fn load_precedent_metadata(&mut self, index: PrecedentMetadataIndex) {
         let entries = models::precedent_entries_from_index(index);
         info!(count = entries.len(), "Precedent metadata loaded");
+        self.load_precedent_metadata_from_entries(entries);
+    }
 
+    fn load_precedent_metadata_from_entries(&mut self, entries: Vec<PrecedentEntry>) {
         // Extract unique case types and courts
         let mut case_type_set: HashSet<String> = HashSet::new();
         let mut court_set: HashSet<String> = HashSet::new();
