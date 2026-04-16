@@ -19,6 +19,7 @@ use legal_ko_core::models::{
     self, ArticleRef, LawDetail, LawEntry, MetadataIndex, PrecedentDetail, PrecedentEntry,
     PrecedentMetadataIndex, PrecedentSectionRef, PrecedentSortOrder, SortOrder,
 };
+use legal_ko_core::precedent_map::PrecedentMap;
 use legal_ko_core::preferences::Preferences;
 use legal_ko_core::search::Searcher;
 #[cfg(feature = "tts")]
@@ -145,6 +146,8 @@ pub enum Message {
     },
     #[cfg(feature = "tts")]
     TtsSynthesisError(String),
+    /// Precedent→law mapping loaded (from cache or freshly built).
+    PrecedentMapLoaded(PrecedentMap),
 }
 
 // ── Suspend request (agent in foreground) ─────────────────────
@@ -303,6 +306,10 @@ pub struct App {
     /// Cross-reference matches for the currently viewed precedent (참조조문 → law).
     pub precedent_crossref_matches: Vec<LawMatch>,
 
+    // ── Precedent map (law→precedent counts) ────────────────────
+    /// Pre-computed mapping from law names/articles to citing precedent paths.
+    pub precedent_map: Option<PrecedentMap>,
+
     // ── Person (법조인) search ─────────────────────────────────
     /// Sequence counter to discard stale person search results.
     pub person_search_seq: u64,
@@ -423,6 +430,7 @@ impl App {
             precedent_detail_rendered_lines: Vec::new(),
             precedents_loaded: false,
             precedent_crossref_matches: Vec::new(),
+            precedent_map: None,
             person_search_seq: 0,
             person_search_active: false,
             person_search_results: Vec::new(),
@@ -1083,6 +1091,14 @@ end tell"#
                     "Person search complete"
                 );
             }
+            Message::PrecedentMapLoaded(map) => {
+                info!(
+                    laws = map.law_to_precedents.len(),
+                    articles = map.article_to_precedents.len(),
+                    "Precedent map loaded"
+                );
+                self.precedent_map = Some(map);
+            }
         }
     }
 
@@ -1120,6 +1136,9 @@ end tell"#
 
         // Start batch enrichment in background for un-cached entries
         self.start_enrichment(cache);
+
+        // Start precedent map loading in background
+        self.start_precedent_map_loading();
     }
 
     /// Spawn a background task that fetches frontmatter for all un-cached
@@ -1143,6 +1162,64 @@ end tell"#
             });
 
             let _ = tx.send(Message::EnrichmentDone);
+        });
+    }
+
+    /// Spawn a background task that loads (or builds) the precedent→law map.
+    ///
+    /// 1. Try disk cache — if valid (scanned count matches DB), use it.
+    /// 2. Otherwise, build from `.qmd/data.db` and save to cache.
+    fn start_precedent_map_loading(&self) {
+        let known_law_names: Vec<String> = self.all_laws.iter().map(|e| e.title.clone()).collect();
+        let tx = self.msg_tx.clone();
+
+        tokio::task::spawn_blocking(move || {
+            use legal_ko_core::{cache, precedent_map};
+            use std::path::PathBuf;
+
+            let db_path = PathBuf::from(".qmd/data.db");
+            if !db_path.exists() {
+                info!("No .qmd/data.db — skipping precedent map");
+                return;
+            }
+
+            // Check DB document count for cache validation
+            let db_count = match precedent_map::db_precedent_count(&db_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!(error = %e, "Failed to query precedent count");
+                    return;
+                }
+            };
+
+            // Try cache first
+            if let Ok(Some(cached)) = cache::read_precedent_map_cache() {
+                if cached.scanned_count == db_count {
+                    info!(scanned = db_count, "Using cached precedent map");
+                    let _ = tx.send(Message::PrecedentMapLoaded(cached));
+                    return;
+                }
+                info!(
+                    cached = cached.scanned_count,
+                    db = db_count,
+                    "Precedent map cache stale — rebuilding"
+                );
+            }
+
+            // Build from scratch
+            info!(db_count, "Building precedent map from data.db");
+            match PrecedentMap::build(&db_path, &known_law_names) {
+                Ok(map) => {
+                    // Save to cache
+                    if let Err(e) = cache::write_precedent_map_cache(&map) {
+                        warn!(error = %e, "Failed to write precedent map cache");
+                    }
+                    let _ = tx.send(Message::PrecedentMapLoaded(map));
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to build precedent map");
+                }
+            }
         });
     }
 
@@ -1490,6 +1567,93 @@ end tell"#
 
         self.status_message = Some(format!("Exported → {fname_display}"));
         info!(file = %fname_display, "Precedent exported to file");
+    }
+
+    /// Jump to the precedent list filtered by precedents citing the selected law.
+    ///
+    /// Uses the precedent map to find which precedent IDs cite this law,
+    /// then switches to the precedent list with a search query set to the
+    /// law name so the user sees context.
+    pub fn jump_to_law_precedents(&mut self, law_title: &str) {
+        if !self.precedents_loaded {
+            self.status_message = Some("Precedents still loading...".to_string());
+            return;
+        }
+        let Some(ref map) = self.precedent_map else {
+            self.status_message = Some("Precedent map not loaded yet".to_string());
+            return;
+        };
+        let count = map.law_count(law_title);
+        if count == 0 {
+            self.status_message = Some(format!("No precedents citing {law_title}"));
+            return;
+        }
+
+        // Build a set of matching precedent IDs for fast lookup
+        let matching: HashSet<&str> = map
+            .law_precedents(law_title)
+            .iter()
+            .map(String::as_str)
+            .collect();
+
+        // Switch to precedent list with filtered indices
+        self.precedent_search_query.clear();
+        self.precedent_case_type_filter = None;
+        self.precedent_court_filter = None;
+        self.precedent_filtered_indices = self
+            .all_precedents
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| matching.contains(e.id.as_str()))
+            .map(|(i, _)| i)
+            .collect();
+        self.precedent_list_selected = 0;
+        self.precedent_list_offset = 0;
+        self.person_search_results.clear();
+        self.person_search_active = false;
+        self.view = View::PrecedentList;
+        self.status_message = Some(format!("{law_title} — {count} precedent(s)"));
+    }
+
+    /// Jump to the precedent list filtered by precedents citing a specific article.
+    pub fn jump_to_article_precedents(&mut self, law_title: &str, article: &str) {
+        if !self.precedents_loaded {
+            self.status_message = Some("Precedents still loading...".to_string());
+            return;
+        }
+        let Some(ref map) = self.precedent_map else {
+            self.status_message = Some("Precedent map not loaded yet".to_string());
+            return;
+        };
+        let count = map.article_count(law_title, article);
+        if count == 0 {
+            // Fall back to law-level
+            self.jump_to_law_precedents(law_title);
+            return;
+        }
+
+        let matching: HashSet<&str> = map
+            .article_precedents(law_title, article)
+            .iter()
+            .map(String::as_str)
+            .collect();
+
+        self.precedent_search_query.clear();
+        self.precedent_case_type_filter = None;
+        self.precedent_court_filter = None;
+        self.precedent_filtered_indices = self
+            .all_precedents
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| matching.contains(e.id.as_str()))
+            .map(|(i, _)| i)
+            .collect();
+        self.precedent_list_selected = 0;
+        self.precedent_list_offset = 0;
+        self.person_search_results.clear();
+        self.person_search_active = false;
+        self.view = View::PrecedentList;
+        self.status_message = Some(format!("{law_title} {article} — {count} precedent(s)"));
     }
 
     /// Jump from a precedent's 참조조문 cross-reference to the cited law.

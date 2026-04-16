@@ -331,6 +331,11 @@ fn handle_list_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         #[cfg(feature = "tts")]
         KeyCode::Char('T') => app.toggle_tts_profile(),
         KeyCode::Char('o') => app.open_agent_picker(),
+        KeyCode::Char('P') => {
+            if let Some(entry) = app.selected_entry().cloned() {
+                app.jump_to_law_precedents(&entry.title);
+            }
+        }
         KeyCode::Tab | KeyCode::BackTab => {
             if app.precedents_loaded {
                 app.view = View::PrecedentList;
@@ -381,6 +386,24 @@ fn handle_detail_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         #[cfg(feature = "tts")]
         KeyCode::Char('s') => app.stop_tts(),
         KeyCode::Char('E') => app.export_law(),
+        KeyCode::Char('P') => {
+            if let Some(ref detail) = app.detail.clone() {
+                // Find the current article based on scroll position
+                let current_article = app
+                    .detail_articles
+                    .iter()
+                    .rev()
+                    .find(|a| a.line_index <= app.detail_scroll)
+                    .map(|a| a.label.clone());
+                if let Some(label) = current_article {
+                    // Extract just the "제N조" prefix from labels like "제1조 (목적)"
+                    let article_id = label.split_whitespace().next().unwrap_or(&label);
+                    app.jump_to_article_precedents(&detail.entry.title, article_id);
+                } else {
+                    app.jump_to_law_precedents(&detail.entry.title);
+                }
+            }
+        }
         KeyCode::Char('o') => app.open_agent_picker(),
         KeyCode::Char('?') => app.popup = Popup::Help,
         _ => {}

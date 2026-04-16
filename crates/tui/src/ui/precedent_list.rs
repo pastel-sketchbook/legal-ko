@@ -224,17 +224,17 @@ fn render_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         };
 
         let pairs: Vec<(&str, &str)> = vec![
-            ("j/k", "navigate"),
-            ("Enter", "open"),
-            ("/", "search"),
-            ("c", "case"),
-            ("d", "court"),
-            ("S", "sort"),
-            ("Tab", "laws"),
-            ("t", "theme"),
-            ("o", "AI agent"),
-            ("q", "quit"),
-            ("?", "help"),
+            ("j/k", "이동"),
+            ("Enter", "열기"),
+            ("/", "검색"),
+            ("c", "사건종류"),
+            ("d", "법원"),
+            ("S", "정렬"),
+            ("Tab", "법률"),
+            ("t", "테마"),
+            ("o", "AI 에이전트"),
+            ("q", "종료"),
+            ("?", "도움말"),
         ];
 
         styles::status_line(theme, &prefix, &pairs, area.width)

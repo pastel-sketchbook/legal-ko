@@ -226,3 +226,66 @@ pub fn write_precedent_meta_cache(index: &PrecedentMetadataIndex) -> Result<()> 
     debug!(entries = index.len(), "Wrote precedent metadata cache");
     Ok(())
 }
+
+// ── Precedent map cache ──────────────────────────────────────
+
+use crate::precedent_map::PrecedentMap;
+
+/// Path to the precedent map cache file.
+fn precedent_map_cache_path() -> Result<PathBuf> {
+    Ok(cache_dir()?.join("precedent_map.json"))
+}
+
+/// Read the precedent map from disk cache.
+///
+/// Returns `None` if the file doesn't exist.  No TTL — the map is rebuilt
+/// only when the document count in `data.db` changes.
+///
+/// # Errors
+///
+/// Returns an error if the file exists but cannot be read or parsed.
+pub fn read_precedent_map_cache() -> Result<Option<PrecedentMap>> {
+    let path = precedent_map_cache_path()?;
+    if !path.exists() {
+        debug!("Precedent map cache not found");
+        return Ok(None);
+    }
+
+    let content = std::fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read precedent map cache {}", path.display()))?;
+    let map: PrecedentMap = serde_json::from_str(&content)
+        .with_context(|| "Failed to parse precedent map cache JSON")?;
+    debug!(
+        scanned = map.scanned_count,
+        laws = map.law_to_precedents.len(),
+        "Loaded precedent map cache"
+    );
+    Ok(Some(map))
+}
+
+/// Write the precedent map to disk cache (atomic rename).
+///
+/// # Errors
+///
+/// Returns an error if the cache directory cannot be created or the file
+/// cannot be written.
+pub fn write_precedent_map_cache(map: &PrecedentMap) -> Result<()> {
+    let dir = cache_dir()?;
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("Failed to create cache dir {}", dir.display()))?;
+
+    let path = precedent_map_cache_path()?;
+    let tmp = path.with_extension("tmp");
+    let json = serde_json::to_string(map).context("Failed to serialize precedent map")?;
+    std::fs::write(&tmp, json)
+        .with_context(|| format!("Failed to write temp precedent map cache {}", tmp.display()))?;
+    std::fs::rename(&tmp, &path)
+        .with_context(|| format!("Failed to rename precedent map cache {}", path.display()))?;
+
+    debug!(
+        scanned = map.scanned_count,
+        laws = map.law_to_precedents.len(),
+        "Wrote precedent map cache"
+    );
+    Ok(())
+}

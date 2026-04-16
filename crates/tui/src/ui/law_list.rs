@@ -138,12 +138,18 @@ fn render_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         .iter()
         .any(|&idx| !app.all_laws[idx].promulgation_date.is_empty());
 
+    // Show precedent count column when the map is loaded
+    let show_pcount = app.precedent_map.is_some();
+
     let bookmark_w: usize = 2;
     let cat_w: usize = 14; // fits brackets + longest category (e.g. "[대통령령]" = 10 display width)
+    let pcount_w: usize = if show_pcount { 7 } else { 0 }; // e.g. " 1,234판"
     let dept_w: usize = if show_dept { 16 } else { 0 };
     let date_w: usize = if show_date { 10 } else { 0 }; // YYYY-MM-DD
-    let gaps: usize = 1 + usize::from(show_dept) + usize::from(show_date);
-    let title_w = total_width.saturating_sub(bookmark_w + cat_w + dept_w + date_w + gaps);
+    let gaps: usize =
+        1 + usize::from(show_pcount) + usize::from(show_dept) + usize::from(show_date);
+    let title_w =
+        total_width.saturating_sub(bookmark_w + cat_w + pcount_w + dept_w + date_w + gaps);
 
     // Calculate the offset so the selected item is visible
     let offset = if app.list_selected < app.list_offset {
@@ -195,6 +201,21 @@ fn render_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
                 ));
             }
 
+            if show_pcount {
+                let count = app
+                    .precedent_map
+                    .as_ref()
+                    .map_or(0, |m| m.law_count(&entry.title));
+                let pcount_text = if count > 0 {
+                    format!("{count}판")
+                } else {
+                    String::new()
+                };
+                let pcount_col = styles::pad_to_width(&pcount_text, pcount_w);
+                spans.push(Span::styled(" ", Style::default()));
+                spans.push(Span::styled(pcount_col, Style::default().fg(theme.accent)));
+            }
+
             if show_date {
                 let date_col = styles::pad_to_width(&entry.promulgation_date, date_w);
                 spans.push(Span::styled(" ", Style::default()));
@@ -220,19 +241,20 @@ fn render_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         };
 
         let pairs: Vec<(&str, &str)> = vec![
-            ("j/k", "navigate"),
-            ("Enter", "open"),
-            ("/", "search"),
-            ("c", "category"),
-            ("d", "department"),
-            ("S", "sort"),
+            ("j/k", "이동"),
+            ("Enter", "열기"),
+            ("/", "검색"),
+            ("c", "분류"),
+            ("d", "소관부처"),
+            ("P", "판례"),
+            ("S", "정렬"),
             #[cfg(feature = "tts")]
-            ("T", "tts profile"),
-            ("Tab", "precedents"),
-            ("t", "theme"),
-            ("o", "AI agent"),
-            ("q", "quit"),
-            ("?", "help"),
+            ("T", "음성 설정"),
+            ("Tab", "판례"),
+            ("t", "테마"),
+            ("o", "AI 에이전트"),
+            ("q", "종료"),
+            ("?", "도움말"),
         ];
 
         styles::status_line(theme, &prefix, &pairs, area.width)

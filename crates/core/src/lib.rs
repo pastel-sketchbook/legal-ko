@@ -9,6 +9,7 @@ pub mod models;
 pub mod native_indexer;
 pub mod parser;
 pub mod person_index;
+pub mod precedent_map;
 pub mod preferences;
 pub mod search;
 #[cfg(feature = "tts")]

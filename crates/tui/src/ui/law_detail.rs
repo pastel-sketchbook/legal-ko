@@ -62,14 +62,31 @@ fn render_detail_title(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         ),
     ];
 
-    // Build right-side metadata: department · date  vX.Y.Z
+    // Build right-side metadata: department · date · 판례 count  vX.Y.Z
     let mut right_parts: Vec<Span<'static>> = Vec::new();
 
     if let Some(ref detail) = app.detail {
+        // Precedent count badge
+        if let Some(ref map) = app.precedent_map {
+            let count = map.law_count(&detail.entry.title);
+            if count > 0 {
+                right_parts.push(Span::styled(
+                    format!("{count}판"),
+                    Style::default().fg(theme.accent).bg(theme.panel_bg),
+                ));
+            }
+        }
+
         let dept = detail.entry.departments.join(", ");
         let date = &detail.entry.promulgation_date;
 
         if !dept.is_empty() {
+            if !right_parts.is_empty() {
+                right_parts.push(Span::styled(
+                    " · ",
+                    Style::default().fg(theme.muted).bg(theme.panel_bg),
+                ));
+            }
             right_parts.push(Span::styled(
                 dept,
                 Style::default().fg(theme.department).bg(theme.panel_bg),
@@ -263,25 +280,26 @@ fn render_detail_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
 
         let mut pairs: Vec<(&str, &str)> = Vec::new();
         if !app.detail_articles.is_empty() {
-            pairs.push(("n/p", "article"));
-            pairs.push(("a", "article list"));
+            pairs.push(("n/p", "조문"));
+            pairs.push(("a", "조문 목록"));
         }
+        pairs.push(("P", "판례"));
         // TTS key hints
         #[cfg(feature = "tts")]
         match app.tts_state {
             TtsState::Playing | TtsState::Synthesizing => {
-                pairs.push(("s", "stop"));
+                pairs.push(("s", "정지"));
             }
             _ => {
-                pairs.push(("r", "read article"));
-                pairs.push(("R", "read all"));
+                pairs.push(("r", "조문 읽기"));
+                pairs.push(("R", "전체 읽기"));
             }
         }
-        pairs.push(("B", "bookmark"));
-        pairs.push(("t", "theme"));
-        pairs.push(("o", "AI agent"));
-        pairs.push(("Esc", "back"));
-        pairs.push(("?", "help"));
+        pairs.push(("B", "북마크"));
+        pairs.push(("t", "테마"));
+        pairs.push(("o", "AI 에이전트"));
+        pairs.push(("Esc", "뒤로"));
+        pairs.push(("?", "도움말"));
 
         styles::status_line(theme, &prefix, &pairs, area.width)
     };
@@ -321,13 +339,36 @@ fn source_line_to_wrapped_offset(lines: &[Line<'_>], source_line: usize, width: 
 pub fn render_article_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let popup_area = styles::centered_rect(50, 70, area);
 
+    let law_title = app.detail.as_ref().map(|d| d.entry.title.as_str());
+
     let items: Vec<ListItem> = app
         .detail_articles
         .iter()
         .enumerate()
         .map(|(i, art)| {
             let style = styles::list_item_style(theme, i == app.popup_selected, false);
-            ListItem::new(Line::from(Span::styled(format!("  {}", art.label), style)))
+
+            // Show precedent count if map is loaded
+            let count_suffix = if let (Some(title), Some(map)) = (law_title, &app.precedent_map) {
+                let article_id = art.label.split_whitespace().next().unwrap_or(&art.label);
+                let count = map.article_count(title, article_id);
+                if count > 0 {
+                    format!("  ({count}판)")
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+
+            let mut spans = vec![Span::styled(format!("  {}", art.label), style)];
+            if !count_suffix.is_empty() {
+                spans.push(Span::styled(
+                    count_suffix,
+                    Style::default().fg(theme.accent),
+                ));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
 

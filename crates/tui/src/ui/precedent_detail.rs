@@ -199,17 +199,17 @@ fn render_detail_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
 
         let mut pairs: Vec<(&str, &str)> = Vec::new();
         if !app.precedent_detail_sections.is_empty() {
-            pairs.push(("n/p", "section"));
-            pairs.push(("a", "section list"));
+            pairs.push(("n/p", "항목"));
+            pairs.push(("a", "항목 목록"));
         }
         if !app.precedent_crossref_matches.is_empty() {
-            pairs.push(("r", "refs"));
+            pairs.push(("r", "참조"));
         }
-        pairs.push(("E", "export"));
-        pairs.push(("t", "theme"));
-        pairs.push(("o", "AI agent"));
-        pairs.push(("Esc", "back"));
-        pairs.push(("?", "help"));
+        pairs.push(("E", "내보내기"));
+        pairs.push(("t", "테마"));
+        pairs.push(("o", "AI 에이전트"));
+        pairs.push(("Esc", "뒤로"));
+        pairs.push(("?", "도움말"));
 
         styles::status_line(theme, &prefix, &pairs, area.width)
     };
