@@ -6,7 +6,7 @@ pub mod precedent_list;
 pub mod styles;
 
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
@@ -48,7 +48,11 @@ pub fn render(f: &mut Frame, app: &App) {
     match app.view {
         View::Loading => render_loading(f, app, theme, area),
         View::List => {
-            law_list::render_law_list(f, app, theme, area);
+            if app.split_open {
+                render_split_view(f, app, theme, area);
+            } else {
+                law_list::render_law_list(f, app, theme, area);
+            }
             // Render popups on top
             match app.popup {
                 Popup::Help => help::render_help(f, theme, area),
@@ -209,6 +213,22 @@ fn render_filter_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect, kind
 
     f.render_widget(Clear, styles::clear_area_for_popup(popup_area));
     f.render_stateful_widget(list, popup_area, &mut state);
+}
+
+/// Render list + detail side-by-side with a draggable split.
+fn render_split_view(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
+    let left_pct = (app.split_ratio * 100.0).round().clamp(20.0, 80.0) as u16;
+    let right_pct = 100 - left_pct;
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(left_pct),
+            Constraint::Percentage(right_pct),
+        ])
+        .split(area);
+
+    law_list::render_law_list(f, app, theme, cols[0]);
+    law_detail::render_law_detail(f, app, theme, cols[1]);
 }
 
 fn render_agent_picker(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {

@@ -15,6 +15,10 @@ pub struct Preferences {
     /// Last-used AI agent name (e.g. `"OpenCode"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+
+    /// Split view ratio (left panel share, 0.0–1.0). Persisted for restore-on-startup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split_ratio: Option<f64>,
 }
 
 fn default_theme() -> String {
@@ -26,6 +30,7 @@ impl Default for Preferences {
         Self {
             theme: DEFAULT_THEME.to_string(),
             agent: None,
+            split_ratio: None,
         }
     }
 }

@@ -62,6 +62,7 @@ pub fn render_help(f: &mut Frame, theme: &Theme, area: Rect) {
         key_line(theme, "r", "Referenced laws (참조조문)"),
         Line::from(""),
         header_line(theme, "Other"),
+        key_line(theme, "v", "Toggle split view (list+detail)"),
         key_line(theme, "o", "Open AI agent split"),
         key_line(theme, "t", "Cycle theme"),
         key_line(theme, "?", "Toggle this help"),

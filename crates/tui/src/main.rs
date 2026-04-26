@@ -178,10 +178,16 @@ async fn run_app(
         app.tick = app.tick.wrapping_add(1);
 
         // Poll for input events with timeout
-        if event::poll(Duration::from_millis(50))?
-            && let Event::Key(key) = event::read()?
-        {
-            handle_key_event(&mut app, key, terminal.size()?.height as usize);
+        if event::poll(Duration::from_millis(50))? {
+            match event::read()? {
+                Event::Key(key) => {
+                    handle_key_event(&mut app, key, terminal.size()?.height as usize);
+                }
+                Event::Mouse(mouse) => {
+                    app.handle_mouse(mouse, terminal.size()?.height as usize);
+                }
+                _ => {}
+            }
         }
 
         // ── Suspend-and-resume fallback ──────────────────────
@@ -344,6 +350,7 @@ fn handle_list_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
             }
         }
         KeyCode::Char('?') => app.popup = Popup::Help,
+        KeyCode::Char('v') => app.toggle_split_view(),
         KeyCode::Esc => {
             if app.search_query.is_empty() {
                 app.go_back();
@@ -405,6 +412,7 @@ fn handle_detail_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
             }
         }
         KeyCode::Char('o') => app.open_agent_picker(),
+        KeyCode::Char('v') => app.toggle_split_view(),
         KeyCode::Char('?') => app.popup = Popup::Help,
         _ => {}
     }

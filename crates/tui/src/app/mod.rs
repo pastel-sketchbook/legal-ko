@@ -324,6 +324,14 @@ pub struct App {
     pub person_search_selected: usize,
     /// Scroll offset for person search results list.
     pub person_search_offset: usize,
+
+    // ── Split view (list + detail side-by-side) ───────────────
+    /// True when the split view is active (list left, detail right).
+    pub split_open: bool,
+    /// Left panel's share of the horizontal split (0.0–1.0). Persisted.
+    pub split_ratio: f64,
+    /// True while the user holds the left mouse button on the divider.
+    pub dragging: bool,
 }
 
 impl App {
@@ -438,6 +446,9 @@ impl App {
             person_search_results: Vec::new(),
             person_search_selected: 0,
             person_search_offset: 0,
+            split_open: false,
+            split_ratio: prefs.split_ratio.unwrap_or(0.4),
+            dragging: false,
         }
     }
 
@@ -690,6 +701,7 @@ impl App {
         let prefs = Preferences {
             theme: self.theme().name.to_string(),
             agent: self.last_agent_index.map(|i| AGENTS[i].name.to_string()),
+            split_ratio: Some(self.split_ratio),
         };
         tokio::task::spawn_blocking(move || {
             if let Err(e) = prefs.save() {
@@ -707,6 +719,77 @@ impl App {
                 crate::parser::parse_precedent_markdown(&detail.raw_markdown, self.theme());
             self.precedent_detail_lines_count = lines.len();
             self.precedent_detail_rendered_lines = lines;
+        }
+    }
+
+    /// Toggle split view (list + detail side-by-side).
+    ///
+    /// When entering split view from the list, auto-opens the selected law
+    /// so that the detail panel has content to show.
+    pub fn toggle_split_view(&mut self) {
+        self.split_open = !self.split_open;
+        self.dragging = false;
+        if self.split_open {
+            // Auto-open the selected law if we don't already have detail loaded
+            if self.detail.is_none() && !self.detail_loading {
+                self.open_selected();
+            }
+            self.status_message = Some("Split view — drag divider to resize".to_string());
+        } else {
+            self.status_message = Some("Split view closed".to_string());
+        }
+    }
+
+    /// Handle mouse events (drag to resize split, scroll wheel).
+    pub fn handle_mouse(&mut self, event: crossterm::event::MouseEvent, _terminal_height: usize) {
+        use crossterm::event::{MouseButton, MouseEventKind};
+
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Left) if self.split_open => {
+                self.dragging = true;
+            }
+            MouseEventKind::Drag(MouseButton::Left) if self.dragging && self.split_open => {
+                let col = f64::from(event.column);
+                let width = f64::from(
+                    crossterm::terminal::size().map_or(80, |(w, _)| w).max(1),
+                );
+                self.split_ratio = (col / width).clamp(0.2, 0.8);
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.dragging => {
+                self.dragging = false;
+                // Persist the new split ratio
+                let prefs = Preferences {
+                    theme: self.theme().name.to_string(),
+                    agent: self.last_agent_index.map(|i| AGENTS[i].name.to_string()),
+                    split_ratio: Some(self.split_ratio),
+                };
+                tokio::task::spawn_blocking(move || {
+                    if let Err(e) = prefs.save() {
+                        tracing::warn!(error = %e, "Failed to save split ratio");
+                    }
+                });
+            }
+            MouseEventKind::ScrollDown => {
+                match self.view {
+                    View::Detail => self.detail_scroll_down(3),
+                    View::PrecedentDetail => self.precedent_detail_scroll_down(3),
+                    View::List if self.split_open => self.detail_scroll_down(3),
+                    View::List => self.list_move_down(),
+                    View::PrecedentList => self.precedent_list_move_down(),
+                    _ => {}
+                }
+            }
+            MouseEventKind::ScrollUp => {
+                match self.view {
+                    View::Detail => self.detail_scroll_up(3),
+                    View::PrecedentDetail => self.precedent_detail_scroll_up(3),
+                    View::List if self.split_open => self.detail_scroll_up(3),
+                    View::List => self.list_move_up(),
+                    View::PrecedentList => self.precedent_list_move_up(),
+                    _ => {}
+                }
+            }
+            _ => {}
         }
     }
 
@@ -751,6 +834,7 @@ impl App {
             let prefs = Preferences {
                 theme: self.theme().name.to_string(),
                 agent: Some(agent.name.to_string()),
+                split_ratio: Some(self.split_ratio),
             };
             tokio::task::spawn_blocking(move || {
                 if let Err(e) = prefs.save() {
