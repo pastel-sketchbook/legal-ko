@@ -162,72 +162,107 @@ fn render_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         app.list_offset
     };
 
+    let col_widths = LawColWidths {
+        title_w,
+        cat_w,
+        pcount_w,
+        dept_w,
+        date_w,
+        show_dept,
+        show_date,
+        show_pcount,
+    };
+
     let items: Vec<ListItem> = app
         .filtered_indices
         .iter()
         .enumerate()
         .skip(offset)
         .take(visible_height)
-        .map(|(display_idx, &law_idx)| {
-            let entry = &app.all_laws[law_idx];
-            let is_selected = display_idx == app.list_selected;
-            let is_bookmarked = app.bookmarks.is_bookmarked(&entry.id);
-
-            let bookmark_marker = if is_bookmarked { "\u{2605} " } else { "  " };
-
-            let title_col = styles::pad_to_width(&entry.title, title_w);
-            let cat_text = format!("[{}]", entry.category);
-            let cat_col = styles::pad_to_width(&cat_text, cat_w);
-
-            let title_style = styles::list_item_style(theme, is_selected, false);
-
-            let mut spans = vec![
-                Span::styled(
-                    bookmark_marker.to_string(),
-                    Style::default().fg(theme.bookmark),
-                ),
-                Span::styled(title_col, title_style),
-                Span::styled(" ", Style::default()),
-                Span::styled(cat_col, Style::default().fg(theme.category)),
-            ];
-
-            if show_dept {
-                let dept_text = entry.departments.join(", ");
-                let dept_col = styles::pad_to_width(&dept_text, dept_w);
-                spans.push(Span::styled(" ", Style::default()));
-                spans.push(Span::styled(
-                    dept_col,
-                    Style::default().fg(theme.department),
-                ));
-            }
-
-            if show_pcount {
-                let count = app
-                    .precedent_map
-                    .as_ref()
-                    .map_or(0, |m| m.law_count(&entry.title));
-                let pcount_text = if count > 0 {
-                    format!("{count}판")
-                } else {
-                    String::new()
-                };
-                let pcount_col = styles::pad_to_width(&pcount_text, pcount_w);
-                spans.push(Span::styled(" ", Style::default()));
-                spans.push(Span::styled(pcount_col, Style::default().fg(theme.accent)));
-            }
-
-            if show_date {
-                let date_col = styles::pad_to_width(&entry.promulgation_date, date_w);
-                spans.push(Span::styled(" ", Style::default()));
-                spans.push(Span::styled(date_col, Style::default().fg(theme.date)));
-            }
-
-            ListItem::new(Line::from(spans))
-        })
+        .map(|(display_idx, &law_idx)| build_law_row(app, theme, display_idx, law_idx, &col_widths))
         .collect();
 
     let list = List::new(items);
     f.render_widget(list, area);
+}
+
+struct LawColWidths {
+    title_w: usize,
+    cat_w: usize,
+    pcount_w: usize,
+    dept_w: usize,
+    date_w: usize,
+    show_dept: bool,
+    show_date: bool,
+    show_pcount: bool,
+}
+
+fn build_law_row<'a>(
+    app: &App,
+    theme: &Theme,
+    display_idx: usize,
+    law_idx: usize,
+    cols: &LawColWidths,
+) -> ListItem<'a> {
+    let entry = &app.all_laws[law_idx];
+    let is_selected = display_idx == app.list_selected;
+    let is_bookmarked = app.bookmarks.is_bookmarked(&entry.id);
+
+    let bookmark_marker = if is_bookmarked { "\u{2605} " } else { "  " };
+
+    let title_col = styles::pad_to_width(&entry.title, cols.title_w);
+    let cat_text = format!("[{}]", entry.category);
+    let cat_col = styles::pad_to_width(&cat_text, cols.cat_w);
+
+    let title_style = styles::list_item_style(theme, is_selected, false);
+
+    let mut spans = vec![
+        Span::styled(
+            bookmark_marker.to_string(),
+            Style::default().fg(theme.bookmark),
+        ),
+        Span::styled(title_col, title_style),
+        Span::styled(" ", Style::default()),
+        Span::styled(cat_col, Style::default().fg(theme.category)),
+    ];
+
+    if cols.show_dept {
+        let dept_text = entry.departments.join(", ");
+        let dept_col = styles::pad_to_width(&dept_text, cols.dept_w);
+        spans.push(Span::styled(" ", Style::default()));
+        spans.push(Span::styled(
+            dept_col,
+            Style::default().fg(theme.department),
+        ));
+    }
+
+    if cols.show_pcount {
+        let count = app
+            .precedent_map
+            .as_ref()
+            .map_or(0, |m| m.law_count(&entry.title));
+        let pcount_text = if count > 0 {
+            format!("{count}판")
+        } else {
+            String::new()
+        };
+        let pcount_col = styles::pad_to_width(&pcount_text, cols.pcount_w);
+        spans.push(Span::styled(" ", Style::default()));
+        spans.push(Span::styled(pcount_col, Style::default().fg(theme.tag)));
+    }
+
+    if cols.show_date {
+        let date_col = styles::pad_to_width(&entry.promulgation_date, cols.date_w);
+        spans.push(Span::styled(" ", Style::default()));
+        spans.push(Span::styled(date_col, Style::default().fg(theme.date)));
+    }
+
+    let item = ListItem::new(Line::from(spans));
+    if !is_selected && display_idx % 2 == 1 {
+        item.style(Style::default().bg(theme.stripe_bg))
+    } else {
+        item
+    }
 }
 
 fn render_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {

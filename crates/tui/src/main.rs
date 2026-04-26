@@ -394,7 +394,8 @@ fn handle_detail_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         KeyCode::Char('s') => app.stop_tts(),
         KeyCode::Char('E') => app.export_law(),
         KeyCode::Char('P') => {
-            if let Some(ref detail) = app.detail.clone() {
+            if let Some(detail) = &app.detail {
+                let title = detail.entry.title.clone();
                 // Find the current article based on scroll position
                 let current_article = app
                     .detail_articles
@@ -405,9 +406,9 @@ fn handle_detail_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
                 if let Some(label) = current_article {
                     // Extract just the "제N조" prefix from labels like "제1조 (목적)"
                     let article_id = label.split_whitespace().next().unwrap_or(&label);
-                    app.jump_to_article_precedents(&detail.entry.title, article_id);
+                    app.jump_to_article_precedents(&title, article_id);
                 } else {
-                    app.jump_to_law_precedents(&detail.entry.title);
+                    app.jump_to_law_precedents(&title);
                 }
             }
         }

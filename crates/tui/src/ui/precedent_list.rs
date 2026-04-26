@@ -204,7 +204,12 @@ fn render_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
                 Span::styled(date_col, Style::default().fg(theme.date)),
             ];
 
-            ListItem::new(Line::from(spans))
+            let item = ListItem::new(Line::from(spans));
+            if !is_selected && display_idx % 2 == 1 {
+                item.style(Style::default().bg(theme.stripe_bg))
+            } else {
+                item
+            }
         })
         .collect();
 
@@ -345,7 +350,12 @@ fn render_person_search_results(f: &mut Frame, app: &App, theme: &Theme, area: R
                 Span::styled(date_col, Style::default().fg(theme.date)),
             ];
 
-            ListItem::new(Line::from(spans))
+            let item = ListItem::new(Line::from(spans));
+            if !is_selected && display_idx % 2 == 1 {
+                item.style(Style::default().bg(theme.stripe_bg))
+            } else {
+                item
+            }
         })
         .collect();
 

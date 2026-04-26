@@ -129,7 +129,7 @@ pub fn status_message_line<'a>(theme: &Theme, msg: &str, width: u16) -> Line<'a>
     let gap = total.saturating_sub(left_w);
 
     Line::from(vec![
-        Span::styled(left, Style::default().fg(theme.accent)),
+        Span::styled(left, Style::default().fg(theme.status)),
         Span::styled(" ".repeat(gap), Style::default().bg(theme.panel_bg)),
     ])
 }
