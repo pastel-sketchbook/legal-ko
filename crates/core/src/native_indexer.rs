@@ -179,6 +179,10 @@ impl ZmdDb {
     }
 
     /// Snapshot existing document metadata for a collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database query fails.
     pub fn existing_docs(
         &self,
         collection: &str,

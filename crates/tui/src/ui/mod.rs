@@ -217,6 +217,8 @@ fn render_filter_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect, kind
 
 /// Render list + detail side-by-side with a draggable split.
 fn render_split_view(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
+    // Value is clamped to 20.0..=80.0, safe to cast to u16.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let left_pct = (app.split_ratio * 100.0).round().clamp(20.0, 80.0) as u16;
     let right_pct = 100 - left_pct;
     let cols = Layout::default()

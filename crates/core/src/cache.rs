@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tracing::debug;
 
-const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+const CACHE_TTL: Duration = Duration::from_hours(24);
 
 /// Get the cache directory: ~/.cache/legal-ko/
 fn cache_dir() -> Result<PathBuf> {
@@ -80,7 +80,7 @@ pub fn write_cache(path: &str, content: &str) -> Result<()> {
 // ── Enrichment metadata cache ────────────────────────────────
 
 /// TTL for the enrichment cache file (7 days).
-const ENRICHMENT_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+const ENRICHMENT_TTL: Duration = Duration::from_hours(168);
 
 /// Cached metadata fields extracted from YAML frontmatter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,7 +160,7 @@ pub fn write_enrichment_cache(cache: &EnrichmentCache) -> Result<()> {
 use crate::models::PrecedentMetadataIndex;
 
 /// TTL for the precedent metadata cache (24 hours).
-const PRECEDENT_META_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+const PRECEDENT_META_TTL: Duration = Duration::from_hours(24);
 
 /// Path to the precedent metadata cache file.
 fn precedent_meta_cache_path() -> Result<PathBuf> {

@@ -540,7 +540,7 @@ fn build_file_entry_plan(
 
         entries.push(crate::native_indexer::FileEntry {
             path: rel_path,
-            staged_path: src.to_path_buf(),
+            staged_path: src.clone(),
             source_size,
             source_mtime_ns,
         });
@@ -721,8 +721,7 @@ fn ensure_zmd() -> Result<()> {
     let ok = Command::new("zmd")
         .arg("version")
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+        .is_ok_and(|o| o.status.success());
     if !ok {
         bail!("zmd is not installed or not on PATH");
     }

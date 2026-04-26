@@ -16,10 +16,10 @@ use crate::crossref;
 pub struct PrecedentMap {
     /// Number of precedent documents that were scanned to produce this map.
     pub scanned_count: usize,
-    /// law_title → set of precedent paths (e.g. "민사/대법원/2000다10048")
+    /// `law_title` → set of precedent paths (e.g. `민사/대법원/2000다10048`)
     pub law_to_precedents: HashMap<String, Vec<String>>,
-    /// (law_title, article) → set of precedent paths
-    /// The key format is "law_title\0article" (e.g. "민법\0제840조")
+    /// (`law_title`, article) → set of precedent paths.
+    /// The key format is `law_title\0article` (e.g. `민법\0제840조`).
     pub article_to_precedents: HashMap<String, Vec<String>>,
 }
 
@@ -28,6 +28,10 @@ impl PrecedentMap {
     ///
     /// `known_law_names` is the list of law titles from the metadata index
     /// (used by `crossref::match_statute_refs`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database cannot be opened or queried.
     pub fn build(db_path: &Path, known_law_names: &[String]) -> Result<Self> {
         let conn = Connection::open(db_path)
             .with_context(|| format!("Failed to open {}", db_path.display()))?;
@@ -137,7 +141,7 @@ impl PrecedentMap {
             .map_or(&[], Vec::as_slice)
     }
 
-    /// Make the article key from law_title + article label (for lookup).
+    /// Make the article key from `law_title` + article label (for lookup).
     #[must_use]
     pub fn article_key(law_title: &str, article: &str) -> String {
         format!("{law_title}\0{article}")
@@ -149,6 +153,10 @@ impl PrecedentMap {
 /// Used as a fallback when precedent metadata from GitHub is unavailable.
 /// Derives `case_type`, `court_name`, and `case_number` from the path pattern
 /// `{case_type}/{court}/{case_number}.md`.
+///
+/// # Errors
+///
+/// Returns an error if the database cannot be opened or queried.
 pub fn entries_from_db(db_path: &Path) -> Result<Vec<crate::models::PrecedentEntry>> {
     let conn = Connection::open(db_path)
         .with_context(|| format!("Failed to open {}", db_path.display()))?;
@@ -167,7 +175,7 @@ pub fn entries_from_db(db_path: &Path) -> Result<Vec<crate::models::PrecedentEnt
             let frontmatter_snippet: String = row.get(2)?;
             Ok((path, case_name, frontmatter_snippet))
         })?
-        .filter_map(|r| r.ok())
+        .filter_map(std::result::Result::ok)
         .map(|(path, case_name, fm_snippet)| {
             let id = path.strip_suffix(".md").unwrap_or(&path).to_string();
             // Parse path: "민사/대법원/2000다10048.md"
@@ -232,6 +240,10 @@ fn extract_frontmatter_value(snippet: &str, key: &str) -> String {
 /// Query the number of active precedent documents in `.qmd/data.db`.
 ///
 /// Used to decide whether the cached `PrecedentMap` is still valid.
+///
+/// # Errors
+///
+/// Returns an error if the database cannot be opened or queried.
 pub fn db_precedent_count(db_path: &Path) -> Result<usize> {
     let conn = Connection::open(db_path)
         .with_context(|| format!("Failed to open {}", db_path.display()))?;
@@ -240,6 +252,7 @@ pub fn db_precedent_count(db_path: &Path) -> Result<usize> {
         [],
         |row| row.get(0),
     )?;
-    let count = count as usize;
+    #[allow(clippy::cast_sign_loss)]
+    let count = usize::try_from(count).unwrap_or(0);
     Ok(count)
 }

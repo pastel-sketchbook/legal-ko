@@ -750,9 +750,7 @@ impl App {
             }
             MouseEventKind::Drag(MouseButton::Left) if self.dragging && self.split_open => {
                 let col = f64::from(event.column);
-                let width = f64::from(
-                    crossterm::terminal::size().map_or(80, |(w, _)| w).max(1),
-                );
+                let width = f64::from(crossterm::terminal::size().map_or(80, |(w, _)| w).max(1));
                 self.split_ratio = (col / width).clamp(0.2, 0.8);
             }
             MouseEventKind::Up(MouseButton::Left) if self.dragging => {
@@ -769,26 +767,22 @@ impl App {
                     }
                 });
             }
-            MouseEventKind::ScrollDown => {
-                match self.view {
-                    View::Detail => self.detail_scroll_down(3),
-                    View::PrecedentDetail => self.precedent_detail_scroll_down(3),
-                    View::List if self.split_open => self.detail_scroll_down(3),
-                    View::List => self.list_move_down(),
-                    View::PrecedentList => self.precedent_list_move_down(),
-                    _ => {}
-                }
-            }
-            MouseEventKind::ScrollUp => {
-                match self.view {
-                    View::Detail => self.detail_scroll_up(3),
-                    View::PrecedentDetail => self.precedent_detail_scroll_up(3),
-                    View::List if self.split_open => self.detail_scroll_up(3),
-                    View::List => self.list_move_up(),
-                    View::PrecedentList => self.precedent_list_move_up(),
-                    _ => {}
-                }
-            }
+            MouseEventKind::ScrollDown => match self.view {
+                View::Detail => self.detail_scroll_down(3),
+                View::PrecedentDetail => self.precedent_detail_scroll_down(3),
+                View::List if self.split_open => self.detail_scroll_down(3),
+                View::List => self.list_move_down(),
+                View::PrecedentList => self.precedent_list_move_down(),
+                View::Loading => {}
+            },
+            MouseEventKind::ScrollUp => match self.view {
+                View::Detail => self.detail_scroll_up(3),
+                View::PrecedentDetail => self.precedent_detail_scroll_up(3),
+                View::List if self.split_open => self.detail_scroll_up(3),
+                View::List => self.list_move_up(),
+                View::PrecedentList => self.precedent_list_move_up(),
+                View::Loading => {}
+            },
             _ => {}
         }
     }

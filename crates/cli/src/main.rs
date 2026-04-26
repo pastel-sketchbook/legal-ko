@@ -1553,7 +1553,7 @@ fn cmd_zmd_precedents(
         let total_new = result.summary.newly_staged;
         let total_files = result.summary.total_files;
         let total_secs = result.summary.total_update_secs;
-        println!("Precedents: {total_files} total, {total_new} new — {total_secs:.0}s",);
+        println!("Precedents: {total_files} total, {total_new} new — {total_secs:.0}s");
     }
     Ok(())
 }

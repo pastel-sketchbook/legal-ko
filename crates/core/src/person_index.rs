@@ -25,7 +25,7 @@ use crate::{client, parser};
 const CONCURRENT_FETCHES: usize = 50;
 
 /// TTL for the person index cache (7 days).
-const PERSON_INDEX_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+const PERSON_INDEX_TTL: Duration = Duration::from_hours(168);
 
 /// A single person→precedent association stored in the index.
 #[derive(Debug, Clone, Serialize, Deserialize)]
