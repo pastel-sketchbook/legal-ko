@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
     // fd 1/2 at /dev/null, and have ratatui write through the private copy.
     #[cfg(feature = "tts")]
     // SAFETY: `dup` and `dup2` are well-defined POSIX calls on valid standard
-    // file descriptors.  We save private copies of stdout/stderr before
+    // SAFETY: We save private copies of stdout/stderr before
     // redirecting them to /dev/null.  The saved fds are restored in the cleanup
     // block at the end of `main`.  All raw fds obtained here are either
     // consumed by `File::from_raw_fd` (tty_fd) or explicitly closed after

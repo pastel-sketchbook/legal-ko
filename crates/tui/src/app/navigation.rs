@@ -83,6 +83,7 @@ impl App {
         self.detail_scroll = self
             .detail_articles
             .last()
+            // Invariant: detail_articles is non-empty (checked by early return above).
             .expect("detail_articles is non-empty (checked above)")
             .line_index;
     }
@@ -180,6 +181,7 @@ impl App {
         self.precedent_detail_scroll = self
             .precedent_detail_sections
             .last()
+            // Invariant: precedent_detail_sections is non-empty (checked by early return above).
             .expect("precedent_detail_sections is non-empty (checked above)")
             .line_index;
     }

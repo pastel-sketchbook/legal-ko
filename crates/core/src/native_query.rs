@@ -163,10 +163,10 @@ pub fn fts_search(db: &ZmdDb, query: &str, collection: Option<&str>) -> Result<V
     let mut hits = Vec::new();
     while let Some(row) = rows.next()? {
         let coll: String = row.get(1)?;
-        if let Some(wanted) = collection {
-            if coll != wanted {
-                continue;
-            }
+        if let Some(wanted) = collection
+            && coll != wanted
+        {
+            continue;
         }
         let raw_score: f64 = row.get(5)?;
         let score = if raw_score < 0.0 {
@@ -434,9 +434,10 @@ pub fn similarity_search(
     }
 
     // Step 4: Sort by cite count descending
-    let mut cited: Vec<((String, String), (usize, Option<String>))> =
-        law_counts.into_iter().collect();
-    cited.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+    let mut cited: Vec<_> = law_counts
+        .into_iter()
+        .collect::<Vec<((String, String), (usize, Option<String>))>>();
+    cited.sort_by_key(|item| std::cmp::Reverse(item.1.0));
     cited.truncate(opts.law_limit);
 
     // Step 5: Try to resolve law names to docs in laws collection
