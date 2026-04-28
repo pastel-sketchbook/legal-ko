@@ -802,6 +802,17 @@ pub fn format_doc_for_embedding(text: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Collapse whitespace, truncate at `EMBEDDING_MAX_TEXT_LEN` bytes,
+/// and prepend `"query: "`.  Mirrors zmd's `formatQueryForEmbedding`.
+#[must_use]
+pub fn format_query_for_embedding(text: &[u8]) -> Vec<u8> {
+    let normalized = normalize_embedding_text(text, EMBEDDING_MAX_TEXT_LEN);
+    let mut out = Vec::with_capacity(b"query: ".len() + normalized.len());
+    out.extend_from_slice(b"query: ");
+    out.extend_from_slice(&normalized);
+    out
+}
+
 fn normalize_embedding_text(text: &[u8], max_len: usize) -> Vec<u8> {
     let mut out = Vec::with_capacity(text.len().min(max_len));
     let mut prev_space = true;

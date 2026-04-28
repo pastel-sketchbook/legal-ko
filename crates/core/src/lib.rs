@@ -7,6 +7,7 @@ pub mod crossref;
 pub mod enrichment;
 pub mod models;
 pub mod native_indexer;
+pub mod native_query;
 pub mod parser;
 pub mod person_index;
 pub mod precedent_map;

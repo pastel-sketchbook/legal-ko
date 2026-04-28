@@ -328,6 +328,65 @@ enum ZmdCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Native FTS+vector hybrid query (no zmd subprocess)
+    Query {
+        /// Search query
+        query: String,
+
+        /// Restrict to a single collection (e.g. "laws" or "precedents")
+        #[arg(long)]
+        collection: Option<String>,
+
+        /// Disable the vector branch (FTS-only — fastest path)
+        #[arg(long)]
+        no_vector: bool,
+
+        /// Maximum results
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Native FTS-only search (no zmd subprocess)
+    Search {
+        /// Search query
+        query: String,
+
+        /// Restrict to a single collection (e.g. "laws" or "precedents")
+        #[arg(long)]
+        collection: Option<String>,
+
+        /// Maximum results
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Similarity search: query → precedents → cited laws (native, no subprocess)
+    Similar {
+        /// Search query (keyword or natural language)
+        query: String,
+
+        /// Max precedents to retrieve
+        #[arg(long, default_value_t = 10)]
+        precedent_limit: usize,
+
+        /// Max cited laws to return
+        #[arg(long, default_value_t = 20)]
+        law_limit: usize,
+
+        /// Disable vector branch (FTS-only for precedent lookup)
+        #[arg(long)]
+        no_vector: bool,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[tokio::main]
@@ -1460,7 +1519,126 @@ fn cmd_zmd(cmd: ZmdCommand) -> Result<()> {
         ZmdCommand::Sync { json } => cmd_zmd_sync(json),
         ZmdCommand::Status { json } => cmd_zmd_status(json),
         ZmdCommand::Reset { json } => cmd_zmd_reset(json),
+        ZmdCommand::Query {
+            query,
+            collection,
+            no_vector,
+            limit,
+            json,
+        } => cmd_zmd_query(&query, collection, no_vector, limit, json),
+        ZmdCommand::Search {
+            query,
+            collection,
+            limit,
+            json,
+        } => cmd_zmd_query(&query, collection, true, limit, json),
+        ZmdCommand::Similar {
+            query,
+            precedent_limit,
+            law_limit,
+            no_vector,
+            json,
+        } => cmd_zmd_similar(&query, precedent_limit, law_limit, no_vector, json),
     }
+}
+
+fn cmd_zmd_query(
+    query: &str,
+    collection: Option<String>,
+    no_vector: bool,
+    limit: usize,
+    as_json: bool,
+) -> Result<()> {
+    use legal_ko_core::native_indexer::{ZmdDb, default_db_path};
+    use legal_ko_core::native_query::{QueryOptions, hybrid_query};
+
+    let db_path = default_db_path();
+    let db = ZmdDb::open(&db_path)
+        .with_context(|| format!("open zmd database at {}", db_path.display()))?;
+
+    let opts = QueryOptions {
+        limit,
+        collection,
+        enable_vector: !no_vector,
+    };
+
+    let hits = hybrid_query(&db, query, &opts)?;
+
+    if as_json {
+        let items: Vec<_> = hits
+            .iter()
+            .map(|h| {
+                json!({
+                    "id": h.id,
+                    "collection": h.collection,
+                    "path": h.path,
+                    "title": h.title,
+                    "hash": h.hash,
+                    "score": h.score,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&items)?);
+    } else if hits.is_empty() {
+        println!("(no results)");
+    } else {
+        for h in &hits {
+            println!("{:.4}\t{}/{}\t{}", h.score, h.collection, h.path, h.title);
+        }
+    }
+    Ok(())
+}
+
+fn cmd_zmd_similar(
+    query: &str,
+    precedent_limit: usize,
+    law_limit: usize,
+    no_vector: bool,
+    as_json: bool,
+) -> Result<()> {
+    use legal_ko_core::native_indexer::{ZmdDb, default_db_path};
+    use legal_ko_core::native_query::{SimilarityOptions, similarity_search};
+
+    let db_path = default_db_path();
+    let db = ZmdDb::open(&db_path)
+        .with_context(|| format!("open zmd database at {}", db_path.display()))?;
+
+    let opts = SimilarityOptions {
+        precedent_limit,
+        law_limit,
+        enable_vector: !no_vector,
+    };
+
+    let result = similarity_search(&db, query, &opts)?;
+
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else if result.precedents.is_empty() {
+        println!("(no results)");
+    } else {
+        println!("## Precedents ({} found)", result.precedents.len());
+        for h in &result.precedents {
+            println!("  {:.4}\t{}\t{}", h.score, h.path, h.title);
+        }
+        println!();
+        if result.cited_laws.is_empty() {
+            println!("## Cited Laws: (none extracted)");
+        } else {
+            println!("## Cited Laws ({} unique)", result.cited_laws.len());
+            for cl in &result.cited_laws {
+                let detail = cl.detail.as_deref().unwrap_or("");
+                let resolved = cl
+                    .law_doc_path
+                    .as_deref()
+                    .map_or(String::new(), |p| format!(" → laws/{p}"));
+                println!(
+                    "  [{}×] {} {} {detail}{resolved}",
+                    cl.cite_count, cl.law_name, cl.article
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 fn cmd_zmd_laws(as_json: bool, skip_pull: bool) -> Result<()> {

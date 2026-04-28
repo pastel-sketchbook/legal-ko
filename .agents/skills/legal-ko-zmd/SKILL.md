@@ -26,11 +26,11 @@ reranking over locally indexed markdown collections.
 
 | What | Answer |
 |------|--------|
-| **Tool** | `zmd` (v0.3.0+) |
+| **Tool** | `legal-ko-cli zmd` (native query, v0.5.6+) — preferred; `zmd` (v0.4.1) subprocess as fallback |
 | **Data source** | Two collections indexed locally from GitHub |
 | **Collections** | `laws` → [legalize-kr](https://github.com/legalize-kr/legalize-kr), `precedents` → [precedent-kr](https://github.com/legalize-kr/precedent-kr) |
 | **Scope** | Laws: 법률 (Acts) only (~1,711 docs). Precedents: 민사 + 형사 대법원 by default (~43K docs); expandable to all 8 case types + 하급심 (~123K docs). |
-| **Search modes** | FTS (`search`), vector (`vsearch`), hybrid (`query`), context snippets (`context`) |
+| **Search modes** | Native: FTS (`zmd search`), hybrid FTS+vec0 (`zmd query`). Subprocess fallback: `zmd query --rerank` for cross-encoder reranking |
 | **Output** | Markdown by default; `--json`, `--csv`, `--md` flags available |
 | **Language** | Respond in the same language the user used (Korean or English) |
 
@@ -205,8 +205,9 @@ zmd query "부당해고 구제" --expand --rerank --json
 
 **Syntax:** `zmd query <query> [--expand] [--rerank] [--json|--csv|--md] [--sort=score|--sort=index]`
 
-> **Recommended default:** Use `query` with `--rerank` for most searches.
-> It gives the best results by combining keyword precision with semantic recall.
+> **Recommended default:** Use `legal-ko-cli zmd query` (native) for most searches.
+> It runs in ~410 ms in-process. Only use `zmd query --rerank` (subprocess, ~1.5 s)
+> when native results seem poor for ambiguous semantic queries.
 
 ### 4. Context Snippets (`context`)
 
@@ -263,27 +264,32 @@ Parse the user's question to identify:
 
 ### Phase 2 — Choose Search Strategy
 
+> **Default: always use the native path** (`legal-ko-cli zmd search` or `legal-ko-cli zmd query`).
+> These run in-process (~10–410 ms) vs the zmd subprocess (~1.5 s per call).
+> Only fall back to `zmd query --rerank` when native results seem irrelevant.
+
 | Situation | Strategy |
 |-----------|----------|
-| User names a specific law or case number | `zmd search` (FTS) with exact name/number |
-| User describes a legal situation | `zmd query --rerank` (hybrid) for best recall + precision |
-| User asks a conceptual question | `zmd vsearch` (semantic) for meaning-based results |
-| Need to see match context | `zmd context` for snippets |
-| Need a specific document | `zmd get` with known path |
+| User names a specific law or case number | `legal-ko-cli zmd search <name> --json` (FTS-only, ~10 ms) |
+| User describes a legal situation | `legal-ko-cli zmd query <q> --json` (hybrid FTS+vector, ~410 ms) |
+| User wants precedents AND the laws they cite | `legal-ko-cli zmd similar <q> --json` (single call, ~30–410 ms) |
+| Native results seem poor / ambiguous semantic query | `zmd query <q> --rerank --json` (subprocess fallback, ~1.5 s, cross-encoder reranking) |
+| Need to see match context | `zmd context <q> --json` (subprocess) |
+| Need a specific document | `zmd get <path>` (subprocess) |
 
 ### Phase 3 — Search and Discover
 
-Run the appropriate search commands. Use the collection name to scope results:
+Run the appropriate search commands. Use `--collection` to scope results:
 
 ```bash
-# Search laws only
-zmd search "근로기준" laws --json
+# Search laws only (native FTS, ~10 ms)
+legal-ko-cli zmd search "근로기준" --collection laws --json
 
-# Search precedents only
-zmd search "부당해고" precedents --json
+# Search precedents only (native FTS, ~10 ms)
+legal-ko-cli zmd search "부당해고" --collection precedents --json
 
-# Search everything (laws + precedents)
-zmd query "부당해고 관련 법률과 판례" --rerank --json
+# Hybrid search everything (native FTS+vector, ~410 ms)
+legal-ko-cli zmd query "부당해고 관련 법률과 판례" --json
 ```
 
 **Multiple searches** — Run 2-5 searches with different terms to ensure coverage,
@@ -393,9 +399,10 @@ zmd and legal-ko-cli are complementary. Use this decision table:
 
 | Task | Tool |
 |------|------|
-| **Discovery** — find relevant docs by topic | `zmd query --rerank` |
-| **Content search** — search inside documents | `zmd search` or `zmd context` |
-| **Semantic search** — natural language queries | `zmd vsearch` |
+| **Discovery** — find relevant docs by topic | `legal-ko-cli zmd query --json` (native, ~410 ms) |
+| **Content search** — search inside documents | `legal-ko-cli zmd search --json` (native, ~10 ms) |
+| **Semantic reranking** — ambiguous natural language | `zmd query --rerank --json` (subprocess fallback, ~1.5 s) |
+| **Context snippets** — see surrounding text | `zmd context --json` (subprocess) |
 | **Structured metadata** — parsed frontmatter, sections | `legal-ko-cli show --json` / `precedent-show --json` |
 | **Article listing** — list articles in a law | `legal-ko-cli articles --json` |
 | **Cross-reference** — statute↔precedent links | `legal-ko-cli precedent-laws` / `law-precedents` |
@@ -406,10 +413,10 @@ zmd and legal-ko-cli are complementary. Use this decision table:
 **Typical combined workflow:**
 
 ```bash
-# 1. Discover relevant documents with zmd
-zmd query "전세 보증금 반환" --rerank --json
+# 1. Discover precedents + their cited laws in one call (~30–410 ms)
+legal-ko-cli zmd similar "전세 보증금 반환" --json
 
-# 2. Get structured data with legal-ko-cli
+# 2. Get structured data for a specific law found above
 legal-ko-cli show "kr/주택임대차보호법/법률" --json
 legal-ko-cli articles "kr/주택임대차보호법/법률" --json
 
@@ -426,6 +433,9 @@ legal-ko-cli navigate "kr/주택임대차보호법/법률" --article "제3조"
 
 | Subcommand | Purpose |
 |------------|---------|
+| `query` | **Native hybrid search** (FTS5 + vec0 + RRF, ~410 ms) — preferred for discovery |
+| `search` | **Native FTS-only search** (~10 ms) — preferred for keyword/exact lookups |
+| `similar` | **Similarity pipeline** (query → precedents → cited laws, ~30–410 ms) — find precedents and their cited statutes in one call |
 | `laws` | Clone legalize-kr, stage 법률.md files, index via native indexer |
 | `precedents` | Clone precedent-kr, stage + index precedents (default: 민사+형사 대법원) |
 | `all` | Run both `laws` and `precedents` phases |
@@ -504,8 +514,8 @@ This means:
 **User:** "전세 보증금을 못 돌려받고 있어요"
 
 ```bash
-# Semantic search finds relevant laws by meaning
-zmd query "전세 보증금 반환" --rerank --json
+# Native hybrid search (fast, ~410 ms)
+legal-ko-cli zmd query "전세 보증금 반환" --json
 
 # Get context snippets to see matching passages
 zmd context "보증금 반환" --json
@@ -519,11 +529,11 @@ zmd get "laws/kr/주택임대차보호법/법률.md"
 **User:** "명예훼손 관련 대법원 판례를 찾아줘"
 
 ```bash
-# Hybrid search across precedents
-zmd search "명예훼손" precedents --json
+# Native FTS search for precedents (~10 ms)
+legal-ko-cli zmd search "명예훼손" --collection precedents --json
 
-# Semantic search for broader coverage
-zmd vsearch "명예훼손 판례 대법원" --json
+# Native hybrid for broader coverage (~410 ms)
+legal-ko-cli zmd query "명예훼손 판례 대법원" --json
 
 # Read a specific ruling
 zmd get "precedents/형사/대법원/2020도12345.md"
@@ -534,12 +544,12 @@ zmd get "precedents/형사/대법원/2020도12345.md"
 **User:** "근로기준법 관련 법률과 판례를 모두 찾아줘"
 
 ```bash
-# Search across both collections
-zmd query "근로기준법" --rerank --json
+# Native hybrid across both collections (~410 ms)
+legal-ko-cli zmd query "근로기준법" --json
 
-# Or search each collection separately for more control
-zmd search "근로기준" laws --json
-zmd search "근로기준" precedents --json
+# Or search each collection separately for more control (~10 ms each)
+legal-ko-cli zmd search "근로기준" --collection laws --json
+legal-ko-cli zmd search "근로기준" --collection precedents --json
 ```
 
 ### Example 4: Retrieving a specific case by number
@@ -547,8 +557,8 @@ zmd search "근로기준" precedents --json
 **User:** "2000다10048 판결을 보여줘"
 
 ```bash
-# FTS search for exact case number
-zmd search "2000다10048" precedents --json
+# Native FTS search for exact case number (~10 ms)
+legal-ko-cli zmd search "2000다10048" --collection precedents --json
 
 # Or retrieve directly if you know the path
 zmd get "precedents/민사/대법원/2000다10048.md"

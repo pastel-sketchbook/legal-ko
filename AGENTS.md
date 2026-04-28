@@ -105,6 +105,9 @@ crates/
 - `legal-ko-cli zmd sync [--json]` — pull latest from upstream repos and re-index
 - `legal-ko-cli zmd status [--json]` — show repos, staged files, zmd collections
 - `legal-ko-cli zmd reset [--json]` — remove collections and staged data (keeps repo clones)
+- `legal-ko-cli zmd query <query> [--collection X] [--no-vector] [--limit N] [--json]` — native hybrid search (FTS5 + vec0 + RRF), ~410 ms
+- `legal-ko-cli zmd search <query> [--collection X] [--limit N] [--json]` — native FTS-only search, ~10 ms
+- `legal-ko-cli zmd similar <query> [--precedent-limit N] [--law-limit N] [--no-vector] [--json]` — query → precedents → cited laws in one call
 
 ## Key Design Decisions
 
