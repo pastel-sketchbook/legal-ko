@@ -42,6 +42,9 @@ impl App {
             // NFC-normalize so NFD source data (e.g. Korean text from macOS
             // file systems) still matches an IME-produced NFC query.
             let query_norm = hangul::nfc(&query.to_lowercase());
+            // Also try interpreting the query as English-keyboard Hangul (영타→한타)
+            let hangul_query = hangul::eng_to_hangul(query)
+                .map(|h| hangul::nfc(&h.to_lowercase()));
 
             self.filtered_indices = self
                 .all_laws
@@ -49,10 +52,13 @@ impl App {
                 .enumerate()
                 .filter(|(_, entry)| {
                     // Search filter
-                    if !query_norm.is_empty()
-                        && !hangul::nfc(&entry.title.to_lowercase()).contains(&query_norm)
-                    {
-                        return false;
+                    if !query_norm.is_empty() {
+                        let title = hangul::nfc(&entry.title.to_lowercase());
+                        let matches = title.contains(&query_norm)
+                            || hangul_query.as_ref().is_some_and(|hq| title.contains(hq.as_str()));
+                        if !matches {
+                            return false;
+                        }
                     }
                     self.passes_non_search_filters(entry)
                 })
@@ -82,6 +88,8 @@ impl App {
         // NFC-normalize so NFD source data (e.g. Korean text from macOS
         // file systems) still matches an IME-produced NFC query.
         let query_norm = hangul::nfc(&self.precedent_search_query.to_lowercase());
+        let hangul_query = hangul::eng_to_hangul(&self.precedent_search_query)
+            .map(|h| hangul::nfc(&h.to_lowercase()));
 
         self.precedent_filtered_indices = self
             .all_precedents
@@ -89,11 +97,17 @@ impl App {
             .enumerate()
             .filter(|(_, entry)| {
                 // Search filter (case name or case number)
-                if !query_norm.is_empty()
-                    && !hangul::nfc(&entry.case_name.to_lowercase()).contains(&query_norm)
-                    && !hangul::nfc(&entry.case_number.to_lowercase()).contains(&query_norm)
-                {
-                    return false;
+                if !query_norm.is_empty() {
+                    let name = hangul::nfc(&entry.case_name.to_lowercase());
+                    let number = hangul::nfc(&entry.case_number.to_lowercase());
+                    let matches = name.contains(&query_norm)
+                        || number.contains(&query_norm)
+                        || hangul_query.as_ref().is_some_and(|hq| {
+                            name.contains(hq.as_str()) || number.contains(hq.as_str())
+                        });
+                    if !matches {
+                        return false;
+                    }
                 }
                 // Case type filter
                 if let Some(ref ct) = self.precedent_case_type_filter
