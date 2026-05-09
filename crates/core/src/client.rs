@@ -1,6 +1,8 @@
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use rayon::prelude::*;
 use tracing::{debug, info, warn};
 
 use crate::cache;
@@ -8,6 +10,7 @@ use crate::models::{
     GitTreeResponse, MetadataEntry, MetadataIndex, PrecedentMetadataEntry, PrecedentMetadataIndex,
     RawPrecedentMetadataIndex,
 };
+use crate::parser;
 
 /// Raw-content base URL for the new repo location.
 const BASE_URL: &str = "https://raw.githubusercontent.com/legalize-kr/legalize-kr/main";
@@ -255,18 +258,106 @@ const PRECEDENT_BASE_URL: &str = "https://raw.githubusercontent.com/legalize-kr/
 const PRECEDENT_METADATA_URL: &str =
     "https://raw.githubusercontent.com/legalize-kr/precedent-kr/main/metadata.json";
 
-/// Fetch the precedent metadata index from the pre-built `metadata.json`
-/// in the precedent-kr repository.
+/// Fetch the precedent metadata index.
 ///
-/// This replaces the former GitHub Trees API approach. The metadata.json
-/// file contains all fields pre-extracted from YAML frontmatter, so entries
-/// have full case names, dates, court names, etc. immediately — no lazy
-/// enrichment needed.
+/// Tries three sources in order:
+/// 1. Cached local metadata (`~/.cache/legal-ko/precedent_metadata.json`)
+/// 2. Remote `metadata.json` from GitHub (may 404 if upstream removed it)
+/// 3. Build from local zmd clone by scanning `.md` frontmatter (Rayon parallel)
+///
+/// The result is always cached to disk for fast subsequent loads.
 ///
 /// # Errors
 ///
-/// Returns an error if the HTTP request fails or the response cannot be parsed.
+/// Returns an error if all sources fail.
 pub async fn fetch_precedent_metadata(client: &reqwest::Client) -> Result<PrecedentMetadataIndex> {
+    // 1. Try cached local metadata
+    let cache_path = local_metadata_cache_path()?;
+    if let Some(index) = load_cached_metadata(&cache_path) {
+        info!(count = index.len(), "Loaded precedent metadata from cache");
+        return Ok(index);
+    }
+
+    // 2. Try remote metadata.json
+    match fetch_remote_precedent_metadata(client).await {
+        Ok(index) => {
+            save_metadata_cache(&cache_path, &index);
+            return Ok(index);
+        }
+        Err(e) => {
+            warn!(error = %e, "Remote metadata.json unavailable, falling back to local clone");
+        }
+    }
+
+    // 3. Build from local zmd clone
+    let clone_dir = zmd_precedent_clone_dir()?;
+    if !clone_dir.join(".git").is_dir() {
+        anyhow::bail!(
+            "No precedent metadata available: remote metadata.json is gone and \
+             local clone not found at {}. Run `legal-ko-cli zmd precedents` first.",
+            clone_dir.display()
+        );
+    }
+
+    info!(path = %clone_dir.display(), "Building precedent metadata from local clone");
+    let index = tokio::task::spawn_blocking(move || build_precedent_metadata_from_clone(&clone_dir))
+        .await
+        .context("Metadata build task panicked")??;
+
+    save_metadata_cache(&cache_path, &index);
+    Ok(index)
+}
+
+/// Path to the cached precedent metadata file.
+fn local_metadata_cache_path() -> Result<std::path::PathBuf> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .context("Cannot determine home directory")?;
+    Ok(std::path::PathBuf::from(home).join(".cache/legal-ko/precedent_metadata.json"))
+}
+
+/// Path to the zmd precedent-kr clone.
+fn zmd_precedent_clone_dir() -> Result<std::path::PathBuf> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .context("Cannot determine home directory")?;
+    Ok(std::path::PathBuf::from(home).join(".cache/legal-ko/zmd/repos/precedent-kr"))
+}
+
+/// Load cached metadata from disk. Returns `None` if the file doesn't exist
+/// or is older than 7 days.
+fn load_cached_metadata(path: &Path) -> Option<PrecedentMetadataIndex> {
+    let meta = std::fs::metadata(path).ok()?;
+    let age = meta.modified().ok()?.elapsed().ok()?;
+    if age > Duration::from_secs(7 * 24 * 3600) {
+        info!("Cached precedent metadata is older than 7 days, rebuilding");
+        return None;
+    }
+    let data = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&data).ok()
+}
+
+/// Save metadata index to disk cache (best-effort).
+fn save_metadata_cache(path: &Path, index: &PrecedentMetadataIndex) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match serde_json::to_string(index) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(path, json) {
+                warn!(error = %e, "Failed to cache precedent metadata");
+            } else {
+                info!(path = %path.display(), count = index.len(), "Cached precedent metadata to disk");
+            }
+        }
+        Err(e) => warn!(error = %e, "Failed to serialize precedent metadata"),
+    }
+}
+
+/// Try fetching metadata.json from the remote GitHub repo.
+async fn fetch_remote_precedent_metadata(
+    client: &reqwest::Client,
+) -> Result<PrecedentMetadataIndex> {
     info!("Fetching precedent metadata.json from GitHub");
 
     let mut retries = 1;
@@ -287,7 +378,6 @@ pub async fn fetch_precedent_metadata(client: &reqwest::Client) -> Result<Preced
         anyhow::bail!("Precedent metadata.json returned HTTP {status}");
     }
 
-    // Deserialize the Korean-keyed JSON into raw structs, then convert.
     let raw: RawPrecedentMetadataIndex = resp
         .json()
         .await
@@ -295,7 +385,6 @@ pub async fn fetch_precedent_metadata(client: &reqwest::Client) -> Result<Preced
 
     let mut index = PrecedentMetadataIndex::with_capacity(raw.len());
     for (_serial, meta) in raw {
-        // Derive stable ID from path: strip .md extension
         let id = meta
             .path
             .strip_suffix(".md")
@@ -321,6 +410,105 @@ pub async fn fetch_precedent_metadata(client: &reqwest::Client) -> Result<Preced
         "Built precedent metadata index from metadata.json"
     );
     Ok(index)
+}
+
+/// Build a `PrecedentMetadataIndex` by scanning all `.md` files in the local
+/// clone of `precedent-kr` and parsing their YAML frontmatter.
+///
+/// Uses Rayon for parallel file I/O across 123K+ files.
+fn build_precedent_metadata_from_clone(repo_dir: &Path) -> Result<PrecedentMetadataIndex> {
+    // Collect all .md file paths (exclude README.md at root)
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    collect_md_files(repo_dir, &mut paths)?;
+
+    info!(count = paths.len(), "Scanning precedent frontmatter");
+
+    let entries: Vec<(String, PrecedentMetadataEntry)> = paths
+        .par_iter()
+        .filter_map(|path| {
+            let content = std::fs::read_to_string(path).ok()?;
+            let fm = parser::parse_frontmatter(&content);
+
+            let rel = path
+                .strip_prefix(repo_dir)
+                .ok()?
+                .to_string_lossy()
+                .to_string();
+
+            let id = rel.strip_suffix(".md").unwrap_or(&rel).to_string();
+
+            let case_name = fm.get("사건명").map_or(String::new(), |v| {
+                sanitize_case_name(v.as_str())
+            });
+            let case_number = fm
+                .get("사건번호")
+                .map_or(String::new(), |v| v.as_str().to_string());
+            let ruling_date = fm
+                .get("선고일자")
+                .map_or(String::new(), |v| v.as_str().to_string());
+            let court_name = fm
+                .get("법원명")
+                .map_or(String::new(), |v| v.as_str().trim().to_string());
+            let case_type = fm
+                .get("사건종류")
+                .map_or(String::new(), |v| v.as_str().to_string());
+            let ruling_type = fm
+                .get("판결유형")
+                .map_or(String::new(), |v| v.as_str().to_string());
+
+            Some((
+                id,
+                PrecedentMetadataEntry {
+                    path: rel,
+                    case_name,
+                    case_number,
+                    ruling_date,
+                    court_name,
+                    case_type,
+                    ruling_type,
+                },
+            ))
+        })
+        .collect();
+
+    let mut index = PrecedentMetadataIndex::with_capacity(entries.len());
+    for (id, entry) in entries {
+        index.insert(id, entry);
+    }
+
+    info!(
+        count = index.len(),
+        "Built precedent metadata index from local clone"
+    );
+    Ok(index)
+}
+
+/// Recursively collect `.md` files, skipping README.md at any level.
+fn collect_md_files(
+    dir: &Path,
+    out: &mut Vec<std::path::PathBuf>,
+) -> Result<()> {
+    let entries = std::fs::read_dir(dir)
+        .with_context(|| format!("Failed to read directory {}", dir.display()))?;
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            // Skip .git
+            if path.file_name().is_some_and(|n| n == ".git") {
+                continue;
+            }
+            collect_md_files(&path, out)?;
+        } else if path.extension().is_some_and(|e| e == "md") {
+            // Skip README files
+            if path.file_name().is_some_and(|n| n == "README.md") {
+                continue;
+            }
+            out.push(path);
+        }
+    }
+    Ok(())
 }
 
 /// Clean up a case name from metadata: strip HTML tags (`<br/>`, `<br>`, etc.),

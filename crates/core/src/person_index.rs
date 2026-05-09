@@ -10,11 +10,12 @@
 //! precedents has grown significantly since the last build.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures::stream::{self, StreamExt};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
@@ -173,6 +174,69 @@ struct ScanResult {
     persons: Vec<crate::models::PersonRef>,
 }
 
+/// Build a person index by reading precedent files from the local zmd clone.
+///
+/// Uses Rayon for parallel file I/O — typically completes in ~10s for 123K
+/// files (vs ~30 min over HTTP). Calls `on_progress(scanned, total)` after
+/// each Rayon chunk.
+pub fn build_person_index_from_clone<F>(
+    clone_dir: &Path,
+    entries: &[PrecedentEntry],
+    mut on_progress: F,
+) -> PersonIndex
+where
+    F: FnMut(usize, usize),
+{
+    let total = entries.len();
+    info!(total, path = %clone_dir.display(), "Building person index from local clone");
+
+    // Scan all entries in parallel
+    let results: Vec<ScanResult> = entries
+        .par_iter()
+        .filter_map(|entry| {
+            let file_path = clone_dir.join(&entry.path);
+            let content = std::fs::read_to_string(&file_path).ok()?;
+            let persons = parser::extract_persons(&content);
+            Some(ScanResult {
+                precedent_id: entry.id.clone(),
+                persons,
+            })
+        })
+        .collect();
+
+    let mut index = PersonIndex {
+        scanned_count: 0,
+        entries: HashMap::new(),
+    };
+
+    for (i, result) in results.iter().enumerate() {
+        for person in &result.persons {
+            index
+                .entries
+                .entry(person.name.clone())
+                .or_default()
+                .push(PersonIndexEntry {
+                    precedent_id: result.precedent_id.clone(),
+                    role: person.role.clone(),
+                    qualifier: person.qualifier.clone(),
+                });
+        }
+        let progress_interval = (total / 100).max(1);
+        if (i + 1).is_multiple_of(progress_interval) || i + 1 == total {
+            on_progress(i + 1, total);
+        }
+    }
+
+    index.scanned_count = results.len();
+    info!(
+        scanned = index.scanned_count,
+        unique_names = index.entries.len(),
+        "Person index build complete (local)"
+    );
+
+    index
+}
+
 /// Build a person index by scanning precedent documents concurrently.
 ///
 /// Fetches documents using `buffer_unordered(CONCURRENT_FETCHES)` for ~50x
@@ -293,6 +357,19 @@ pub struct PersonSearchResult {
     pub qualifier: Option<String>,
 }
 
+/// Path to the zmd precedent-kr clone (same logic as client.rs).
+fn zmd_precedent_clone_dir() -> Option<PathBuf> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()?;
+    let path = PathBuf::from(home).join(".cache/legal-ko/zmd/repos/precedent-kr");
+    if path.join(".git").is_dir() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
 /// Load the cached person index, or build it if missing/stale.
 async fn get_or_build_index<F>(
     http: &reqwest::Client,
@@ -323,8 +400,20 @@ where
         );
     }
 
-    // Build fresh index
-    let index = build_person_index(http, all_entries, on_progress).await;
+    // Prefer building from local clone (Rayon, ~10s) over HTTP (~30 min)
+    let index = if let Some(clone_dir) = zmd_precedent_clone_dir() {
+        let entries = all_entries.to_vec();
+        tokio::task::spawn_blocking(move || {
+            build_person_index_from_clone(&clone_dir, &entries, |_, _| {})
+        })
+        .await
+        .unwrap_or_else(|_| {
+            warn!("Local clone scan panicked, falling back to HTTP");
+            PersonIndex::new()
+        })
+    } else {
+        build_person_index(http, all_entries, on_progress).await
+    };
 
     // Save to disk in background
     let index_for_cache = index.clone();
