@@ -300,9 +300,10 @@ pub async fn fetch_precedent_metadata(client: &reqwest::Client) -> Result<Preced
     }
 
     info!(path = %clone_dir.display(), "Building precedent metadata from local clone");
-    let index = tokio::task::spawn_blocking(move || build_precedent_metadata_from_clone(&clone_dir))
-        .await
-        .context("Metadata build task panicked")??;
+    let index =
+        tokio::task::spawn_blocking(move || build_precedent_metadata_from_clone(&clone_dir))
+            .await
+            .context("Metadata build task panicked")??;
 
     save_metadata_cache(&cache_path, &index);
     Ok(index)
@@ -329,7 +330,7 @@ fn zmd_precedent_clone_dir() -> Result<std::path::PathBuf> {
 fn load_cached_metadata(path: &Path) -> Option<PrecedentMetadataIndex> {
     let meta = std::fs::metadata(path).ok()?;
     let age = meta.modified().ok()?.elapsed().ok()?;
-    if age > Duration::from_secs(7 * 24 * 3600) {
+    if age > Duration::from_hours(168) {
         info!("Cached precedent metadata is older than 7 days, rebuilding");
         return None;
     }
@@ -437,9 +438,9 @@ fn build_precedent_metadata_from_clone(repo_dir: &Path) -> Result<PrecedentMetad
 
             let id = rel.strip_suffix(".md").unwrap_or(&rel).to_string();
 
-            let case_name = fm.get("사건명").map_or(String::new(), |v| {
-                sanitize_case_name(v.as_str())
-            });
+            let case_name = fm
+                .get("사건명")
+                .map_or(String::new(), |v| sanitize_case_name(v.as_str()));
             let case_number = fm
                 .get("사건번호")
                 .map_or(String::new(), |v| v.as_str().to_string());
@@ -484,10 +485,7 @@ fn build_precedent_metadata_from_clone(repo_dir: &Path) -> Result<PrecedentMetad
 }
 
 /// Recursively collect `.md` files, skipping README.md at any level.
-fn collect_md_files(
-    dir: &Path,
-    out: &mut Vec<std::path::PathBuf>,
-) -> Result<()> {
+fn collect_md_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<()> {
     let entries = std::fs::read_dir(dir)
         .with_context(|| format!("Failed to read directory {}", dir.display()))?;
 
