@@ -1,11 +1,10 @@
+use crate::app::{App, InputMode};
+use crate::theme::Theme;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
-
-use crate::app::{App, InputMode};
-use crate::theme::Theme;
 
 use super::VERSION;
 use super::styles;

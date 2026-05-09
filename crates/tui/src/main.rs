@@ -1,4 +1,5 @@
 mod app;
+mod hangul;
 mod parser;
 mod theme;
 mod ui;
@@ -8,7 +9,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -181,6 +183,13 @@ async fn run_app(
         if event::poll(Duration::from_millis(50))? {
             match event::read()? {
                 Event::Key(key) => {
+                    // Ignore Release/Repeat events emitted by the kitty
+                    // keyboard protocol or Windows ConPTY. Without this
+                    // filter Hangul syllables get duplicated and IME
+                    // commit-on-release events corrupt the search buffer.
+                    if key.kind != KeyEventKind::Press {
+                        continue;
+                    }
                     handle_key_event(&mut app, key, terminal.size()?.height as usize);
                 }
                 Event::Mouse(mouse) => {
@@ -489,7 +498,11 @@ fn handle_precedent_detail_key(app: &mut App, key: KeyEvent, terminal_height: us
 
 fn handle_search_key(app: &mut App, key: KeyEvent) {
     match key.code {
-        KeyCode::Esc => app.clear_search(),
+        // Esc preserves the buffer (Korean IMEs commit the trailing
+        // syllable as a Char event right before sending Esc — clearing
+        // here would silently swallow it). Use Ctrl+U to wipe instead.
+        KeyCode::Esc => app.finish_search(),
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => app.clear_search(),
         KeyCode::Enter => app.finish_search(),
         KeyCode::Backspace => app.search_pop_char(),
         KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {

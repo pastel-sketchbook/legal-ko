@@ -1,4 +1,5 @@
 use super::{App, InputMode, Message, Popup, View};
+use crate::hangul;
 use legal_ko_core::AGENTS;
 use legal_ko_core::models;
 use legal_ko_core::parser;
@@ -38,7 +39,9 @@ impl App {
                 })
                 .collect();
         } else {
-            let query_lower = query.to_lowercase();
+            // NFC-normalize so NFD source data (e.g. Korean text from macOS
+            // file systems) still matches an IME-produced NFC query.
+            let query_norm = hangul::nfc(&query.to_lowercase());
 
             self.filtered_indices = self
                 .all_laws
@@ -46,7 +49,8 @@ impl App {
                 .enumerate()
                 .filter(|(_, entry)| {
                     // Search filter
-                    if !query_lower.is_empty() && !entry.title.to_lowercase().contains(&query_lower)
+                    if !query_norm.is_empty()
+                        && !hangul::nfc(&entry.title.to_lowercase()).contains(&query_norm)
                     {
                         return false;
                     }
@@ -75,7 +79,9 @@ impl App {
         self.person_search_active = false;
         self.person_search_results.clear();
 
-        let query_lower = self.precedent_search_query.to_lowercase();
+        // NFC-normalize so NFD source data (e.g. Korean text from macOS
+        // file systems) still matches an IME-produced NFC query.
+        let query_norm = hangul::nfc(&self.precedent_search_query.to_lowercase());
 
         self.precedent_filtered_indices = self
             .all_precedents
@@ -83,9 +89,9 @@ impl App {
             .enumerate()
             .filter(|(_, entry)| {
                 // Search filter (case name or case number)
-                if !query_lower.is_empty()
-                    && !entry.case_name.to_lowercase().contains(&query_lower)
-                    && !entry.case_number.to_lowercase().contains(&query_lower)
+                if !query_norm.is_empty()
+                    && !hangul::nfc(&entry.case_name.to_lowercase()).contains(&query_norm)
+                    && !hangul::nfc(&entry.case_number.to_lowercase()).contains(&query_norm)
                 {
                     return false;
                 }
@@ -116,7 +122,7 @@ impl App {
         // If the query looks like a Korean name, trigger 법조인 (legal
         // professional) search. This runs alongside the normal metadata filter
         // — results from both are available to the renderer.
-        if !query_lower.is_empty() && parser::is_korean_name(&self.precedent_search_query) {
+        if !query_norm.is_empty() && parser::is_korean_name(&self.precedent_search_query) {
             self.start_person_search();
         }
     }
@@ -211,11 +217,13 @@ impl App {
     }
 
     pub fn search_pop_char(&mut self) {
+        // Hangul-aware: peel off one jamo (민 → 미 → ㅁ → ∅) instead of
+        // the entire syllable, matching native Korean editor behavior.
         if self.view == View::PrecedentList {
-            self.precedent_search_query.pop();
+            hangul::pop_jamo(&mut self.precedent_search_query);
             self.apply_precedent_filters();
         } else {
-            self.search_query.pop();
+            hangul::pop_jamo(&mut self.search_query);
             self.apply_filters();
         }
     }
