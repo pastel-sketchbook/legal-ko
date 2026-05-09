@@ -43,8 +43,7 @@ impl App {
             // file systems) still matches an IME-produced NFC query.
             let query_norm = hangul::nfc(&query.to_lowercase());
             // Also try interpreting the query as English-keyboard Hangul (영타→한타)
-            let hangul_query = hangul::eng_to_hangul(query)
-                .map(|h| hangul::nfc(&h.to_lowercase()));
+            let hangul_query = hangul::eng_to_hangul(query).map(|h| hangul::nfc(&h.to_lowercase()));
 
             self.filtered_indices = self
                 .all_laws
@@ -55,7 +54,9 @@ impl App {
                     if !query_norm.is_empty() {
                         let title = hangul::nfc(&entry.title.to_lowercase());
                         let matches = title.contains(&query_norm)
-                            || hangul_query.as_ref().is_some_and(|hq| title.contains(hq.as_str()));
+                            || hangul_query
+                                .as_ref()
+                                .is_some_and(|hq| title.contains(hq.as_str()));
                         if !matches {
                             return false;
                         }

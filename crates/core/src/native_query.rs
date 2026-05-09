@@ -1,7 +1,7 @@
 //! Native zmd-compatible query path.
 //!
 //! Performs FTS5 + vec0 hybrid search directly against the
-//! `.qmd/data.db` SQLite database (path from
+//! `.qmd/data.db` `SQLite` database (path from
 //! [`crate::native_indexer::default_db_path`]), with the same
 //! schema and scoring as the upstream `zmd` (zig-qmd) binary —
 //! eliminating the per-query subprocess fork/exec cost and the
@@ -158,6 +158,8 @@ pub fn fts_search(db: &ZmdDb, query: &str, collection: Option<&str>) -> Result<V
     };
 
     let mut stmt = db.conn().prepare(sql)?;
+    #[allow(clippy::cast_possible_wrap)]
+    // fetch_limit is a small user-provided limit, never near i64::MAX
     let mut rows = stmt.query(params![fts_query, fetch_limit as i64])?;
 
     let mut hits = Vec::new();
@@ -230,6 +232,7 @@ pub fn vector_search(db: &ZmdDb, query: &str, collection: Option<&str>) -> Resul
                ORDER BY v.distance ASC";
 
     let mut stmt = db.conn().prepare(sql)?;
+    #[allow(clippy::cast_possible_wrap)] // VEC_K is a small constant (64)
     let mut rows = stmt.query(params![q_json, VEC_K as i64])?;
 
     // Best chunk per document.
@@ -419,9 +422,8 @@ pub fn similarity_search(
     let mut law_counts: HashMap<(String, String), (usize, Option<String>)> = HashMap::new();
 
     for hit in &precedents {
-        let content = match read_content(db, &hit.hash) {
-            Ok(c) => c,
-            Err(_) => continue, // skip if content missing
+        let Ok(content) = read_content(db, &hit.hash) else {
+            continue;
         };
         let refs = crossref::extract_statute_refs(&content);
         for sr in &refs {

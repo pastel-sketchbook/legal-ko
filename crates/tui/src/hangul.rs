@@ -56,7 +56,7 @@ pub fn pop_jamo(s: &mut String) {
         if let Some(c) = char::from_u32(HANGUL_SYLLABLES_START + new_idx) {
             s.push(c);
         }
-    } else if vowel > 0 || lead < LEAD_TO_COMPAT.len() as u32 {
+    } else if vowel > 0 || lead < 19 {
         // Drop the vowel, leave the lead consonant as a standalone compat jamo.
         if let Some(&c) = LEAD_TO_COMPAT.get(lead as usize) {
             s.push(c);
@@ -76,35 +76,35 @@ pub fn nfc(s: &str) -> String {
 fn eng_to_jamo(c: char) -> Option<Jamo> {
     match c {
         // Consonants (초/종성)
-        'r' => Some(Jamo::Lead(0)),   // ㄱ
-        'R' => Some(Jamo::Lead(1)),   // ㄲ
-        's' => Some(Jamo::Lead(2)),   // ㄴ
-        'e' => Some(Jamo::Lead(3)),   // ㄷ
-        'E' => Some(Jamo::Lead(4)),   // ㄸ
-        'f' => Some(Jamo::Lead(5)),   // ㄹ
-        'a' => Some(Jamo::Lead(6)),   // ㅁ
-        'q' => Some(Jamo::Lead(7)),   // ㅂ
-        'Q' => Some(Jamo::Lead(8)),   // ㅃ
-        't' => Some(Jamo::Lead(9)),   // ㅅ
-        'T' => Some(Jamo::Lead(10)),  // ㅆ
-        'd' => Some(Jamo::Lead(11)),  // ㅇ
-        'w' => Some(Jamo::Lead(12)),  // ㅈ
-        'W' => Some(Jamo::Lead(13)),  // ㅉ
-        'c' => Some(Jamo::Lead(14)),  // ㅊ
-        'z' => Some(Jamo::Lead(15)),  // ㅋ
-        'x' => Some(Jamo::Lead(16)),  // ㅌ
-        'v' => Some(Jamo::Lead(17)),  // ㅍ
-        'g' => Some(Jamo::Lead(18)),  // ㅎ
+        'r' => Some(Jamo::Lead(0)),  // ㄱ
+        'R' => Some(Jamo::Lead(1)),  // ㄲ
+        's' => Some(Jamo::Lead(2)),  // ㄴ
+        'e' => Some(Jamo::Lead(3)),  // ㄷ
+        'E' => Some(Jamo::Lead(4)),  // ㄸ
+        'f' => Some(Jamo::Lead(5)),  // ㄹ
+        'a' => Some(Jamo::Lead(6)),  // ㅁ
+        'q' => Some(Jamo::Lead(7)),  // ㅂ
+        'Q' => Some(Jamo::Lead(8)),  // ㅃ
+        't' => Some(Jamo::Lead(9)),  // ㅅ
+        'T' => Some(Jamo::Lead(10)), // ㅆ
+        'd' => Some(Jamo::Lead(11)), // ㅇ
+        'w' => Some(Jamo::Lead(12)), // ㅈ
+        'W' => Some(Jamo::Lead(13)), // ㅉ
+        'c' => Some(Jamo::Lead(14)), // ㅊ
+        'z' => Some(Jamo::Lead(15)), // ㅋ
+        'x' => Some(Jamo::Lead(16)), // ㅌ
+        'v' => Some(Jamo::Lead(17)), // ㅍ
+        'g' => Some(Jamo::Lead(18)), // ㅎ
         // Vowels (중성)
-        'k' => Some(Jamo::Vowel(0)),  // ㅏ
-        'o' => Some(Jamo::Vowel(1)),  // ㅐ
-        'i' => Some(Jamo::Vowel(2)),  // ㅑ
-        'O' => Some(Jamo::Vowel(3)),  // ㅒ
-        'j' => Some(Jamo::Vowel(4)),  // ㅓ
-        'p' => Some(Jamo::Vowel(5)),  // ㅔ
-        'u' => Some(Jamo::Vowel(6)),  // ㅕ
-        'P' => Some(Jamo::Vowel(7)),  // ㅖ
-        'h' => Some(Jamo::Vowel(8)),  // ㅗ
+        'k' => Some(Jamo::Vowel(0)), // ㅏ
+        'o' => Some(Jamo::Vowel(1)), // ㅐ
+        'i' => Some(Jamo::Vowel(2)), // ㅑ
+        'O' => Some(Jamo::Vowel(3)), // ㅒ
+        'j' => Some(Jamo::Vowel(4)), // ㅓ
+        'p' => Some(Jamo::Vowel(5)), // ㅔ
+        'u' => Some(Jamo::Vowel(6)), // ㅕ
+        'P' => Some(Jamo::Vowel(7)), // ㅖ
+        'h' => Some(Jamo::Vowel(8)), // ㅗ
         // hk=ㅘ(9), ho=ㅙ(10), hl=ㅚ(11) — compound vowels handled in compose
         'y' => Some(Jamo::Vowel(12)), // ㅛ
         'n' => Some(Jamo::Vowel(13)), // ㅜ
@@ -164,19 +164,46 @@ fn compound_vowel(base: u32, next: u32) -> Option<u32> {
 /// Try to form a compound tail from a base tail + next consonant (as lead index).
 fn compound_tail(base_tail: u32, next_lead: u32) -> Option<u32> {
     match (base_tail, next_lead) {
-        (1, 9) => Some(3),    // ㄱ+ㅅ=ㄳ
-        (4, 12) => Some(5),   // ㄴ+ㅈ=ㄵ
-        (4, 18) => Some(6),   // ㄴ+ㅎ=ㄶ
-        (8, 0) => Some(9),    // ㄹ+ㄱ=ㄺ
-        (8, 6) => Some(10),   // ㄹ+ㅁ=ㄻ
-        (8, 7) => Some(11),   // ㄹ+ㅂ=ㄼ
-        (8, 9) => Some(12),   // ㄹ+ㅅ=ㄽ
-        (8, 16) => Some(13),  // ㄹ+ㅌ=ㄾ
-        (8, 17) => Some(14),  // ㄹ+ㅍ=ㄿ
-        (8, 18) => Some(15),  // ㄹ+ㅎ=ㅀ
-        (17, 9) => Some(18),  // ㅂ+ㅅ=ㅄ
+        (1, 9) => Some(3),   // ㄱ+ㅅ=ㄳ
+        (4, 12) => Some(5),  // ㄴ+ㅈ=ㄵ
+        (4, 18) => Some(6),  // ㄴ+ㅎ=ㄶ
+        (8, 0) => Some(9),   // ㄹ+ㄱ=ㄺ
+        (8, 6) => Some(10),  // ㄹ+ㅁ=ㄻ
+        (8, 7) => Some(11),  // ㄹ+ㅂ=ㄼ
+        (8, 9) => Some(12),  // ㄹ+ㅅ=ㄽ
+        (8, 16) => Some(13), // ㄹ+ㅌ=ㄾ
+        (8, 17) => Some(14), // ㄹ+ㅍ=ㄿ
+        (8, 18) => Some(15), // ㄹ+ㅎ=ㅀ
+        (17, 9) => Some(18), // ㅂ+ㅅ=ㅄ
         _ => None,
     }
+}
+
+/// Flush pending syllable state into the result string.
+fn flush_syllable(
+    result: &mut String,
+    lead: &mut Option<u32>,
+    vowel: &mut Option<u32>,
+    tail: &mut Option<u32>,
+) {
+    if let (Some(l), Some(v)) = (*lead, *vowel) {
+        let t = tail.unwrap_or(0);
+        if let Some(c) = char::from_u32(HANGUL_SYLLABLES_START + (l * VOWELS + v) * TAILS + t) {
+            result.push(c);
+        }
+    } else if let Some(l) = *lead {
+        if let Some(&c) = LEAD_TO_COMPAT.get(l as usize) {
+            result.push(c);
+        }
+    } else if let Some(v) = *vowel {
+        // Standalone vowel — Hangul Compatibility Jamo vowels start at U+314F.
+        if let Some(c) = char::from_u32(0x314F + v) {
+            result.push(c);
+        }
+    }
+    *lead = None;
+    *vowel = None;
+    *tail = None;
 }
 
 /// Convert an English string typed on a QWERTY keyboard to Hangul using
@@ -186,34 +213,12 @@ fn compound_tail(base_tail: u32, next_lead: u32) -> Option<u32> {
 /// not plausibly mis-typed Korean).
 pub fn eng_to_hangul(input: &str) -> Option<String> {
     let mut result = String::new();
-
-    // Automaton state: we may be building a syllable.
     let mut lead: Option<u32> = None;
     let mut vowel: Option<u32> = None;
     let mut tail: Option<u32> = None;
     let mut has_any = false;
 
-    let flush = |result: &mut String, lead: &mut Option<u32>, vowel: &mut Option<u32>, tail: &mut Option<u32>| {
-        if let (Some(l), Some(v)) = (*lead, *vowel) {
-            let t = tail.unwrap_or(0);
-            if let Some(c) = char::from_u32(HANGUL_SYLLABLES_START + (l * VOWELS + v) * TAILS + t) {
-                result.push(c);
-            }
-        } else if let Some(l) = *lead {
-            if let Some(&c) = LEAD_TO_COMPAT.get(l as usize) {
-                result.push(c);
-            }
-        } else if let Some(v) = *vowel {
-            // Standalone vowel (ㅏ=U+314F..)
-            // Hangul Compatibility Jamo vowels start at U+314F for ㅏ (index 0).
-            if let Some(c) = char::from_u32(0x314F + v) {
-                result.push(c);
-            }
-        }
-        *lead = None;
-        *vowel = None;
-        *tail = None;
-    };
+    let flush = flush_syllable;
 
     for ch in input.chars() {
         let Some(jamo) = eng_to_jamo(ch) else {
@@ -236,9 +241,9 @@ pub fn eng_to_hangul(input: &str) -> Option<String> {
                         // Can't be a tail → flush, start new
                         flush(&mut result, &mut lead, &mut vowel, &mut tail);
                         lead = Some(l);
-                    } else {
+                    } else if let Some(t) = tail {
                         // Already have a tail; try compound tail
-                        if let Some(ct) = compound_tail(tail.unwrap(), l) {
+                        if let Some(ct) = compound_tail(t, l) {
                             tail = Some(ct);
                             continue;
                         }
@@ -255,12 +260,12 @@ pub fn eng_to_hangul(input: &str) -> Option<String> {
                 }
             }
             Jamo::Vowel(v) => {
-                if lead.is_some() && vowel.is_some() && tail.is_some() {
+                if let Some(t) = tail {
                     // Tail gets "stolen" by this vowel as the lead of the next syllable.
-                    let t = tail.unwrap();
-                    // Check if compound tail — split it, keep first part
                     if let Some(first) = compound_tail_first(t) {
-                        let stolen_lead = tail_to_lead(t).unwrap();
+                        // Compound tail — split: keep first part, steal last as new lead
+                        let stolen_lead =
+                            tail_to_lead(t).expect("compound tails always map to a lead");
                         tail = Some(first);
                         flush(&mut result, &mut lead, &mut vowel, &mut tail);
                         lead = Some(stolen_lead);
@@ -276,7 +281,7 @@ pub fn eng_to_hangul(input: &str) -> Option<String> {
                     }
                 } else if lead.is_some() && vowel.is_some() {
                     // Try compound vowel
-                    if let Some(cv) = compound_vowel(vowel.unwrap(), v) {
+                    if let Some(cv) = vowel.and_then(|vv| compound_vowel(vv, v)) {
                         vowel = Some(cv);
                     } else {
                         flush(&mut result, &mut lead, &mut vowel, &mut tail);
@@ -286,14 +291,10 @@ pub fn eng_to_hangul(input: &str) -> Option<String> {
                     vowel = Some(v);
                 } else {
                     // Vowel without a lead — try compound with previous standalone vowel
-                    if vowel.is_some() {
-                        if let Some(cv) = compound_vowel(vowel.unwrap(), v) {
-                            vowel = Some(cv);
-                        } else {
-                            flush(&mut result, &mut lead, &mut vowel, &mut tail);
-                            vowel = Some(v);
-                        }
+                    if let Some(cv) = vowel.and_then(|vv| compound_vowel(vv, v)) {
+                        vowel = Some(cv);
                     } else {
+                        flush(&mut result, &mut lead, &mut vowel, &mut tail);
                         vowel = Some(v);
                     }
                 }
@@ -307,6 +308,7 @@ pub fn eng_to_hangul(input: &str) -> Option<String> {
 
 /// Map a tail-consonant index back to its lead-consonant index.
 /// For compound tails, returns the *last* component as a lead.
+#[allow(clippy::match_same_arms)] // each arm is a distinct jamo with intentionally documented mapping
 fn tail_to_lead(tail: u32) -> Option<u32> {
     match tail {
         1 => Some(0),   // ㄱ
@@ -342,6 +344,7 @@ fn tail_to_lead(tail: u32) -> Option<u32> {
 
 /// For compound tails, return the first component as a tail index so we
 /// can keep it on the previous syllable when stealing the last component.
+#[allow(clippy::match_same_arms)] // each arm is a distinct compound jamo decomposition
 fn compound_tail_first(tail: u32) -> Option<u32> {
     match tail {
         3 => Some(1),   // ㄳ → ㄱ

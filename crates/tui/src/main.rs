@@ -498,12 +498,10 @@ fn handle_precedent_detail_key(app: &mut App, key: KeyEvent, terminal_height: us
 
 fn handle_search_key(app: &mut App, key: KeyEvent) {
     match key.code {
-        // Esc preserves the buffer (Korean IMEs commit the trailing
-        // syllable as a Char event right before sending Esc — clearing
-        // here would silently swallow it). Use Ctrl+U to wipe instead.
-        KeyCode::Esc => app.finish_search(),
+        // Esc/Enter preserve the buffer (Korean IMEs commit the trailing
+        // syllable as a Char event right before sending Esc). Use Ctrl+U to wipe.
+        KeyCode::Esc | KeyCode::Enter => app.finish_search(),
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => app.clear_search(),
-        KeyCode::Enter => app.finish_search(),
         KeyCode::Backspace => app.search_pop_char(),
         KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             if app.view == View::PrecedentList {
