@@ -532,6 +532,34 @@ impl App {
                 self.apply_ordinance_filters();
                 self.close_popup();
             }
+            Popup::ExportFormat => {
+                let is_pdf = self.popup_selected == 1;
+                self.close_popup();
+                if is_pdf {
+                    #[cfg(feature = "pdf")]
+                    match self.view {
+                        View::Detail => self.export_law_pdf(),
+                        View::PrecedentDetail => self.export_precedent_pdf(),
+                        View::AdmruleDetail => self.export_admrule_pdf(),
+                        View::OrdinanceDetail => self.export_ordinance_pdf(),
+                        _ => {}
+                    }
+                    #[cfg(not(feature = "pdf"))]
+                    {
+                        self.status_message = Some(
+                            "PDF export not available (compiled without `pdf` feature)".to_string(),
+                        );
+                    }
+                } else {
+                    match self.view {
+                        View::Detail => self.export_law(),
+                        View::PrecedentDetail => self.export_precedent(),
+                        View::AdmruleDetail => self.export_admrule(),
+                        View::OrdinanceDetail => self.export_ordinance(),
+                        _ => {}
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -580,6 +608,7 @@ impl App {
             Popup::AdmruleAgencyFilter => self.admrule_agencies.len() + 1,
             Popup::OrdinanceTypeFilter => self.ordinance_types.len() + 1,
             Popup::OrdinanceRegionFilter => self.ordinance_regions.len() + 1,
+            Popup::ExportFormat => self.export_format_labels().len(),
             _ => 0,
         }
     }

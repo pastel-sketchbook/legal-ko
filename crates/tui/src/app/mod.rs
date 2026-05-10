@@ -81,6 +81,7 @@ pub enum Popup {
     AdmruleAgencyFilter,
     OrdinanceTypeFilter,
     OrdinanceRegionFilter,
+    ExportFormat,
 }
 
 // ── Messages (background → main) ─────────────────────────────
@@ -786,6 +787,21 @@ impl App {
         }
     }
 
+    /// Open the export format chooser popup (Markdown / PDF).
+    pub fn open_export_popup(&mut self) {
+        self.popup = Popup::ExportFormat;
+        self.popup_selected = 0;
+    }
+
+    /// Return the list of export format labels for the popup.
+    pub fn export_format_labels(&self) -> Vec<&'static str> {
+        #[allow(unused_mut)]
+        let mut labels = vec!["Markdown (.md)"];
+        #[cfg(feature = "pdf")]
+        labels.push("PDF (.pdf)");
+        labels
+    }
+
     /// Export the currently viewed law to a markdown file in the working directory.
     ///
     /// The file is named `{title} ({category}).md` to avoid collisions when
@@ -813,6 +829,30 @@ impl App {
 
         self.status_message = Some(format!("Exported → {fname_display}"));
         info!(file = %fname_display, "Law exported to file");
+    }
+
+    /// Export the currently viewed law to a styled PDF file.
+    #[cfg(feature = "pdf")]
+    pub fn export_law_pdf(&mut self) {
+        self.status_message = Some("PDF export coming soon".to_string());
+    }
+
+    /// Export the currently viewed precedent to a styled PDF file.
+    #[cfg(feature = "pdf")]
+    pub fn export_precedent_pdf(&mut self) {
+        self.status_message = Some("PDF export coming soon".to_string());
+    }
+
+    /// Export the currently viewed admrule to a styled PDF file.
+    #[cfg(feature = "pdf")]
+    pub fn export_admrule_pdf(&mut self) {
+        self.status_message = Some("PDF export coming soon".to_string());
+    }
+
+    /// Export the currently viewed ordinance to a styled PDF file.
+    #[cfg(feature = "pdf")]
+    pub fn export_ordinance_pdf(&mut self) {
+        self.status_message = Some("PDF export coming soon".to_string());
     }
 
     /// Cycle to the next theme. Saves preference to disk.

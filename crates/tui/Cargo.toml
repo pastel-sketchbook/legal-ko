@@ -8,7 +8,8 @@ name = "legal-ko"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["pdf"]
+pdf = []
 meilisearch = ["legal-ko-core/meilisearch"]
 tts = ["legal-ko-core/tts", "dep:rodio", "dep:libc"]
 

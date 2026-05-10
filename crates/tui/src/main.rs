@@ -400,7 +400,7 @@ fn handle_detail_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         KeyCode::Char('R') => app.speak_full(),
         #[cfg(feature = "tts")]
         KeyCode::Char('s') => app.stop_tts(),
-        KeyCode::Char('E') => app.export_law(),
+        KeyCode::Char('E') => app.open_export_popup(),
         KeyCode::Char('P') => {
             if let Some(detail) = &app.detail {
                 let title = detail.entry.title.clone();
@@ -486,7 +486,7 @@ fn handle_precedent_detail_key(app: &mut App, key: KeyEvent, terminal_height: us
         KeyCode::Char('p') => app.prev_section(),
         KeyCode::Char('a') => app.open_section_list(),
         KeyCode::Char('r') => app.open_crossref_list(),
-        KeyCode::Char('E') => app.export_precedent(),
+        KeyCode::Char('E') => app.open_export_popup(),
         KeyCode::Char('t') => app.next_theme(),
         KeyCode::Char('o') => app.open_agent_picker(),
         KeyCode::Char('?') => app.popup = Popup::Help,
@@ -549,7 +549,7 @@ fn handle_admrule_detail_key(app: &mut App, key: KeyEvent, terminal_height: usiz
         }
         KeyCode::PageDown => app.admrule_detail_scroll_down(page_size),
         KeyCode::PageUp => app.admrule_detail_scroll_up(page_size),
-        KeyCode::Char('E') => app.export_admrule(),
+        KeyCode::Char('E') => app.open_export_popup(),
         KeyCode::Char('t') => app.next_theme(),
         KeyCode::Char('o') => app.open_agent_picker(),
         KeyCode::Char('?') => app.popup = Popup::Help,
@@ -612,7 +612,7 @@ fn handle_ordinance_detail_key(app: &mut App, key: KeyEvent, terminal_height: us
         }
         KeyCode::PageDown => app.ordinance_detail_scroll_down(page_size),
         KeyCode::PageUp => app.ordinance_detail_scroll_up(page_size),
-        KeyCode::Char('E') => app.export_ordinance(),
+        KeyCode::Char('E') => app.open_export_popup(),
         KeyCode::Char('t') => app.next_theme(),
         KeyCode::Char('o') => app.open_agent_picker(),
         KeyCode::Char('?') => app.popup = Popup::Help,

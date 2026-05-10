@@ -68,11 +68,11 @@ crates/
     app/
       mod.rs        — App state machine (View, InputMode, Popup), Message handling, agent split, context sync
       navigation.rs — List/detail/article navigation methods
-      filters.rs    — Category/department/bookmark filter logic
+      filters.rs    — Category/department/bookmark filter logic, export format popup dispatch
     theme.rs        — 14 semantic themes (7 dark + 7 light), Theme struct, THEMES array
     parser.rs       — markdown→ratatui Lines with theme colors, inline bold parsing
     ui/
-      mod.rs        — Main render dispatcher, filter popups, agent picker popup
+      mod.rs        — Main render dispatcher, filter popups, agent picker popup, export format popup
       law_list.rs   — Searchable list view with bookmark indicators, unicode column alignment
       law_detail.rs — Scrollable rendered markdown with article navigation
       styles.rs     — Badge-style key hints, status bar helpers
@@ -122,6 +122,7 @@ crates/
 - **Theme system**: 14 themes with persistence, `t` key cycles, semantic color fields.
 - **Core/TUI split**: Parser split — core has `strip_frontmatter` + `extract_articles` (pure text), TUI has `parse_law_markdown` (ratatui Lines with theme colors).
 - **Search**: Optional Meilisearch backend (feature `meilisearch`), configured via `LEGAL_KO_MEILI_URL`, `LEGAL_KO_MEILI_KEY`, `LEGAL_KO_MEILI_INDEX` env vars. Falls back to naive title substring search when Meilisearch is unavailable.
+- **Export**: `E` opens a format chooser popup (Markdown / PDF). PDF option is behind the `pdf` feature flag (default-enabled). Without `pdf` feature, only Markdown is shown.
 
 ## Conventions
 

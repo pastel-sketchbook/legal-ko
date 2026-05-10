@@ -76,6 +76,7 @@ pub fn render(f: &mut Frame, app: &App) {
                 Popup::Help => help::render_help(f, theme, area),
                 Popup::ArticleList => law_detail::render_article_popup(f, app, theme, area),
                 Popup::AgentPicker => render_agent_picker(f, app, theme, area),
+                Popup::ExportFormat => render_export_format(f, app, theme, area),
                 _ => {}
             }
         }
@@ -104,6 +105,7 @@ pub fn render(f: &mut Frame, app: &App) {
                     precedent_detail::render_crossref_popup(f, app, theme, area);
                 }
                 Popup::AgentPicker => render_agent_picker(f, app, theme, area),
+                Popup::ExportFormat => render_export_format(f, app, theme, area),
                 _ => {}
             }
         }
@@ -126,6 +128,7 @@ pub fn render(f: &mut Frame, app: &App) {
             match app.popup {
                 Popup::Help => help::render_help(f, theme, area),
                 Popup::AgentPicker => render_agent_picker(f, app, theme, area),
+                Popup::ExportFormat => render_export_format(f, app, theme, area),
                 _ => {}
             }
         }
@@ -148,6 +151,7 @@ pub fn render(f: &mut Frame, app: &App) {
             match app.popup {
                 Popup::Help => help::render_help(f, theme, area),
                 Popup::AgentPicker => render_agent_picker(f, app, theme, area),
+                Popup::ExportFormat => render_export_format(f, app, theme, area),
                 _ => {}
             }
         }
@@ -309,6 +313,31 @@ fn render_agent_picker(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
 
     let block = Block::default()
         .title(" AI Agent ")
+        .borders(Borders::ALL)
+        .style(Style::default().fg(theme.accent).bg(theme.panel_bg));
+
+    let list = List::new(items).block(block);
+
+    f.render_widget(Clear, styles::clear_area_for_popup(popup_area));
+    f.render_widget(list, popup_area);
+}
+
+fn render_export_format(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
+    let popup_area = styles::centered_rect(25, 15, area);
+
+    let labels = app.export_format_labels();
+    let items: Vec<ListItem> = labels
+        .iter()
+        .enumerate()
+        .map(|(i, label)| {
+            let is_selected = i == app.popup_selected;
+            let style = styles::list_item_style(theme, is_selected, false);
+            ListItem::new(Line::from(Span::styled(format!("  {label}"), style)))
+        })
+        .collect();
+
+    let block = Block::default()
+        .title(" Export Format ")
         .borders(Borders::ALL)
         .style(Style::default().fg(theme.accent).bg(theme.panel_bg));
 

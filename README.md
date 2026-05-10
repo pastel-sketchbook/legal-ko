@@ -50,7 +50,7 @@ legal-ko        # or: task run
 | `d` | Filter by department |
 | `n` / `p` | Next / previous article (제X조) |
 | `a` | Article list popup |
-| `E` | Export law to `.md` file |
+| `E` | Export (choose Markdown or PDF) |
 | `B` | Toggle bookmark |
 | `b` | Bookmarks only |
 | `t` | Cycle theme |
@@ -291,6 +291,16 @@ cargo build --workspace --release --features tts
 | `R` | Read full law |
 | `s` | Stop playback |
 | `T` | Toggle TTS profile |
+
+### PDF Export (optional)
+
+PDF export is behind the `pdf` feature flag (enabled by default). Press `E`
+in any detail view to choose between Markdown and PDF export.
+
+```bash
+# Build without PDF support
+cargo build --workspace --release --no-default-features
+```
 
 ## Development
 
