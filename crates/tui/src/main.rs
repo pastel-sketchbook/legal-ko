@@ -2,6 +2,8 @@ mod app;
 mod hangul;
 mod parser;
 mod theme;
+#[cfg(feature = "pdf")]
+mod typst_gen;
 mod ui;
 
 use std::io::BufWriter;

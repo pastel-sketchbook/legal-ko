@@ -834,25 +834,171 @@ impl App {
     /// Export the currently viewed law to a styled PDF file.
     #[cfg(feature = "pdf")]
     pub fn export_law_pdf(&mut self) {
-        self.status_message = Some("PDF export coming soon".to_string());
+        let Some(ref detail) = self.detail else {
+            self.status_message = Some("No law open to export".to_string());
+            return;
+        };
+
+        let title = detail.entry.title.clone();
+        let category = detail.entry.category.clone();
+        let department = detail.entry.departments.join(", ");
+        let raw = detail.raw_markdown.clone();
+
+        let safe_title = title.replace(['/', '\\'], "_");
+        let safe_cat = category.replace(['/', '\\'], "_");
+        let filename = format!("{safe_title} ({safe_cat}).pdf");
+        let fname_display = filename.clone();
+
+        self.status_message = Some("Generating PDF...".to_string());
+        tokio::task::spawn_blocking(move || {
+            let metadata = [
+                ("category", category.as_str()),
+                ("department", department.as_str()),
+            ];
+            match crate::typst_gen::render_pdf("law", &title, &raw, &metadata) {
+                Ok(pdf_bytes) => {
+                    if let Err(e) = std::fs::write(&filename, pdf_bytes) {
+                        tracing::warn!(error = %e, filename, "Failed to write PDF");
+                    } else {
+                        tracing::info!(file = %filename, "Law exported to PDF");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "PDF generation failed");
+                }
+            }
+        });
+
+        self.status_message = Some(format!("Exported → {fname_display}"));
     }
 
     /// Export the currently viewed precedent to a styled PDF file.
     #[cfg(feature = "pdf")]
     pub fn export_precedent_pdf(&mut self) {
-        self.status_message = Some("PDF export coming soon".to_string());
+        let Some(ref detail) = self.precedent_detail else {
+            self.status_message = Some("No precedent open to export".to_string());
+            return;
+        };
+
+        let case_name = detail.entry.case_name.clone();
+        let case_number = detail.entry.case_number.clone();
+        let court = detail.entry.court_name.clone();
+        let case_type = detail.entry.case_type.clone();
+        let date = detail.entry.ruling_date.clone();
+        let raw = detail.raw_markdown.clone();
+
+        let safe_name = case_name.replace(['/', '\\'], "_");
+        let safe_number = case_number.replace(['/', '\\'], "_");
+        let filename = format!("{safe_name} ({safe_number}).pdf");
+        let fname_display = filename.clone();
+
+        self.status_message = Some("Generating PDF...".to_string());
+        tokio::task::spawn_blocking(move || {
+            let metadata = [
+                ("case_number", case_number.as_str()),
+                ("court", court.as_str()),
+                ("case_type", case_type.as_str()),
+                ("date", date.as_str()),
+            ];
+            match crate::typst_gen::render_pdf("precedent", &case_name, &raw, &metadata) {
+                Ok(pdf_bytes) => {
+                    if let Err(e) = std::fs::write(&filename, pdf_bytes) {
+                        tracing::warn!(error = %e, filename, "Failed to write PDF");
+                    } else {
+                        tracing::info!(file = %filename, "Precedent exported to PDF");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "PDF generation failed");
+                }
+            }
+        });
+
+        self.status_message = Some(format!("Exported → {fname_display}"));
     }
 
     /// Export the currently viewed admrule to a styled PDF file.
     #[cfg(feature = "pdf")]
     pub fn export_admrule_pdf(&mut self) {
-        self.status_message = Some("PDF export coming soon".to_string());
+        let Some(ref detail) = self.admrule_detail else {
+            self.status_message = Some("No admrule open to export".to_string());
+            return;
+        };
+
+        let title = detail.entry.title.clone();
+        let rule_type = detail.entry.rule_type.clone();
+        let agency = detail.entry.agency.clone();
+        let date = detail.entry.date.clone();
+        let raw = detail.raw_markdown.clone();
+
+        let safe_title = title.replace(['/', '\\'], "_");
+        let filename = format!("{safe_title}.pdf");
+        let fname_display = filename.clone();
+
+        self.status_message = Some("Generating PDF...".to_string());
+        tokio::task::spawn_blocking(move || {
+            let metadata = [
+                ("rule_type", rule_type.as_str()),
+                ("agency", agency.as_str()),
+                ("date", date.as_str()),
+            ];
+            match crate::typst_gen::render_pdf("admrule", &title, &raw, &metadata) {
+                Ok(pdf_bytes) => {
+                    if let Err(e) = std::fs::write(&filename, pdf_bytes) {
+                        tracing::warn!(error = %e, filename, "Failed to write PDF");
+                    } else {
+                        tracing::info!(file = %filename, "Admrule exported to PDF");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "PDF generation failed");
+                }
+            }
+        });
+
+        self.status_message = Some(format!("Exported → {fname_display}"));
     }
 
     /// Export the currently viewed ordinance to a styled PDF file.
     #[cfg(feature = "pdf")]
     pub fn export_ordinance_pdf(&mut self) {
-        self.status_message = Some("PDF export coming soon".to_string());
+        let Some(ref detail) = self.ordinance_detail else {
+            self.status_message = Some("No ordinance open to export".to_string());
+            return;
+        };
+
+        let title = detail.entry.title.clone();
+        let ordinance_type = detail.entry.rule_type.clone();
+        let region = detail.entry.region.clone();
+        let date = detail.entry.date.clone();
+        let raw = detail.raw_markdown.clone();
+
+        let safe_title = title.replace(['/', '\\'], "_");
+        let filename = format!("{safe_title}.pdf");
+        let fname_display = filename.clone();
+
+        self.status_message = Some("Generating PDF...".to_string());
+        tokio::task::spawn_blocking(move || {
+            let metadata = [
+                ("ordinance_type", ordinance_type.as_str()),
+                ("region", region.as_str()),
+                ("date", date.as_str()),
+            ];
+            match crate::typst_gen::render_pdf("ordinance", &title, &raw, &metadata) {
+                Ok(pdf_bytes) => {
+                    if let Err(e) = std::fs::write(&filename, pdf_bytes) {
+                        tracing::warn!(error = %e, filename, "Failed to write PDF");
+                    } else {
+                        tracing::info!(file = %filename, "Ordinance exported to PDF");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "PDF generation failed");
+                }
+            }
+        });
+
+        self.status_message = Some(format!("Exported → {fname_display}"));
     }
 
     /// Cycle to the next theme. Saves preference to disk.

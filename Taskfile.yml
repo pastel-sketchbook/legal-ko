@@ -57,6 +57,13 @@ tasks:
       - cargo fmt --all
       - cargo build --workspace --release
 
+  build:lean:
+    desc: Build release without PDF support (faster compile)
+    cmds:
+      - cargo fmt --all
+      - cargo build -p legal-ko-cli --release
+      - cargo build -p legal-ko-tui --release --no-default-features
+
   dev:
     desc: Build debug binaries
     cmds:
@@ -93,6 +100,14 @@ tasks:
       # Remove before copy to force a new inode. macOS caches code
       # signatures by inode; overwriting in-place (same inode) can cause
       # SIGKILL (exit 137) when the binary content changes.
+      - rm -f ~/bin/$PGM_NAME ~/bin/$CLI_NAME
+      - cp target/release/$PGM_NAME ~/bin
+      - cp target/release/$CLI_NAME ~/bin
+
+  install:lean:
+    desc: Build release without PDF and copy binaries to ~/bin (faster)
+    deps: [build:lean]
+    cmds:
       - rm -f ~/bin/$PGM_NAME ~/bin/$CLI_NAME
       - cp target/release/$PGM_NAME ~/bin
       - cp target/release/$CLI_NAME ~/bin
