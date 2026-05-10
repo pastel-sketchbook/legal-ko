@@ -49,6 +49,12 @@ pub fn render(f: &mut Frame, app: &App) {
         return;
     }
 
+    render_view(f, app, theme, area);
+    render_popup(f, app, theme, area);
+}
+
+/// Render the main content area based on the current view.
+fn render_view(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     match app.view {
         View::Loading => render_loading(f, app, theme, area),
         View::List => {
@@ -57,104 +63,43 @@ pub fn render(f: &mut Frame, app: &App) {
             } else {
                 law_list::render_law_list(f, app, theme, area);
             }
-            // Render popups on top
-            match app.popup {
-                Popup::Help => help::render_help(f, theme, area),
-                Popup::CategoryFilter => {
-                    render_filter_popup(f, app, theme, area, FilterKind::Category);
-                }
-                Popup::DepartmentFilter => {
-                    render_filter_popup(f, app, theme, area, FilterKind::Department);
-                }
-                Popup::AgentPicker => render_agent_picker(f, app, theme, area),
-                _ => {}
-            }
         }
-        View::Detail => {
-            law_detail::render_law_detail(f, app, theme, area);
-            match app.popup {
-                Popup::Help => help::render_help(f, theme, area),
-                Popup::ArticleList => law_detail::render_article_popup(f, app, theme, area),
-                Popup::AgentPicker => render_agent_picker(f, app, theme, area),
-                Popup::ExportFormat => render_export_format(f, app, theme, area),
-                _ => {}
-            }
+        View::Detail => law_detail::render_law_detail(f, app, theme, area),
+        View::PrecedentList => precedent_list::render_precedent_list(f, app, theme, area),
+        View::PrecedentDetail => precedent_detail::render_precedent_detail(f, app, theme, area),
+        View::AdmruleList => admrule_list::render_admrule_list(f, app, theme, area),
+        View::AdmruleDetail => admrule_detail::render_admrule_detail(f, app, theme, area),
+        View::OrdinanceList => ordinance_list::render_ordinance_list(f, app, theme, area),
+        View::OrdinanceDetail => ordinance_detail::render_ordinance_detail(f, app, theme, area),
+    }
+}
+
+/// Render popup overlays on top of the main view.
+fn render_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
+    match app.popup {
+        Popup::None => {}
+        Popup::Help => help::render_help(f, theme, area),
+        Popup::AgentPicker => render_agent_picker(f, app, theme, area),
+        Popup::ExportFormat => render_export_format(f, app, theme, area),
+        Popup::CategoryFilter => render_filter_popup(f, app, theme, area, FilterKind::Category),
+        Popup::DepartmentFilter => render_filter_popup(f, app, theme, area, FilterKind::Department),
+        Popup::CaseTypeFilter => render_filter_popup(f, app, theme, area, FilterKind::CaseType),
+        Popup::CourtFilter => render_filter_popup(f, app, theme, area, FilterKind::Court),
+        Popup::AdmruleTypeFilter => {
+            render_filter_popup(f, app, theme, area, FilterKind::AdmruleType);
         }
-        View::PrecedentList => {
-            precedent_list::render_precedent_list(f, app, theme, area);
-            match app.popup {
-                Popup::Help => help::render_help(f, theme, area),
-                Popup::CaseTypeFilter => {
-                    render_filter_popup(f, app, theme, area, FilterKind::CaseType);
-                }
-                Popup::CourtFilter => {
-                    render_filter_popup(f, app, theme, area, FilterKind::Court);
-                }
-                Popup::AgentPicker => render_agent_picker(f, app, theme, area),
-                _ => {}
-            }
+        Popup::AdmruleAgencyFilter => {
+            render_filter_popup(f, app, theme, area, FilterKind::AdmruleAgency);
         }
-        View::PrecedentDetail => {
-            precedent_detail::render_precedent_detail(f, app, theme, area);
-            match app.popup {
-                Popup::Help => help::render_help(f, theme, area),
-                Popup::SectionList => {
-                    precedent_detail::render_section_popup(f, app, theme, area);
-                }
-                Popup::CrossRefList => {
-                    precedent_detail::render_crossref_popup(f, app, theme, area);
-                }
-                Popup::AgentPicker => render_agent_picker(f, app, theme, area),
-                Popup::ExportFormat => render_export_format(f, app, theme, area),
-                _ => {}
-            }
+        Popup::OrdinanceTypeFilter => {
+            render_filter_popup(f, app, theme, area, FilterKind::OrdinanceType);
         }
-        View::AdmruleList => {
-            admrule_list::render_admrule_list(f, app, theme, area);
-            match app.popup {
-                Popup::Help => help::render_help(f, theme, area),
-                Popup::AdmruleTypeFilter => {
-                    render_filter_popup(f, app, theme, area, FilterKind::AdmruleType);
-                }
-                Popup::AdmruleAgencyFilter => {
-                    render_filter_popup(f, app, theme, area, FilterKind::AdmruleAgency);
-                }
-                Popup::AgentPicker => render_agent_picker(f, app, theme, area),
-                _ => {}
-            }
+        Popup::OrdinanceRegionFilter => {
+            render_filter_popup(f, app, theme, area, FilterKind::OrdinanceRegion);
         }
-        View::AdmruleDetail => {
-            admrule_detail::render_admrule_detail(f, app, theme, area);
-            match app.popup {
-                Popup::Help => help::render_help(f, theme, area),
-                Popup::AgentPicker => render_agent_picker(f, app, theme, area),
-                Popup::ExportFormat => render_export_format(f, app, theme, area),
-                _ => {}
-            }
-        }
-        View::OrdinanceList => {
-            ordinance_list::render_ordinance_list(f, app, theme, area);
-            match app.popup {
-                Popup::Help => help::render_help(f, theme, area),
-                Popup::OrdinanceTypeFilter => {
-                    render_filter_popup(f, app, theme, area, FilterKind::OrdinanceType);
-                }
-                Popup::OrdinanceRegionFilter => {
-                    render_filter_popup(f, app, theme, area, FilterKind::OrdinanceRegion);
-                }
-                Popup::AgentPicker => render_agent_picker(f, app, theme, area),
-                _ => {}
-            }
-        }
-        View::OrdinanceDetail => {
-            ordinance_detail::render_ordinance_detail(f, app, theme, area);
-            match app.popup {
-                Popup::Help => help::render_help(f, theme, area),
-                Popup::AgentPicker => render_agent_picker(f, app, theme, area),
-                Popup::ExportFormat => render_export_format(f, app, theme, area),
-                _ => {}
-            }
-        }
+        Popup::ArticleList => law_detail::render_article_popup(f, app, theme, area),
+        Popup::SectionList => precedent_detail::render_section_popup(f, app, theme, area),
+        Popup::CrossRefList => precedent_detail::render_crossref_popup(f, app, theme, area),
     }
 }
 
@@ -325,7 +270,7 @@ fn render_agent_picker(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
 fn render_export_format(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let popup_area = styles::centered_rect(25, 15, area);
 
-    let labels = app.export_format_labels();
+    let labels = App::export_format_labels();
     let items: Vec<ListItem> = labels
         .iter()
         .enumerate()

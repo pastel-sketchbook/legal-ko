@@ -195,7 +195,7 @@ impl App {
 
     // ── Tab cycling ────────────────────────────────────────────
 
-    /// Cycle forward: List → PrecedentList → AdmruleList → OrdinanceList → List
+    /// Cycle forward: `List` → `PrecedentList` → `AdmruleList` → `OrdinanceList` → `List`
     pub fn next_tab(&mut self) {
         let tabs = self.available_tabs();
         if tabs.len() <= 1 {
@@ -205,7 +205,7 @@ impl App {
         self.view = tabs[(current + 1) % tabs.len()].clone();
     }
 
-    /// Cycle backward: List ← PrecedentList ← AdmruleList ← OrdinanceList ← List
+    /// Cycle backward: `List` ← `PrecedentList` ← `AdmruleList` ← `OrdinanceList` ← `List`
     pub fn prev_tab(&mut self) {
         let tabs = self.available_tabs();
         if tabs.len() <= 1 {
@@ -248,7 +248,7 @@ impl App {
                 self.precedent_detail_scroll = 0;
                 self.precedent_detail_rendered_lines.clear();
             }
-            View::PrecedentList => {
+            View::PrecedentList | View::AdmruleList | View::OrdinanceList => {
                 self.view = View::List;
             }
             View::AdmruleDetail => {
@@ -257,17 +257,11 @@ impl App {
                 self.admrule_detail_scroll = 0;
                 self.admrule_detail_rendered_lines.clear();
             }
-            View::AdmruleList => {
-                self.view = View::List;
-            }
             View::OrdinanceDetail => {
                 self.view = View::OrdinanceList;
                 self.ordinance_detail = None;
                 self.ordinance_detail_scroll = 0;
                 self.ordinance_detail_rendered_lines.clear();
-            }
-            View::OrdinanceList => {
-                self.view = View::List;
             }
             View::List | View::Loading => {
                 self.should_quit = true;

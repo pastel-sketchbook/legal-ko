@@ -413,26 +413,12 @@ impl App {
     pub fn popup_select(&mut self) {
         match self.popup {
             Popup::CategoryFilter => {
-                if self.popup_selected == 0 {
-                    self.category_filter = None;
-                } else {
-                    self.category_filter = self
-                        .categories
-                        .get(self.popup_selected.saturating_sub(1))
-                        .cloned();
-                }
+                self.category_filter = self.pick_filter_value(&self.categories.clone());
                 self.apply_filters();
                 self.close_popup();
             }
             Popup::DepartmentFilter => {
-                if self.popup_selected == 0 {
-                    self.department_filter = None;
-                } else {
-                    self.department_filter = self
-                        .departments
-                        .get(self.popup_selected.saturating_sub(1))
-                        .cloned();
-                }
+                self.department_filter = self.pick_filter_value(&self.departments.clone());
                 self.apply_filters();
                 self.close_popup();
             }
@@ -445,26 +431,14 @@ impl App {
                 self.close_popup();
             }
             Popup::CaseTypeFilter => {
-                if self.popup_selected == 0 {
-                    self.precedent_case_type_filter = None;
-                } else {
-                    self.precedent_case_type_filter = self
-                        .precedent_case_types
-                        .get(self.popup_selected.saturating_sub(1))
-                        .cloned();
-                }
+                self.precedent_case_type_filter =
+                    self.pick_filter_value(&self.precedent_case_types.clone());
                 self.apply_precedent_filters();
                 self.close_popup();
             }
             Popup::CourtFilter => {
-                if self.popup_selected == 0 {
-                    self.precedent_court_filter = None;
-                } else {
-                    self.precedent_court_filter = self
-                        .precedent_courts
-                        .get(self.popup_selected.saturating_sub(1))
-                        .cloned();
-                }
+                self.precedent_court_filter =
+                    self.pick_filter_value(&self.precedent_courts.clone());
                 self.apply_precedent_filters();
                 self.close_popup();
             }
@@ -485,79 +459,71 @@ impl App {
                 }
             }
             Popup::AdmruleTypeFilter => {
-                if self.popup_selected == 0 {
-                    self.admrule_type_filter = None;
-                } else {
-                    self.admrule_type_filter = self
-                        .admrule_types
-                        .get(self.popup_selected.saturating_sub(1))
-                        .cloned();
-                }
+                self.admrule_type_filter = self.pick_filter_value(&self.admrule_types.clone());
                 self.apply_admrule_filters();
                 self.close_popup();
             }
             Popup::AdmruleAgencyFilter => {
-                if self.popup_selected == 0 {
-                    self.admrule_agency_filter = None;
-                } else {
-                    self.admrule_agency_filter = self
-                        .admrule_agencies
-                        .get(self.popup_selected.saturating_sub(1))
-                        .cloned();
-                }
+                self.admrule_agency_filter =
+                    self.pick_filter_value(&self.admrule_agencies.clone());
                 self.apply_admrule_filters();
                 self.close_popup();
             }
             Popup::OrdinanceTypeFilter => {
-                if self.popup_selected == 0 {
-                    self.ordinance_type_filter = None;
-                } else {
-                    self.ordinance_type_filter = self
-                        .ordinance_types
-                        .get(self.popup_selected.saturating_sub(1))
-                        .cloned();
-                }
+                self.ordinance_type_filter =
+                    self.pick_filter_value(&self.ordinance_types.clone());
                 self.apply_ordinance_filters();
                 self.close_popup();
             }
             Popup::OrdinanceRegionFilter => {
-                if self.popup_selected == 0 {
-                    self.ordinance_region_filter = None;
-                } else {
-                    self.ordinance_region_filter = self
-                        .ordinance_regions
-                        .get(self.popup_selected.saturating_sub(1))
-                        .cloned();
-                }
+                self.ordinance_region_filter =
+                    self.pick_filter_value(&self.ordinance_regions.clone());
                 self.apply_ordinance_filters();
                 self.close_popup();
             }
-            Popup::ExportFormat => {
-                let is_pdf = self.popup_selected == 1;
-                self.close_popup();
-                if is_pdf {
-                    #[cfg(feature = "pdf")]
-                    match self.view {
-                        View::Detail => self.export_law_pdf(),
-                        View::PrecedentDetail => self.export_precedent_pdf(),
-                        View::AdmruleDetail => self.export_admrule_pdf(),
-                        View::OrdinanceDetail => self.export_ordinance_pdf(),
-                        _ => {}
-                    }
-                    #[cfg(not(feature = "pdf"))]
-                    {
-                        self.status_message = Some(
-                            "PDF export not available (compiled without `pdf` feature)".to_string(),
-                        );
-                    }
-                } else {
-                    match self.view {
-                        View::Detail => self.export_law(),
-                        View::PrecedentDetail => self.export_precedent(),
-                        View::AdmruleDetail => self.export_admrule(),
-                        View::OrdinanceDetail => self.export_ordinance(),
-                        _ => {}
-                    }
+            Popup::ExportFormat => self.handle_export_select(),
+            _ => {}
+        }
+    }
+
+    /// Convert `popup_selected` into an `Option<String>` filter value.
+    ///
+    /// Index 0 means "all" (returns `None`); any other index picks from the
+    /// supplied list (offset by 1).
+    fn pick_filter_value(&self, items: &[String]) -> Option<String> {
+        if self.popup_selected == 0 {
+            None
+        } else {
+            items.get(self.popup_selected - 1).cloned()
+        }
+    }
+
+    /// Handle selection inside the `ExportFormat` popup.
+    ///
+    /// Index 0 → Markdown export, index 1 → PDF export (when `pdf` feature is
+    /// enabled). Dispatches to the correct method based on current view.
+    fn handle_export_select(&mut self) {
+        self.close_popup();
+        match self.popup_selected {
+            0 => {
+                // Markdown export
+                match self.view {
+                    View::Detail => self.export_law(),
+                    View::PrecedentDetail => self.export_precedent(),
+                    View::AdmruleDetail => self.export_admrule(),
+                    View::OrdinanceDetail => self.export_ordinance(),
+                    _ => {}
+                }
+            }
+            #[cfg(feature = "pdf")]
+            1 => {
+                // PDF export
+                match self.view {
+                    View::Detail => self.export_law_pdf(),
+                    View::PrecedentDetail => self.export_precedent_pdf(),
+                    View::AdmruleDetail => self.export_admrule_pdf(),
+                    View::OrdinanceDetail => self.export_ordinance_pdf(),
+                    _ => {}
                 }
             }
             _ => {}
@@ -608,7 +574,7 @@ impl App {
             Popup::AdmruleAgencyFilter => self.admrule_agencies.len() + 1,
             Popup::OrdinanceTypeFilter => self.ordinance_types.len() + 1,
             Popup::OrdinanceRegionFilter => self.ordinance_regions.len() + 1,
-            Popup::ExportFormat => self.export_format_labels().len(),
+            Popup::ExportFormat => App::export_format_labels().len(),
             _ => 0,
         }
     }

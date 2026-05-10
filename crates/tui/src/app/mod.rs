@@ -794,7 +794,7 @@ impl App {
     }
 
     /// Return the list of export format labels for the popup.
-    pub fn export_format_labels(&self) -> Vec<&'static str> {
+    pub fn export_format_labels() -> Vec<&'static str> {
         #[allow(unused_mut)]
         let mut labels = vec!["Markdown (.md)"];
         #[cfg(feature = "pdf")]
