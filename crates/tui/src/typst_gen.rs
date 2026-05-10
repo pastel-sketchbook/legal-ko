@@ -71,49 +71,62 @@ fn s(key: &str) -> Str {
 /// - Bold (`**text**` → `*text*`)
 /// - Horizontal rules (`---` → `#line(length: 100%)`)
 /// - Preserves paragraph breaks
+/// - Hierarchical indentation:
+///   - Circled numbers (①②③…) → indented at 1em
+///   - Numbered sub-items (1. 2. 3. …) under them → indented at 2.5em
 ///
 /// Characters that are special in Typst (`#`, `*`, `_`, `@`, `<`, `>`, `$`)
 /// are escaped in body text to prevent accidental interpretation.
 fn markdown_to_typst(md: &str) -> String {
     let mut out = String::with_capacity(md.len());
+    // Track whether we're inside a circled-number clause so that
+    // numbered sub-items (1. 2. …) get deeper indentation.
+    let mut in_clause = false;
 
     for line in md.lines() {
         let trimmed = line.trim();
 
         // Horizontal rule
         if trimmed == "---" || trimmed == "***" || trimmed == "___" {
+            in_clause = false;
             out.push_str("#line(length: 100%)\n");
             continue;
         }
 
         // Headings: count leading `#` chars
         if let Some(rest) = trimmed.strip_prefix("######") {
+            in_clause = false;
             out.push_str("====== ");
             out.push_str(&escape_typst(rest.trim_start_matches(' ')));
             out.push('\n');
         } else if let Some(rest) = trimmed.strip_prefix("#####") {
+            in_clause = false;
             out.push_str("===== ");
             out.push_str(&escape_typst(rest.trim_start_matches(' ')));
             out.push('\n');
         } else if let Some(rest) = trimmed.strip_prefix("####") {
+            in_clause = false;
             out.push_str("==== ");
             out.push_str(&escape_typst(rest.trim_start_matches(' ')));
             out.push('\n');
         } else if let Some(rest) = trimmed.strip_prefix("###") {
             // Guard against `####` — already handled above
             if !rest.starts_with('#') {
+                in_clause = false;
                 out.push_str("=== ");
                 out.push_str(&escape_typst(rest.trim_start_matches(' ')));
                 out.push('\n');
             }
         } else if let Some(rest) = trimmed.strip_prefix("##") {
             if !rest.starts_with('#') {
+                in_clause = false;
                 out.push_str("== ");
                 out.push_str(&escape_typst(rest.trim_start_matches(' ')));
                 out.push('\n');
             }
         } else if let Some(rest) = trimmed.strip_prefix('#') {
             if !rest.starts_with('#') {
+                in_clause = false;
                 out.push_str("= ");
                 out.push_str(&escape_typst(rest.trim_start_matches(' ')));
                 out.push('\n');
@@ -121,21 +134,54 @@ fn markdown_to_typst(md: &str) -> String {
         } else if trimmed.is_empty() {
             out.push('\n');
         } else {
-            // Force paragraph break before circled-number paragraphs (①②③…)
-            // so they render on separate lines in Typst.
-            if starts_with_circled_number(trimmed) && !out.ends_with("\n\n") {
+            // Body line: escape special chars, then convert bold
+            let escaped = escape_typst(trimmed);
+            let converted = convert_bold(&escaped);
+
+            if starts_with_circled_number(trimmed) {
+                // Circled-number clause (항): indent level 1
+                in_clause = true;
+                // Ensure paragraph break before circled number
+                if !out.ends_with("\n\n") {
+                    out.push('\n');
+                }
+                push_indented(&mut out, &converted, "1em");
+            } else if in_clause && starts_with_numbered_item(trimmed) {
+                // Numbered sub-item (호) under a clause: indent level 2
+                push_indented(&mut out, &converted, "2.5em");
+            } else {
+                // Plain body text — reset clause context
+                in_clause = false;
+                out.push_str(&converted);
                 out.push('\n');
             }
-
-            // Body line: escape special chars, then convert bold
-            let escaped = escape_typst(line);
-            let converted = convert_bold(&escaped);
-            out.push_str(&converted);
-            out.push('\n');
         }
     }
 
     out
+}
+
+/// Emit a Typst `#pad(left: …)[…]` block for indented content.
+fn push_indented(out: &mut String, content: &str, indent: &str) {
+    out.push_str("#pad(left: ");
+    out.push_str(indent);
+    out.push_str(")[");
+    out.push_str(content);
+    out.push_str("]\n");
+}
+
+/// Check if a line starts with a numbered item pattern like `1.`, `2.`, … `99.`
+/// followed by a space. These are 호 (sub-items) in Korean legal texts.
+fn starts_with_numbered_item(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    // Consume digits
+    while i < len && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    // Must have at least one digit, then `.`, then either space or end
+    i > 0 && i < len && bytes[i] == b'.' && (i + 1 >= len || bytes[i + 1] == b' ')
 }
 
 /// Check if a line starts with a circled number (①-⑳, ㉑-㉟, ㊱-㊿).
@@ -246,21 +292,45 @@ mod tests {
     }
 
     #[test]
-    fn circled_numbers_get_paragraph_breaks() {
-        let input =
-            "① 시장은 필요한 조치를 한다.\n  ② 시장은 계획을 수립한다.\n  ③ 시장은 시행한다.";
+    fn circled_numbers_get_indented() {
+        let input = "제4조 (출연금)\n① 출연금은 사용할 수 없다.\n1. 유치위원회의 경비보조\n2. 유치활동에 필요한 조사\n② 유치위원회는 결산서를 제출하여야 한다.";
         let output = markdown_to_typst(input);
-        // Each ① ② ③ should be preceded by a blank line (paragraph break)
+        // Circled numbers should be indented at 1em
         assert!(
-            output.contains("\n\n"),
-            "expected paragraph break before ②: {output}"
+            output.contains("#pad(left: 1em)["),
+            "expected 1em indent for ①: {output}"
         );
-        // Count paragraph breaks — should have 2 (before ② and ③)
-        let breaks = output.matches("\n\n").count();
-        assert_eq!(
-            breaks, 2,
-            "expected 2 paragraph breaks, got {breaks}: {output}"
+        // Numbered items should be indented at 2.5em
+        assert!(
+            output.contains("#pad(left: 2.5em)["),
+            "expected 2.5em indent for 1.: {output}"
         );
+        // The article title line should NOT be indented
+        assert!(
+            output.starts_with("제4조"),
+            "article title should not be indented: {output}"
+        );
+    }
+
+    #[test]
+    fn numbered_items_outside_clause_not_indented() {
+        // Numbered items without a preceding circled number should not be indented
+        let input = "1. 첫째\n2. 둘째";
+        let output = markdown_to_typst(input);
+        assert!(
+            !output.contains("#pad"),
+            "numbered items outside clause should not be indented: {output}"
+        );
+    }
+
+    #[test]
+    fn numbered_item_detection() {
+        assert!(starts_with_numbered_item("1. 내용"));
+        assert!(starts_with_numbered_item("12. 내용"));
+        assert!(starts_with_numbered_item("3."));
+        assert!(!starts_with_numbered_item("내용"));
+        assert!(!starts_with_numbered_item(". 내용"));
+        assert!(!starts_with_numbered_item(""));
     }
 
     #[test]

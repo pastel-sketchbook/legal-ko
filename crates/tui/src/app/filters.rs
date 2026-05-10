@@ -464,14 +464,12 @@ impl App {
                 self.close_popup();
             }
             Popup::AdmruleAgencyFilter => {
-                self.admrule_agency_filter =
-                    self.pick_filter_value(&self.admrule_agencies.clone());
+                self.admrule_agency_filter = self.pick_filter_value(&self.admrule_agencies.clone());
                 self.apply_admrule_filters();
                 self.close_popup();
             }
             Popup::OrdinanceTypeFilter => {
-                self.ordinance_type_filter =
-                    self.pick_filter_value(&self.ordinance_types.clone());
+                self.ordinance_type_filter = self.pick_filter_value(&self.ordinance_types.clone());
                 self.apply_ordinance_filters();
                 self.close_popup();
             }
