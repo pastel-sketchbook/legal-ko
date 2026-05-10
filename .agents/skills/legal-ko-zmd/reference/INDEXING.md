@@ -10,8 +10,10 @@
 |-----------|---------------|-------|--------|
 | `laws` | 법률 (Acts) only | ~1,720 | `legalize-kr` — `kr/*/법률.md` |
 | `precedents` | 민사 + 형사, 대법원 | ~43,500 | `precedent-kr` — `{민사,형사}/대법원/*.md` |
+| `admrules` | All administrative rules (행정규칙) | ~21,000 | `admrule-kr` — `**/본문.md` |
+| `ordinances` | All local ordinances (자치법규) | ~160,000 | `ordinance-kr` — `**/본문.md` |
 
-Not indexed by default: 대통령령, 부령, 일반행정/세무/특허/가사/선거/기타, 하급심.
+Not indexed by default for precedents: 대통령령, 부령, 일반행정/세무/특허/가사/선거/기타, 하급심.
 
 ## Taskfile Tasks
 
@@ -27,6 +29,9 @@ Not indexed by default: 대통령령, 부령, 일반행정/세무/특허/가사/
 | `task zmd:precedents:세무` | Tax | 10K |
 | `task zmd:precedents:특허` | Patent | 3K |
 | `task zmd:precedents:가사` | Family | 1.4K |
+| `task zmd:admrules` | All 행정규칙 | ~21K |
+| `task zmd:ordinances` | All 자치법규 | ~160K |
+| `task zmd:all` | All 4 collections | ~226K |
 | `task zmd:sync` | Pull + re-index | — |
 | `task zmd:status` | Show status | — |
 | `task zmd:reset` | Remove collections | — |
@@ -40,7 +45,9 @@ Not indexed by default: 대통령령, 부령, 일반행정/세무/특허/가사/
 | `similar` | Query → precedents → cited laws in one call |
 | `laws` | Clone legalize-kr, stage, index |
 | `precedents` | Clone precedent-kr, stage, index |
-| `all` | Both laws + precedents |
+| `admrules` | Clone admrule-kr, stage 본문.md files, index |
+| `ordinances` | Clone ordinance-kr, stage 본문.md files, index |
+| `all` | All 4 collections |
 | `sync` | Pull latest + re-index |
 | `status` | Show repos, staged files, doc counts |
 | `reset` | Remove collections (keeps repo clones) |
@@ -59,6 +66,8 @@ Re-runs with no changes: <2 seconds. Safe to interrupt and resume.
 
 - Laws: `laws/kr/{법령명}/법률.md` (e.g., `laws/kr/민법/법률.md`)
 - Precedents: `precedents/{사건종류}/{법원등급}/{법원명}_{선고일자}_{사건번호}.md` (e.g., `precedents/민사/대법원/대법원_2002-09-27_2000다10048.md`)
+- Admin rules: `admrules/{부처}/{기관경로...}/{행정규칙종류}/{행정규칙명}/본문.md`
+- Ordinances: `ordinances/{광역}/{기초}/{자치법규종류}/{자치법규명}/본문.md`
 
 ## Topic → Search Terms
 

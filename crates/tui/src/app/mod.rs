@@ -16,8 +16,9 @@ use legal_ko_core::cache::EnrichmentCache;
 use legal_ko_core::crossref::{self, LawMatch};
 use legal_ko_core::enrichment::{self, EnrichedEntry};
 use legal_ko_core::models::{
-    self, ArticleRef, LawDetail, LawEntry, MetadataIndex, PrecedentDetail, PrecedentEntry,
-    PrecedentMetadataIndex, PrecedentSectionRef, PrecedentSortOrder, SortOrder,
+    self, AdmruleDetail, AdmruleEntry, AdmruleSortOrder, ArticleRef, LawDetail, LawEntry,
+    MetadataIndex, OrdinanceDetail, OrdinanceEntry, OrdinanceSortOrder, PrecedentDetail,
+    PrecedentEntry, PrecedentMetadataIndex, PrecedentSectionRef, PrecedentSortOrder, SortOrder,
 };
 use legal_ko_core::precedent_map::PrecedentMap;
 use legal_ko_core::preferences::Preferences;
@@ -52,6 +53,10 @@ pub enum View {
     Detail,
     PrecedentList,
     PrecedentDetail,
+    AdmruleList,
+    AdmruleDetail,
+    OrdinanceList,
+    OrdinanceDetail,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +77,10 @@ pub enum Popup {
     CaseTypeFilter,
     CourtFilter,
     CrossRefList,
+    AdmruleTypeFilter,
+    AdmruleAgencyFilter,
+    OrdinanceTypeFilter,
+    OrdinanceRegionFilter,
 }
 
 // ── Messages (background → main) ─────────────────────────────
@@ -150,6 +159,34 @@ pub enum Message {
     PrecedentDbEntriesLoaded(Vec<PrecedentEntry>),
     /// Precedent→law mapping loaded (from cache or freshly built).
     PrecedentMapLoaded(PrecedentMap),
+    /// Admrule entries loaded from local clone.
+    AdmruleEntriesLoaded(Vec<AdmruleEntry>),
+    /// Admrule loading failed.
+    AdmruleEntriesError(String),
+    /// Admrule content loaded from local clone.
+    AdmruleContentLoaded {
+        id: String,
+        content: String,
+    },
+    /// Admrule content load failed.
+    AdmruleContentError {
+        id: String,
+        error: String,
+    },
+    /// Ordinance entries loaded from local clone.
+    OrdinanceEntriesLoaded(Vec<OrdinanceEntry>),
+    /// Ordinance loading failed.
+    OrdinanceEntriesError(String),
+    /// Ordinance content loaded from local clone.
+    OrdinanceContentLoaded {
+        id: String,
+        content: String,
+    },
+    /// Ordinance content load failed.
+    OrdinanceContentError {
+        id: String,
+        error: String,
+    },
 }
 
 // ── Suspend request (agent in foreground) ─────────────────────
@@ -332,6 +369,44 @@ pub struct App {
     pub split_ratio: f64,
     /// True while the user holds the left mouse button on the divider.
     pub dragging: bool,
+
+    // ── Admrule data (행정규칙) ────────────────────────────────
+    pub all_admrules: Vec<AdmruleEntry>,
+    pub admrule_filtered_indices: Vec<usize>,
+    pub admrule_list_selected: usize,
+    pub admrule_list_offset: usize,
+    pub admrule_search_query: String,
+    pub admrule_type_filter: Option<String>,
+    pub admrule_agency_filter: Option<String>,
+    pub admrule_sort_order: AdmruleSortOrder,
+    pub admrule_types: Vec<String>,
+    pub admrule_agencies: Vec<String>,
+    pub admrule_detail: Option<AdmruleDetail>,
+    pub admrule_detail_scroll: usize,
+    pub admrule_detail_lines_count: usize,
+    pub admrule_detail_loading: bool,
+    pub pending_admrule_id: Option<String>,
+    pub admrule_detail_rendered_lines: Vec<Line<'static>>,
+    pub admrules_loaded: bool,
+
+    // ── Ordinance data (자치법규) ──────────────────────────────
+    pub all_ordinances: Vec<OrdinanceEntry>,
+    pub ordinance_filtered_indices: Vec<usize>,
+    pub ordinance_list_selected: usize,
+    pub ordinance_list_offset: usize,
+    pub ordinance_search_query: String,
+    pub ordinance_type_filter: Option<String>,
+    pub ordinance_region_filter: Option<String>,
+    pub ordinance_sort_order: OrdinanceSortOrder,
+    pub ordinance_types: Vec<String>,
+    pub ordinance_regions: Vec<String>,
+    pub ordinance_detail: Option<OrdinanceDetail>,
+    pub ordinance_detail_scroll: usize,
+    pub ordinance_detail_lines_count: usize,
+    pub ordinance_detail_loading: bool,
+    pub pending_ordinance_id: Option<String>,
+    pub ordinance_detail_rendered_lines: Vec<Line<'static>>,
+    pub ordinances_loaded: bool,
 }
 
 impl App {
@@ -449,6 +524,42 @@ impl App {
             split_open: false,
             split_ratio: prefs.split_ratio.unwrap_or(0.4),
             dragging: false,
+            // Admrule
+            all_admrules: Vec::new(),
+            admrule_filtered_indices: Vec::new(),
+            admrule_list_selected: 0,
+            admrule_list_offset: 0,
+            admrule_search_query: String::new(),
+            admrule_type_filter: None,
+            admrule_agency_filter: None,
+            admrule_sort_order: AdmruleSortOrder::default(),
+            admrule_types: Vec::new(),
+            admrule_agencies: Vec::new(),
+            admrule_detail: None,
+            admrule_detail_scroll: 0,
+            admrule_detail_lines_count: 0,
+            admrule_detail_loading: false,
+            pending_admrule_id: None,
+            admrule_detail_rendered_lines: Vec::new(),
+            admrules_loaded: false,
+            // Ordinance
+            all_ordinances: Vec::new(),
+            ordinance_filtered_indices: Vec::new(),
+            ordinance_list_selected: 0,
+            ordinance_list_offset: 0,
+            ordinance_search_query: String::new(),
+            ordinance_type_filter: None,
+            ordinance_region_filter: None,
+            ordinance_sort_order: OrdinanceSortOrder::default(),
+            ordinance_types: Vec::new(),
+            ordinance_regions: Vec::new(),
+            ordinance_detail: None,
+            ordinance_detail_scroll: 0,
+            ordinance_detail_lines_count: 0,
+            ordinance_detail_loading: false,
+            pending_ordinance_id: None,
+            ordinance_detail_rendered_lines: Vec::new(),
+            ordinances_loaded: false,
         }
     }
 
@@ -471,6 +582,10 @@ impl App {
             View::Detail => "detail",
             View::PrecedentList => "precedent_list",
             View::PrecedentDetail => "precedent_detail",
+            View::AdmruleList => "admrule_list",
+            View::AdmruleDetail => "admrule_detail",
+            View::OrdinanceList => "ordinance_list",
+            View::OrdinanceDetail => "ordinance_detail",
         };
 
         let snap = Snapshot {
@@ -587,7 +702,12 @@ impl App {
                 warn!(law_id, "Navigate ignored — still loading metadata");
                 self.status_message = Some("Still loading — navigate ignored".to_string());
             }
-            View::PrecedentList | View::PrecedentDetail => {
+            View::PrecedentList
+            | View::PrecedentDetail
+            | View::AdmruleList
+            | View::AdmruleDetail
+            | View::OrdinanceList
+            | View::OrdinanceDetail => {
                 // Switch back to law list for navigate commands
                 self.view = View::List;
                 self.clear_filters_for_navigate();
@@ -720,6 +840,16 @@ impl App {
             self.precedent_detail_lines_count = lines.len();
             self.precedent_detail_rendered_lines = lines;
         }
+        if let Some(ref detail) = self.admrule_detail {
+            let (lines, _) = crate::parser::parse_law_markdown(&detail.raw_markdown, self.theme());
+            self.admrule_detail_lines_count = lines.len();
+            self.admrule_detail_rendered_lines = lines;
+        }
+        if let Some(ref detail) = self.ordinance_detail {
+            let (lines, _) = crate::parser::parse_law_markdown(&detail.raw_markdown, self.theme());
+            self.ordinance_detail_lines_count = lines.len();
+            self.ordinance_detail_rendered_lines = lines;
+        }
     }
 
     /// Toggle split view (list + detail side-by-side).
@@ -770,17 +900,25 @@ impl App {
             MouseEventKind::ScrollDown => match self.view {
                 View::Detail => self.detail_scroll_down(3),
                 View::PrecedentDetail => self.precedent_detail_scroll_down(3),
+                View::AdmruleDetail => self.admrule_detail_scroll_down(3),
+                View::OrdinanceDetail => self.ordinance_detail_scroll_down(3),
                 View::List if self.split_open => self.detail_scroll_down(3),
                 View::List => self.list_move_down(),
                 View::PrecedentList => self.precedent_list_move_down(),
+                View::AdmruleList => self.admrule_list_move_down(),
+                View::OrdinanceList => self.ordinance_list_move_down(),
                 View::Loading => {}
             },
             MouseEventKind::ScrollUp => match self.view {
                 View::Detail => self.detail_scroll_up(3),
                 View::PrecedentDetail => self.precedent_detail_scroll_up(3),
+                View::AdmruleDetail => self.admrule_detail_scroll_up(3),
+                View::OrdinanceDetail => self.ordinance_detail_scroll_up(3),
                 View::List if self.split_open => self.detail_scroll_up(3),
                 View::List => self.list_move_up(),
                 View::PrecedentList => self.precedent_list_move_up(),
+                View::AdmruleList => self.admrule_list_move_up(),
+                View::OrdinanceList => self.ordinance_list_move_up(),
                 View::Loading => {}
             },
             _ => {}
@@ -952,6 +1090,28 @@ end tell"#
                 Err(e) => {
                     let _ = tx2.send(Message::PrecedentMetadataError(format!("{e:#}")));
                 }
+            }
+        });
+
+        // Admrule entries from local clone (blocking I/O with Rayon)
+        let tx3 = self.msg_tx.clone();
+        tokio::task::spawn_blocking(move || match client::build_admrule_entries_from_clone() {
+            Ok(entries) => {
+                let _ = tx3.send(Message::AdmruleEntriesLoaded(entries));
+            }
+            Err(e) => {
+                let _ = tx3.send(Message::AdmruleEntriesError(format!("{e:#}")));
+            }
+        });
+
+        // Ordinance entries from local clone (blocking I/O with Rayon)
+        let tx4 = self.msg_tx.clone();
+        tokio::task::spawn_blocking(move || match client::build_ordinance_entries_from_clone() {
+            Ok(entries) => {
+                let _ = tx4.send(Message::OrdinanceEntriesLoaded(entries));
+            }
+            Err(e) => {
+                let _ = tx4.send(Message::OrdinanceEntriesError(format!("{e:#}")));
             }
         });
     }
@@ -1184,6 +1344,49 @@ end tell"#
                     "Precedent map loaded"
                 );
                 self.precedent_map = Some(map);
+            }
+            Message::AdmruleEntriesLoaded(entries) => {
+                info!(count = entries.len(), "Admrule entries loaded");
+                self.load_admrule_entries(entries);
+            }
+            Message::AdmruleEntriesError(err) => {
+                // Non-fatal: admrule tab stays empty
+                info!(error = %err, "Admrule entries not available (clone may not exist)");
+            }
+            Message::AdmruleContentLoaded { id, content } => {
+                if self.pending_admrule_id.as_deref() != Some(&id) {
+                    return;
+                }
+                self.on_admrule_content_loaded(&id, &content);
+            }
+            Message::AdmruleContentError { id, error } => {
+                if self.pending_admrule_id.as_deref() != Some(&id) {
+                    return;
+                }
+                self.admrule_detail_loading = false;
+                self.status_message = Some(format!("Error loading {id}: {error}"));
+                error!(id, error, "Failed to load admrule");
+            }
+            Message::OrdinanceEntriesLoaded(entries) => {
+                info!(count = entries.len(), "Ordinance entries loaded");
+                self.load_ordinance_entries(entries);
+            }
+            Message::OrdinanceEntriesError(err) => {
+                info!(error = %err, "Ordinance entries not available (clone may not exist)");
+            }
+            Message::OrdinanceContentLoaded { id, content } => {
+                if self.pending_ordinance_id.as_deref() != Some(&id) {
+                    return;
+                }
+                self.on_ordinance_content_loaded(&id, &content);
+            }
+            Message::OrdinanceContentError { id, error } => {
+                if self.pending_ordinance_id.as_deref() != Some(&id) {
+                    return;
+                }
+                self.ordinance_detail_loading = false;
+                self.status_message = Some(format!("Error loading {id}: {error}"));
+                error!(id, error, "Failed to load ordinance");
             }
         }
     }
@@ -1773,5 +1976,207 @@ end tell"#
             );
             self.status_message = Some(format!("No matching law found for: {label}"));
         }
+    }
+
+    // ── Admrule methods ───────────────────────────────────────
+
+    fn load_admrule_entries(&mut self, mut entries: Vec<AdmruleEntry>) {
+        models::sort_admrule_entries(&mut entries, self.admrule_sort_order);
+
+        let mut type_set: HashSet<String> = HashSet::new();
+        let mut agency_set: HashSet<String> = HashSet::new();
+        for entry in &entries {
+            type_set.insert(entry.rule_type.clone());
+            agency_set.insert(entry.agency.clone());
+        }
+
+        let mut types: Vec<String> = type_set.into_iter().collect();
+        types.sort();
+        let mut agencies: Vec<String> = agency_set.into_iter().collect();
+        agencies.sort();
+
+        self.all_admrules = entries;
+        self.admrule_types = types;
+        self.admrule_agencies = agencies;
+        self.admrules_loaded = true;
+        self.apply_admrule_filters();
+    }
+
+    pub fn selected_admrule(&self) -> Option<&AdmruleEntry> {
+        self.admrule_filtered_indices
+            .get(self.admrule_list_selected)
+            .map(|&i| &self.all_admrules[i])
+    }
+
+    pub fn open_selected_admrule(&mut self) {
+        let Some(entry) = self.selected_admrule().cloned() else {
+            return;
+        };
+
+        self.admrule_detail_loading = true;
+        self.admrule_detail_scroll = 0;
+        self.pending_admrule_id = Some(entry.id.clone());
+        self.status_message = Some(format!("Loading {}...", entry.title));
+
+        let tx = self.msg_tx.clone();
+        let path = entry.path.clone();
+        let id = entry.id.clone();
+        tokio::task::spawn_blocking(move || match client::load_admrule_content(&path) {
+            Ok(content) => {
+                let _ = tx.send(Message::AdmruleContentLoaded { id, content });
+            }
+            Err(e) => {
+                let _ = tx.send(Message::AdmruleContentError {
+                    id,
+                    error: format!("{e:#}"),
+                });
+            }
+        });
+    }
+
+    fn on_admrule_content_loaded(&mut self, id: &str, content: &str) {
+        self.pending_admrule_id = None;
+
+        let entry = self.all_admrules.iter().find(|e| e.id == id).cloned();
+        let Some(entry) = entry else {
+            warn!(id, "Admrule not found in entries");
+            self.admrule_detail_loading = false;
+            return;
+        };
+
+        let stripped = parser::strip_frontmatter(content);
+        let (lines, _) = crate::parser::parse_law_markdown(stripped, self.theme());
+        self.admrule_detail_lines_count = lines.len();
+        self.admrule_detail_rendered_lines = lines;
+        self.admrule_detail = Some(AdmruleDetail {
+            entry,
+            raw_markdown: stripped.to_string(),
+        });
+        self.admrule_detail_loading = false;
+        self.admrule_detail_scroll = 0;
+        self.view = View::AdmruleDetail;
+        self.status_message = None;
+    }
+
+    pub fn export_admrule(&mut self) {
+        let Some(ref detail) = self.admrule_detail else {
+            self.status_message = Some("No admrule open to export".to_string());
+            return;
+        };
+
+        let title = &detail.entry.title;
+        let safe_title = title.replace(['/', '\\'], "_");
+        let filename = format!("{safe_title}.md");
+
+        let content = detail.raw_markdown.clone();
+        let fname_display = filename.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = std::fs::write(&filename, content) {
+                warn!(error = %e, filename, "Failed to export admrule");
+            }
+        });
+
+        self.status_message = Some(format!("Exported → {fname_display}"));
+    }
+
+    // ── Ordinance methods ─────────────────────────────────────
+
+    fn load_ordinance_entries(&mut self, mut entries: Vec<OrdinanceEntry>) {
+        models::sort_ordinance_entries(&mut entries, self.ordinance_sort_order);
+
+        let mut type_set: HashSet<String> = HashSet::new();
+        let mut region_set: HashSet<String> = HashSet::new();
+        for entry in &entries {
+            type_set.insert(entry.rule_type.clone());
+            region_set.insert(entry.region.clone());
+        }
+
+        let mut types: Vec<String> = type_set.into_iter().collect();
+        types.sort();
+        let mut regions: Vec<String> = region_set.into_iter().collect();
+        regions.sort();
+
+        self.all_ordinances = entries;
+        self.ordinance_types = types;
+        self.ordinance_regions = regions;
+        self.ordinances_loaded = true;
+        self.apply_ordinance_filters();
+    }
+
+    pub fn selected_ordinance(&self) -> Option<&OrdinanceEntry> {
+        self.ordinance_filtered_indices
+            .get(self.ordinance_list_selected)
+            .map(|&i| &self.all_ordinances[i])
+    }
+
+    pub fn open_selected_ordinance(&mut self) {
+        let Some(entry) = self.selected_ordinance().cloned() else {
+            return;
+        };
+
+        self.ordinance_detail_loading = true;
+        self.ordinance_detail_scroll = 0;
+        self.pending_ordinance_id = Some(entry.id.clone());
+        self.status_message = Some(format!("Loading {}...", entry.title));
+
+        let tx = self.msg_tx.clone();
+        let path = entry.path.clone();
+        let id = entry.id.clone();
+        tokio::task::spawn_blocking(move || match client::load_ordinance_content(&path) {
+            Ok(content) => {
+                let _ = tx.send(Message::OrdinanceContentLoaded { id, content });
+            }
+            Err(e) => {
+                let _ = tx.send(Message::OrdinanceContentError {
+                    id,
+                    error: format!("{e:#}"),
+                });
+            }
+        });
+    }
+
+    fn on_ordinance_content_loaded(&mut self, id: &str, content: &str) {
+        self.pending_ordinance_id = None;
+
+        let entry = self.all_ordinances.iter().find(|e| e.id == id).cloned();
+        let Some(entry) = entry else {
+            warn!(id, "Ordinance not found in entries");
+            self.ordinance_detail_loading = false;
+            return;
+        };
+
+        let stripped = parser::strip_frontmatter(content);
+        let (lines, _) = crate::parser::parse_law_markdown(stripped, self.theme());
+        self.ordinance_detail_lines_count = lines.len();
+        self.ordinance_detail_rendered_lines = lines;
+        self.ordinance_detail = Some(OrdinanceDetail {
+            entry,
+            raw_markdown: stripped.to_string(),
+        });
+        self.ordinance_detail_loading = false;
+        self.ordinance_detail_scroll = 0;
+        self.view = View::OrdinanceDetail;
+        self.status_message = None;
+    }
+
+    pub fn export_ordinance(&mut self) {
+        let Some(ref detail) = self.ordinance_detail else {
+            self.status_message = Some("No ordinance open to export".to_string());
+            return;
+        };
+
+        let title = &detail.entry.title;
+        let safe_title = title.replace(['/', '\\'], "_");
+        let filename = format!("{safe_title}.md");
+
+        let content = detail.raw_markdown.clone();
+        let fname_display = filename.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = std::fs::write(&filename, content) {
+                warn!(error = %e, filename, "Failed to export ordinance");
+            }
+        });
+
+        self.status_message = Some(format!("Exported → {fname_display}"));
     }
 }

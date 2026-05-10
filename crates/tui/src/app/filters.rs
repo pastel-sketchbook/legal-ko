@@ -186,7 +186,13 @@ impl App {
         let id = match self.view {
             View::List => self.selected_entry().map(|e| e.id.clone()),
             View::Detail => self.detail.as_ref().map(|d| d.entry.id.clone()),
-            View::Loading | View::PrecedentList | View::PrecedentDetail => None,
+            View::Loading
+            | View::PrecedentList
+            | View::PrecedentDetail
+            | View::AdmruleList
+            | View::AdmruleDetail
+            | View::OrdinanceList
+            | View::OrdinanceDetail => None,
         };
 
         if let Some(id) = id {
@@ -222,24 +228,44 @@ impl App {
     }
 
     pub fn search_push_char(&mut self, c: char) {
-        if self.view == View::PrecedentList {
-            self.precedent_search_query.push(c);
-            self.apply_precedent_filters();
-        } else {
-            self.search_query.push(c);
-            self.apply_filters();
+        match self.view {
+            View::PrecedentList => {
+                self.precedent_search_query.push(c);
+                self.apply_precedent_filters();
+            }
+            View::AdmruleList => {
+                self.admrule_search_query.push(c);
+                self.apply_admrule_filters();
+            }
+            View::OrdinanceList => {
+                self.ordinance_search_query.push(c);
+                self.apply_ordinance_filters();
+            }
+            _ => {
+                self.search_query.push(c);
+                self.apply_filters();
+            }
         }
     }
 
     pub fn search_pop_char(&mut self) {
-        // Hangul-aware: peel off one jamo (민 → 미 → ㅁ → ∅) instead of
-        // the entire syllable, matching native Korean editor behavior.
-        if self.view == View::PrecedentList {
-            hangul::pop_jamo(&mut self.precedent_search_query);
-            self.apply_precedent_filters();
-        } else {
-            hangul::pop_jamo(&mut self.search_query);
-            self.apply_filters();
+        match self.view {
+            View::PrecedentList => {
+                hangul::pop_jamo(&mut self.precedent_search_query);
+                self.apply_precedent_filters();
+            }
+            View::AdmruleList => {
+                hangul::pop_jamo(&mut self.admrule_search_query);
+                self.apply_admrule_filters();
+            }
+            View::OrdinanceList => {
+                hangul::pop_jamo(&mut self.ordinance_search_query);
+                self.apply_ordinance_filters();
+            }
+            _ => {
+                hangul::pop_jamo(&mut self.search_query);
+                self.apply_filters();
+            }
         }
     }
 
@@ -248,14 +274,27 @@ impl App {
     }
 
     pub fn clear_search(&mut self) {
-        if self.view == View::PrecedentList {
-            self.precedent_search_query.clear();
-            self.input_mode = InputMode::Normal;
-            self.apply_precedent_filters();
-        } else {
-            self.search_query.clear();
-            self.input_mode = InputMode::Normal;
-            self.apply_filters();
+        match self.view {
+            View::PrecedentList => {
+                self.precedent_search_query.clear();
+                self.input_mode = InputMode::Normal;
+                self.apply_precedent_filters();
+            }
+            View::AdmruleList => {
+                self.admrule_search_query.clear();
+                self.input_mode = InputMode::Normal;
+                self.apply_admrule_filters();
+            }
+            View::OrdinanceList => {
+                self.ordinance_search_query.clear();
+                self.input_mode = InputMode::Normal;
+                self.apply_ordinance_filters();
+            }
+            _ => {
+                self.search_query.clear();
+                self.input_mode = InputMode::Normal;
+                self.apply_filters();
+            }
         }
     }
 
@@ -302,6 +341,26 @@ impl App {
             self.popup = Popup::CrossRefList;
             self.popup_selected = 0;
         }
+    }
+
+    pub fn open_admrule_type_filter(&mut self) {
+        self.popup = Popup::AdmruleTypeFilter;
+        self.popup_selected = 0;
+    }
+
+    pub fn open_admrule_agency_filter(&mut self) {
+        self.popup = Popup::AdmruleAgencyFilter;
+        self.popup_selected = 0;
+    }
+
+    pub fn open_ordinance_type_filter(&mut self) {
+        self.popup = Popup::OrdinanceTypeFilter;
+        self.popup_selected = 0;
+    }
+
+    pub fn open_ordinance_region_filter(&mut self) {
+        self.popup = Popup::OrdinanceRegionFilter;
+        self.popup_selected = 0;
     }
 
     /// Open the AI agent picker popup.
@@ -425,6 +484,54 @@ impl App {
                     self.open_agent_split(agent);
                 }
             }
+            Popup::AdmruleTypeFilter => {
+                if self.popup_selected == 0 {
+                    self.admrule_type_filter = None;
+                } else {
+                    self.admrule_type_filter = self
+                        .admrule_types
+                        .get(self.popup_selected.saturating_sub(1))
+                        .cloned();
+                }
+                self.apply_admrule_filters();
+                self.close_popup();
+            }
+            Popup::AdmruleAgencyFilter => {
+                if self.popup_selected == 0 {
+                    self.admrule_agency_filter = None;
+                } else {
+                    self.admrule_agency_filter = self
+                        .admrule_agencies
+                        .get(self.popup_selected.saturating_sub(1))
+                        .cloned();
+                }
+                self.apply_admrule_filters();
+                self.close_popup();
+            }
+            Popup::OrdinanceTypeFilter => {
+                if self.popup_selected == 0 {
+                    self.ordinance_type_filter = None;
+                } else {
+                    self.ordinance_type_filter = self
+                        .ordinance_types
+                        .get(self.popup_selected.saturating_sub(1))
+                        .cloned();
+                }
+                self.apply_ordinance_filters();
+                self.close_popup();
+            }
+            Popup::OrdinanceRegionFilter => {
+                if self.popup_selected == 0 {
+                    self.ordinance_region_filter = None;
+                } else {
+                    self.ordinance_region_filter = self
+                        .ordinance_regions
+                        .get(self.popup_selected.saturating_sub(1))
+                        .cloned();
+                }
+                self.apply_ordinance_filters();
+                self.close_popup();
+            }
             _ => {}
         }
     }
@@ -445,6 +552,20 @@ impl App {
         self.status_message = Some(format!("Sort: {}", self.precedent_sort_order.label()));
     }
 
+    pub fn toggle_admrule_sort(&mut self) {
+        self.admrule_sort_order = self.admrule_sort_order.next();
+        models::sort_admrule_entries(&mut self.all_admrules, self.admrule_sort_order);
+        self.apply_admrule_filters();
+        self.status_message = Some(format!("Sort: {}", self.admrule_sort_order.label()));
+    }
+
+    pub fn toggle_ordinance_sort(&mut self) {
+        self.ordinance_sort_order = self.ordinance_sort_order.next();
+        models::sort_ordinance_entries(&mut self.all_ordinances, self.ordinance_sort_order);
+        self.apply_ordinance_filters();
+        self.status_message = Some(format!("Sort: {}", self.ordinance_sort_order.label()));
+    }
+
     fn popup_items_count(&self) -> usize {
         match self.popup {
             Popup::CategoryFilter => self.categories.len() + 1,
@@ -455,7 +576,99 @@ impl App {
             Popup::CourtFilter => self.precedent_courts.len() + 1,
             Popup::CrossRefList => self.precedent_crossref_matches.len(),
             Popup::AgentPicker => self.installed_agents.len(),
+            Popup::AdmruleTypeFilter => self.admrule_types.len() + 1,
+            Popup::AdmruleAgencyFilter => self.admrule_agencies.len() + 1,
+            Popup::OrdinanceTypeFilter => self.ordinance_types.len() + 1,
+            Popup::OrdinanceRegionFilter => self.ordinance_regions.len() + 1,
             _ => 0,
+        }
+    }
+
+    // ── Admrule filters ───────────────────────────────────────
+
+    pub fn apply_admrule_filters(&mut self) {
+        let query_norm = hangul::nfc(&self.admrule_search_query.to_lowercase());
+        let hangul_query = hangul::eng_to_hangul(&self.admrule_search_query)
+            .map(|h| hangul::nfc(&h.to_lowercase()));
+
+        self.admrule_filtered_indices = self
+            .all_admrules
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                if !query_norm.is_empty() {
+                    let title = hangul::nfc(&entry.title.to_lowercase());
+                    let matches = title.contains(&query_norm)
+                        || hangul_query
+                            .as_ref()
+                            .is_some_and(|hq| title.contains(hq.as_str()));
+                    if !matches {
+                        return false;
+                    }
+                }
+                if let Some(ref rt) = self.admrule_type_filter
+                    && &entry.rule_type != rt
+                {
+                    return false;
+                }
+                if let Some(ref agency) = self.admrule_agency_filter
+                    && &entry.agency != agency
+                {
+                    return false;
+                }
+                true
+            })
+            .map(|(i, _)| i)
+            .collect();
+
+        if self.admrule_filtered_indices.is_empty() {
+            self.admrule_list_selected = 0;
+        } else if self.admrule_list_selected >= self.admrule_filtered_indices.len() {
+            self.admrule_list_selected = self.admrule_filtered_indices.len().saturating_sub(1);
+        }
+    }
+
+    // ── Ordinance filters ─────────────────────────────────────
+
+    pub fn apply_ordinance_filters(&mut self) {
+        let query_norm = hangul::nfc(&self.ordinance_search_query.to_lowercase());
+        let hangul_query = hangul::eng_to_hangul(&self.ordinance_search_query)
+            .map(|h| hangul::nfc(&h.to_lowercase()));
+
+        self.ordinance_filtered_indices = self
+            .all_ordinances
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                if !query_norm.is_empty() {
+                    let title = hangul::nfc(&entry.title.to_lowercase());
+                    let matches = title.contains(&query_norm)
+                        || hangul_query
+                            .as_ref()
+                            .is_some_and(|hq| title.contains(hq.as_str()));
+                    if !matches {
+                        return false;
+                    }
+                }
+                if let Some(ref rt) = self.ordinance_type_filter
+                    && &entry.rule_type != rt
+                {
+                    return false;
+                }
+                if let Some(ref region) = self.ordinance_region_filter
+                    && &entry.region != region
+                {
+                    return false;
+                }
+                true
+            })
+            .map(|(i, _)| i)
+            .collect();
+
+        if self.ordinance_filtered_indices.is_empty() {
+            self.ordinance_list_selected = 0;
+        } else if self.ordinance_list_selected >= self.ordinance_filtered_indices.len() {
+            self.ordinance_list_selected = self.ordinance_filtered_indices.len().saturating_sub(1);
         }
     }
 }

@@ -1,6 +1,10 @@
+pub mod admrule_detail;
+pub mod admrule_list;
 pub mod help;
 pub mod law_detail;
 pub mod law_list;
+pub mod ordinance_detail;
+pub mod ordinance_list;
 pub mod precedent_detail;
 pub mod precedent_list;
 pub mod styles;
@@ -63,12 +67,7 @@ pub fn render(f: &mut Frame, app: &App) {
                     render_filter_popup(f, app, theme, area, FilterKind::Department);
                 }
                 Popup::AgentPicker => render_agent_picker(f, app, theme, area),
-                Popup::None
-                | Popup::ArticleList
-                | Popup::SectionList
-                | Popup::CaseTypeFilter
-                | Popup::CourtFilter
-                | Popup::CrossRefList => {}
+                _ => {}
             }
         }
         View::Detail => {
@@ -77,13 +76,7 @@ pub fn render(f: &mut Frame, app: &App) {
                 Popup::Help => help::render_help(f, theme, area),
                 Popup::ArticleList => law_detail::render_article_popup(f, app, theme, area),
                 Popup::AgentPicker => render_agent_picker(f, app, theme, area),
-                Popup::None
-                | Popup::CategoryFilter
-                | Popup::DepartmentFilter
-                | Popup::SectionList
-                | Popup::CaseTypeFilter
-                | Popup::CourtFilter
-                | Popup::CrossRefList => {}
+                _ => {}
             }
         }
         View::PrecedentList => {
@@ -97,12 +90,7 @@ pub fn render(f: &mut Frame, app: &App) {
                     render_filter_popup(f, app, theme, area, FilterKind::Court);
                 }
                 Popup::AgentPicker => render_agent_picker(f, app, theme, area),
-                Popup::None
-                | Popup::CategoryFilter
-                | Popup::DepartmentFilter
-                | Popup::ArticleList
-                | Popup::SectionList
-                | Popup::CrossRefList => {}
+                _ => {}
             }
         }
         View::PrecedentDetail => {
@@ -116,12 +104,51 @@ pub fn render(f: &mut Frame, app: &App) {
                     precedent_detail::render_crossref_popup(f, app, theme, area);
                 }
                 Popup::AgentPicker => render_agent_picker(f, app, theme, area),
-                Popup::None
-                | Popup::CategoryFilter
-                | Popup::DepartmentFilter
-                | Popup::ArticleList
-                | Popup::CaseTypeFilter
-                | Popup::CourtFilter => {}
+                _ => {}
+            }
+        }
+        View::AdmruleList => {
+            admrule_list::render_admrule_list(f, app, theme, area);
+            match app.popup {
+                Popup::Help => help::render_help(f, theme, area),
+                Popup::AdmruleTypeFilter => {
+                    render_filter_popup(f, app, theme, area, FilterKind::AdmruleType);
+                }
+                Popup::AdmruleAgencyFilter => {
+                    render_filter_popup(f, app, theme, area, FilterKind::AdmruleAgency);
+                }
+                Popup::AgentPicker => render_agent_picker(f, app, theme, area),
+                _ => {}
+            }
+        }
+        View::AdmruleDetail => {
+            admrule_detail::render_admrule_detail(f, app, theme, area);
+            match app.popup {
+                Popup::Help => help::render_help(f, theme, area),
+                Popup::AgentPicker => render_agent_picker(f, app, theme, area),
+                _ => {}
+            }
+        }
+        View::OrdinanceList => {
+            ordinance_list::render_ordinance_list(f, app, theme, area);
+            match app.popup {
+                Popup::Help => help::render_help(f, theme, area),
+                Popup::OrdinanceTypeFilter => {
+                    render_filter_popup(f, app, theme, area, FilterKind::OrdinanceType);
+                }
+                Popup::OrdinanceRegionFilter => {
+                    render_filter_popup(f, app, theme, area, FilterKind::OrdinanceRegion);
+                }
+                Popup::AgentPicker => render_agent_picker(f, app, theme, area),
+                _ => {}
+            }
+        }
+        View::OrdinanceDetail => {
+            ordinance_detail::render_ordinance_detail(f, app, theme, area);
+            match app.popup {
+                Popup::Help => help::render_help(f, theme, area),
+                Popup::AgentPicker => render_agent_picker(f, app, theme, area),
+                _ => {}
             }
         }
     }
@@ -155,6 +182,10 @@ enum FilterKind {
     Department,
     CaseType,
     Court,
+    AdmruleType,
+    AdmruleAgency,
+    OrdinanceType,
+    OrdinanceRegion,
 }
 
 fn render_filter_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect, kind: FilterKind) {
@@ -180,6 +211,26 @@ fn render_filter_popup(f: &mut Frame, app: &App, theme: &Theme, area: Rect, kind
             " Court \u{2014} 법원 ",
             &app.precedent_courts,
             app.precedent_court_filter.as_ref(),
+        ),
+        FilterKind::AdmruleType => (
+            " Type \u{2014} 행정규칙종류 ",
+            &app.admrule_types,
+            app.admrule_type_filter.as_ref(),
+        ),
+        FilterKind::AdmruleAgency => (
+            " Agency \u{2014} 소관부처 ",
+            &app.admrule_agencies,
+            app.admrule_agency_filter.as_ref(),
+        ),
+        FilterKind::OrdinanceType => (
+            " Type \u{2014} 자치법규종류 ",
+            &app.ordinance_types,
+            app.ordinance_type_filter.as_ref(),
+        ),
+        FilterKind::OrdinanceRegion => (
+            " Region \u{2014} 광역 ",
+            &app.ordinance_regions,
+            app.ordinance_region_filter.as_ref(),
         ),
     };
 

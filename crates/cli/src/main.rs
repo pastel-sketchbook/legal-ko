@@ -310,6 +310,26 @@ enum ZmdCommand {
         #[arg(long)]
         skip_pull: bool,
     },
+    /// Index administrative rule files (행정규칙) into zmd
+    Admrules {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Skip git pull (use existing repo as-is)
+        #[arg(long)]
+        skip_pull: bool,
+    },
+    /// Index local ordinance files (자치법규) into zmd
+    Ordinances {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Skip git pull (use existing repo as-is)
+        #[arg(long)]
+        skip_pull: bool,
+    },
     /// Pull latest from upstream repos and re-index
     Sync {
         /// Output as JSON
@@ -1520,6 +1540,8 @@ fn cmd_zmd(cmd: ZmdCommand) -> Result<()> {
             skip_pull,
         } => cmd_zmd_precedents(case_type, court, json, skip_pull),
         ZmdCommand::All { json, skip_pull } => cmd_zmd_all(json, skip_pull),
+        ZmdCommand::Admrules { json, skip_pull } => cmd_zmd_admrules(json, skip_pull),
+        ZmdCommand::Ordinances { json, skip_pull } => cmd_zmd_ordinances(json, skip_pull),
         ZmdCommand::Sync { json } => cmd_zmd_sync(json),
         ZmdCommand::Status { json } => cmd_zmd_status(json),
         ZmdCommand::Reset { json } => cmd_zmd_reset(json),
@@ -1740,6 +1762,68 @@ fn cmd_zmd_precedents(
     Ok(())
 }
 
+fn cmd_zmd_admrules(as_json: bool, skip_pull: bool) -> Result<()> {
+    let mut cfg = zmd::ZmdConfig::default_config()?;
+    cfg.skip_pull = skip_pull;
+
+    let result = zmd::index_admrules(&cfg, |bp| {
+        if !as_json && bp.batch_num > 0 {
+            eprintln!(
+                "  batch {}: +{} files ({} staged) — {:.0}s",
+                bp.batch_num, bp.batch_new, bp.total_staged, bp.update_secs,
+            );
+        }
+    })?;
+
+    if as_json {
+        let obj = json!({
+            "total": result.total_files,
+            "newly_staged": result.newly_staged,
+            "already_staged": result.already_staged,
+            "batches": result.batches,
+            "elapsed_secs": result.total_update_secs,
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+    } else {
+        println!(
+            "Administrative rules: {} total, {} new — {:.0}s",
+            result.total_files, result.newly_staged, result.total_update_secs,
+        );
+    }
+    Ok(())
+}
+
+fn cmd_zmd_ordinances(as_json: bool, skip_pull: bool) -> Result<()> {
+    let mut cfg = zmd::ZmdConfig::default_config()?;
+    cfg.skip_pull = skip_pull;
+
+    let result = zmd::index_ordinances(&cfg, |bp| {
+        if !as_json && bp.batch_num > 0 {
+            eprintln!(
+                "  batch {}: +{} files ({} staged) — {:.0}s",
+                bp.batch_num, bp.batch_new, bp.total_staged, bp.update_secs,
+            );
+        }
+    })?;
+
+    if as_json {
+        let obj = json!({
+            "total": result.total_files,
+            "newly_staged": result.newly_staged,
+            "already_staged": result.already_staged,
+            "batches": result.batches,
+            "elapsed_secs": result.total_update_secs,
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+    } else {
+        println!(
+            "Ordinances: {} total, {} new — {:.0}s",
+            result.total_files, result.newly_staged, result.total_update_secs,
+        );
+    }
+    Ok(())
+}
+
 fn cmd_zmd_all(as_json: bool, skip_pull: bool) -> Result<()> {
     let mut cfg = zmd::ZmdConfig::default_config()?;
     cfg.skip_pull = skip_pull;
@@ -1747,6 +1831,8 @@ fn cmd_zmd_all(as_json: bool, skip_pull: bool) -> Result<()> {
     if as_json {
         let law_result = zmd::index_laws(&cfg, |_| {})?;
         let prec_result = zmd::index_precedents(&cfg, |_, _, _| {}, |_, _, _| {})?;
+        let admrule_result = zmd::index_admrules(&cfg, |_| {})?;
+        let ordinance_result = zmd::index_ordinances(&cfg, |_| {})?;
 
         let obj = json!({
             "laws": {
@@ -1762,6 +1848,20 @@ fn cmd_zmd_all(as_json: bool, skip_pull: bool) -> Result<()> {
                 "already_staged": prec_result.summary.already_staged,
                 "elapsed_secs": prec_result.summary.total_update_secs,
                 "batches": prec_result.summary.batches,
+            },
+            "admrules": {
+                "total": admrule_result.total_files,
+                "newly_staged": admrule_result.newly_staged,
+                "already_staged": admrule_result.already_staged,
+                "batches": admrule_result.batches,
+                "elapsed_secs": admrule_result.total_update_secs,
+            },
+            "ordinances": {
+                "total": ordinance_result.total_files,
+                "newly_staged": ordinance_result.newly_staged,
+                "already_staged": ordinance_result.already_staged,
+                "batches": ordinance_result.batches,
+                "elapsed_secs": ordinance_result.total_update_secs,
             },
         });
         println!("{}", serde_json::to_string_pretty(&obj)?);
@@ -1792,6 +1892,20 @@ fn cmd_zmd_sync(as_json: bool) -> Result<()> {
                 "total_files": prec_result.summary.total_files,
             });
         }
+        if cfg.admrule_clone().join(".git").is_dir() {
+            let r = zmd::index_admrules(&cfg, |_| {})?;
+            result["admrules"] = json!({
+                "newly_staged": r.newly_staged,
+                "elapsed_secs": r.total_update_secs,
+            });
+        }
+        if cfg.ordinance_clone().join(".git").is_dir() {
+            let r = zmd::index_ordinances(&cfg, |_| {})?;
+            result["ordinances"] = json!({
+                "newly_staged": r.newly_staged,
+                "elapsed_secs": r.total_update_secs,
+            });
+        }
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         zmd::sync(&cfg)?;
@@ -1809,11 +1923,15 @@ fn cmd_zmd_status(as_json: bool) -> Result<()> {
             "repos": {
                 "laws": s.laws_repo,
                 "precedents": s.precedent_repo,
+                "admrules": s.admrule_repo,
+                "ordinances": s.ordinance_repo,
             },
             "staged": {
                 "laws": s.laws_staged,
                 "precedents": s.precedent_staged,
                 "precedent_total": s.precedent_total,
+                "admrules": s.admrules_staged,
+                "ordinances": s.ordinances_staged,
             },
             "zmd_status": s.zmd_status.trim(),
         });
@@ -1827,6 +1945,14 @@ fn cmd_zmd_status(as_json: bool) -> Result<()> {
         println!(
             "  precedents: {}",
             s.precedent_repo.as_deref().unwrap_or("not cloned")
+        );
+        println!(
+            "  admrules: {}",
+            s.admrule_repo.as_deref().unwrap_or("not cloned")
+        );
+        println!(
+            "  ordinances: {}",
+            s.ordinance_repo.as_deref().unwrap_or("not cloned")
         );
         println!();
         println!("=== Staged Files ===");
@@ -1842,6 +1968,16 @@ fn cmd_zmd_status(as_json: bool) -> Result<()> {
                 println!("  precedents/{label}: {count} files");
             }
             println!("  precedents total: {} files", s.precedent_total);
+        }
+        if s.admrules_staged > 0 {
+            println!("  admrules: {} files", s.admrules_staged);
+        } else {
+            println!("  admrules: not staged");
+        }
+        if s.ordinances_staged > 0 {
+            println!("  ordinances: {} files", s.ordinances_staged);
+        } else {
+            println!("  ordinances: not staged");
         }
         println!();
         println!("=== zmd ===");

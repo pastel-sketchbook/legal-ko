@@ -527,3 +527,169 @@ pub async fn load_precedent_content(client: &reqwest::Client, path: &str) -> Res
 
     Ok(content)
 }
+
+// ── Administrative rules (행정규칙) ──────────────────────────
+
+/// Build admrule entries by scanning all `본문.md` files in the local clone.
+///
+/// # Errors
+///
+/// Returns an error if the clone directory doesn't exist or can't be read.
+pub fn build_admrule_entries_from_clone() -> Result<Vec<crate::models::AdmruleEntry>> {
+    let clone_dir = zmd_clone_dir("admrule-kr")?;
+    if !clone_dir.join(".git").is_dir() {
+        anyhow::bail!(
+            "admrule-kr clone not found at {}. Run `legal-ko-cli zmd admrules` first.",
+            clone_dir.display()
+        );
+    }
+
+    info!("Building admrule entries from local clone");
+    let mut md_files = Vec::new();
+    collect_md_files(&clone_dir, &mut md_files)?;
+    md_files.retain(|p| p.file_name().is_some_and(|n| n == "본문.md"));
+
+    let entries: Vec<_> = md_files
+        .par_iter()
+        .filter_map(|path| {
+            let content = std::fs::read_to_string(path).ok()?;
+            let fm = parser::parse_frontmatter(&content);
+            let rel = path
+                .strip_prefix(&clone_dir)
+                .ok()?
+                .to_string_lossy()
+                .to_string();
+            let id = rel.strip_suffix(".md").unwrap_or(&rel).to_string();
+
+            let title = fm
+                .get("행정규칙명")
+                .map_or(String::new(), |v| v.as_str().to_string());
+            let rule_type = fm
+                .get("행정규칙종류")
+                .map_or(String::new(), |v| v.as_str().to_string());
+            let agency = fm
+                .get("소관부처명")
+                .map_or(String::new(), |v| v.as_str().to_string());
+            let date = fm
+                .get("발령일자")
+                .map_or(String::new(), |v| v.as_str().to_string());
+
+            Some(crate::models::AdmruleEntry {
+                id,
+                title,
+                rule_type,
+                agency,
+                date,
+                path: rel,
+            })
+        })
+        .collect();
+
+    info!(
+        count = entries.len(),
+        "Built admrule entries from local clone"
+    );
+    Ok(entries)
+}
+
+/// Load admrule content from local clone.
+///
+/// # Errors
+///
+/// Returns an error if the file doesn't exist.
+pub fn load_admrule_content(path: &str) -> Result<String> {
+    let clone_dir = zmd_clone_dir("admrule-kr")?;
+    let full = clone_dir.join(path);
+    std::fs::read_to_string(&full)
+        .with_context(|| format!("Failed to read admrule {}", full.display()))
+}
+
+// ── Local ordinances (자치법규) ──────────────────────────────
+
+/// Build ordinance entries by scanning all `본문.md` files in the local clone.
+///
+/// # Errors
+///
+/// Returns an error if the clone directory doesn't exist or can't be read.
+pub fn build_ordinance_entries_from_clone() -> Result<Vec<crate::models::OrdinanceEntry>> {
+    let clone_dir = zmd_clone_dir("ordinance-kr")?;
+    if !clone_dir.join(".git").is_dir() {
+        anyhow::bail!(
+            "ordinance-kr clone not found at {}. Run `legal-ko-cli zmd ordinances` first.",
+            clone_dir.display()
+        );
+    }
+
+    info!("Building ordinance entries from local clone");
+    let mut md_files = Vec::new();
+    collect_md_files(&clone_dir, &mut md_files)?;
+    md_files.retain(|p| p.file_name().is_some_and(|n| n == "본문.md"));
+
+    let entries: Vec<_> = md_files
+        .par_iter()
+        .filter_map(|path| {
+            let content = std::fs::read_to_string(path).ok()?;
+            let fm = parser::parse_frontmatter(&content);
+            let rel = path
+                .strip_prefix(&clone_dir)
+                .ok()?
+                .to_string_lossy()
+                .to_string();
+            let id = rel.strip_suffix(".md").unwrap_or(&rel).to_string();
+
+            let title = fm
+                .get("자치법규명")
+                .map_or(String::new(), |v| v.as_str().to_string());
+            let rule_type = fm
+                .get("자치법규종류")
+                .map_or(String::new(), |v| v.as_str().to_string());
+            let government = fm
+                .get("지자체기관명")
+                .map_or(String::new(), |v| v.as_str().to_string());
+            let region = fm
+                .get("지자체구분.광역")
+                .map_or(String::new(), |v| v.as_str().to_string());
+            let date = fm
+                .get("공포일자")
+                .map_or(String::new(), |v| v.as_str().to_string());
+
+            Some(crate::models::OrdinanceEntry {
+                id,
+                title,
+                rule_type,
+                government,
+                region,
+                date,
+                path: rel,
+            })
+        })
+        .collect();
+
+    info!(
+        count = entries.len(),
+        "Built ordinance entries from local clone"
+    );
+    Ok(entries)
+}
+
+/// Load ordinance content from local clone.
+///
+/// # Errors
+///
+/// Returns an error if the file doesn't exist.
+pub fn load_ordinance_content(path: &str) -> Result<String> {
+    let clone_dir = zmd_clone_dir("ordinance-kr")?;
+    let full = clone_dir.join(path);
+    std::fs::read_to_string(&full)
+        .with_context(|| format!("Failed to read ordinance {}", full.display()))
+}
+
+/// Resolve the zmd clone directory for a given repo name.
+fn zmd_clone_dir(repo_name: &str) -> Result<std::path::PathBuf> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .context("Cannot determine home directory")?;
+    Ok(std::path::PathBuf::from(home)
+        .join(".cache/legal-ko/zmd/repos")
+        .join(repo_name))
+}

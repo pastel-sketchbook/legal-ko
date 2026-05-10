@@ -357,6 +357,152 @@ pub struct LawDetail {
     pub articles: Vec<ArticleRef>,
 }
 
+// ── Administrative rule types (행정규칙) ─────────────────────
+
+/// Sort order for administrative rule entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AdmruleSortOrder {
+    /// Sort by title (행정규칙명)
+    #[default]
+    Title,
+    /// Sort by promulgation date (발령일자), newest first
+    Date,
+}
+
+impl AdmruleSortOrder {
+    #[must_use]
+    pub fn next(self) -> Self {
+        match self {
+            Self::Title => Self::Date,
+            Self::Date => Self::Title,
+        }
+    }
+
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Title => "title",
+            Self::Date => "date",
+        }
+    }
+}
+
+/// A single administrative rule entry for display in list views.
+#[derive(Debug, Clone, Serialize)]
+pub struct AdmruleEntry {
+    /// Path-derived ID (relative path without .md, e.g. "행정안전부/_본부/고시/공공데이터 관리지침/본문")
+    pub id: String,
+    /// Rule name (행정규칙명)
+    pub title: String,
+    /// Rule type (행정규칙종류: 고시, 훈령, 예규, etc.)
+    pub rule_type: String,
+    /// Governing agency (소관부처명)
+    pub agency: String,
+    /// Promulgation date (발령일자)
+    pub date: String,
+    /// Raw file path in the repo
+    pub path: String,
+}
+
+/// Parsed admrule detail content.
+#[derive(Debug, Clone)]
+pub struct AdmruleDetail {
+    /// The admrule entry metadata
+    pub entry: AdmruleEntry,
+    /// Raw markdown content (frontmatter stripped)
+    pub raw_markdown: String,
+}
+
+/// Sort admrule entries in-place.
+pub fn sort_admrule_entries(entries: &mut [AdmruleEntry], order: AdmruleSortOrder) {
+    match order {
+        AdmruleSortOrder::Title => {
+            entries.sort_by(|a, b| a.title.cmp(&b.title));
+        }
+        AdmruleSortOrder::Date => {
+            entries.sort_by(|a, b| {
+                let da = if a.date.is_empty() { "" } else { &a.date };
+                let db = if b.date.is_empty() { "" } else { &b.date };
+                db.cmp(da).then_with(|| a.title.cmp(&b.title))
+            });
+        }
+    }
+}
+
+// ── Local ordinance types (자치법규) ─────────────────────────
+
+/// Sort order for ordinance entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OrdinanceSortOrder {
+    /// Sort by title (자치법규명)
+    #[default]
+    Title,
+    /// Sort by promulgation date (공포일자), newest first
+    Date,
+}
+
+impl OrdinanceSortOrder {
+    #[must_use]
+    pub fn next(self) -> Self {
+        match self {
+            Self::Title => Self::Date,
+            Self::Date => Self::Title,
+        }
+    }
+
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Title => "title",
+            Self::Date => "date",
+        }
+    }
+}
+
+/// A single ordinance entry for display in list views.
+#[derive(Debug, Clone, Serialize)]
+pub struct OrdinanceEntry {
+    /// Path-derived ID (relative path without .md)
+    pub id: String,
+    /// Ordinance name (자치법규명)
+    pub title: String,
+    /// Ordinance type (자치법규종류: 조례, 규칙, etc.)
+    pub rule_type: String,
+    /// Local government name (지자체기관명)
+    pub government: String,
+    /// Metropolitan area (광역)
+    pub region: String,
+    /// Promulgation date (공포일자)
+    pub date: String,
+    /// Raw file path in the repo
+    pub path: String,
+}
+
+/// Parsed ordinance detail content.
+#[derive(Debug, Clone)]
+pub struct OrdinanceDetail {
+    /// The ordinance entry metadata
+    pub entry: OrdinanceEntry,
+    /// Raw markdown content (frontmatter stripped)
+    pub raw_markdown: String,
+}
+
+/// Sort ordinance entries in-place.
+pub fn sort_ordinance_entries(entries: &mut [OrdinanceEntry], order: OrdinanceSortOrder) {
+    match order {
+        OrdinanceSortOrder::Title => {
+            entries.sort_by(|a, b| a.title.cmp(&b.title));
+        }
+        OrdinanceSortOrder::Date => {
+            entries.sort_by(|a, b| {
+                let da = if a.date.is_empty() { "" } else { &a.date };
+                let db = if b.date.is_empty() { "" } else { &b.date };
+                db.cmp(da).then_with(|| a.title.cmp(&b.title))
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

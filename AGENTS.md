@@ -101,7 +101,9 @@ crates/
 - `legal-ko-cli precedent-search-person <name> [--role judge|attorney|prosecutor] [--case-type X] [--court X] [--json] [--limit N]` — search precedents by 법조인 name; uses cached person index (~/.cache/legal-ko/person_index.json) for instant repeat lookups, builds index concurrently on first run
 - `legal-ko-cli zmd laws [--json]` — clone/pull legalize-kr, stage 법률.md files via hardlinks, run `zmd update`
 - `legal-ko-cli zmd precedents [--case-type X] [--court X] [--json]` — clone/pull precedent-kr, stage precedent files, run `zmd update`
-- `legal-ko-cli zmd all [--json]` — run both laws and precedents phases
+- `legal-ko-cli zmd all [--json]` — run all phases (laws, precedents, admrules, ordinances)
+- `legal-ko-cli zmd admrules [--json]` — clone/pull admrule-kr, stage 본문.md files via hardlinks, run `zmd update`
+- `legal-ko-cli zmd ordinances [--json]` — clone/pull ordinance-kr, stage 본문.md files via hardlinks, run `zmd update`
 - `legal-ko-cli zmd sync [--json]` — pull latest from upstream repos and re-index
 - `legal-ko-cli zmd status [--json]` — show repos, staged files, zmd collections
 - `legal-ko-cli zmd reset [--json]` — remove collections and staged data (keeps repo clones)

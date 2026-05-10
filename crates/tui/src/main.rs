@@ -307,6 +307,10 @@ fn handle_key_event(app: &mut App, key: KeyEvent, terminal_height: usize) {
         View::Detail => handle_detail_key(app, key, terminal_height),
         View::PrecedentList => handle_precedent_list_key(app, key, terminal_height),
         View::PrecedentDetail => handle_precedent_detail_key(app, key, terminal_height),
+        View::AdmruleList => handle_admrule_list_key(app, key, terminal_height),
+        View::AdmruleDetail => handle_admrule_detail_key(app, key, terminal_height),
+        View::OrdinanceList => handle_ordinance_list_key(app, key, terminal_height),
+        View::OrdinanceDetail => handle_ordinance_detail_key(app, key, terminal_height),
     }
     app.sync_context();
 }
@@ -351,13 +355,8 @@ fn handle_list_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
                 app.jump_to_law_precedents(&entry.title);
             }
         }
-        KeyCode::Tab | KeyCode::BackTab => {
-            if app.precedents_loaded {
-                app.view = View::PrecedentList;
-            } else {
-                app.status_message = Some("Precedents still loading...".to_string());
-            }
-        }
+        KeyCode::Tab => app.next_tab(),
+        KeyCode::BackTab => app.prev_tab(),
         KeyCode::Char('?') => app.popup = Popup::Help,
         KeyCode::Char('v') => app.toggle_split_view(),
         KeyCode::Esc => {
@@ -452,9 +451,8 @@ fn handle_precedent_list_key(app: &mut App, key: KeyEvent, terminal_height: usiz
         KeyCode::Char('S') => app.toggle_precedent_sort(),
         KeyCode::Char('t') => app.next_theme(),
         KeyCode::Char('o') => app.open_agent_picker(),
-        KeyCode::Tab | KeyCode::BackTab => {
-            app.view = View::List;
-        }
+        KeyCode::Tab => app.next_tab(),
+        KeyCode::BackTab => app.prev_tab(),
         KeyCode::Char('?') => app.popup = Popup::Help,
         KeyCode::Esc => {
             if app.precedent_search_query.is_empty() {
@@ -496,6 +494,132 @@ fn handle_precedent_detail_key(app: &mut App, key: KeyEvent, terminal_height: us
     }
 }
 
+fn handle_admrule_list_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
+    let page_size = terminal_height.saturating_sub(4);
+
+    match key.code {
+        KeyCode::Char('q') => app.should_quit = true,
+        KeyCode::Char('j') | KeyCode::Down => app.admrule_list_move_down(),
+        KeyCode::Char('k') | KeyCode::Up => app.admrule_list_move_up(),
+        KeyCode::Char('g') | KeyCode::Home => app.admrule_list_top(),
+        KeyCode::Char('G') | KeyCode::End => app.admrule_list_bottom(),
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.admrule_list_page_down(page_size);
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.admrule_list_page_up(page_size);
+        }
+        KeyCode::PageDown => app.admrule_list_page_down(page_size),
+        KeyCode::PageUp => app.admrule_list_page_up(page_size),
+        KeyCode::Enter => app.open_selected_admrule(),
+        KeyCode::Char('/') => app.start_search(),
+        KeyCode::Char('c') => app.open_admrule_type_filter(),
+        KeyCode::Char('d') => app.open_admrule_agency_filter(),
+        KeyCode::Char('S') => app.toggle_admrule_sort(),
+        KeyCode::Char('t') => app.next_theme(),
+        KeyCode::Char('o') => app.open_agent_picker(),
+        KeyCode::Tab => app.next_tab(),
+        KeyCode::BackTab => app.prev_tab(),
+        KeyCode::Char('?') => app.popup = Popup::Help,
+        KeyCode::Esc => {
+            if app.admrule_search_query.is_empty() {
+                app.go_back();
+            } else {
+                app.clear_search();
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_admrule_detail_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
+    let page_size = terminal_height.saturating_sub(2);
+
+    match key.code {
+        KeyCode::Char('q') | KeyCode::Esc => app.go_back(),
+        KeyCode::Char('j') | KeyCode::Down => app.admrule_detail_scroll_down(1),
+        KeyCode::Char('k') | KeyCode::Up => app.admrule_detail_scroll_up(1),
+        KeyCode::Char('g') | KeyCode::Home => app.admrule_detail_top(),
+        KeyCode::Char('G') | KeyCode::End => app.admrule_detail_bottom(),
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.admrule_detail_scroll_down(page_size);
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.admrule_detail_scroll_up(page_size);
+        }
+        KeyCode::PageDown => app.admrule_detail_scroll_down(page_size),
+        KeyCode::PageUp => app.admrule_detail_scroll_up(page_size),
+        KeyCode::Char('E') => app.export_admrule(),
+        KeyCode::Char('t') => app.next_theme(),
+        KeyCode::Char('o') => app.open_agent_picker(),
+        KeyCode::Char('?') => app.popup = Popup::Help,
+        _ => {}
+    }
+}
+
+fn handle_ordinance_list_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
+    let page_size = terminal_height.saturating_sub(4);
+
+    match key.code {
+        KeyCode::Char('q') => app.should_quit = true,
+        KeyCode::Char('j') | KeyCode::Down => app.ordinance_list_move_down(),
+        KeyCode::Char('k') | KeyCode::Up => app.ordinance_list_move_up(),
+        KeyCode::Char('g') | KeyCode::Home => app.ordinance_list_top(),
+        KeyCode::Char('G') | KeyCode::End => app.ordinance_list_bottom(),
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.ordinance_list_page_down(page_size);
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.ordinance_list_page_up(page_size);
+        }
+        KeyCode::PageDown => app.ordinance_list_page_down(page_size),
+        KeyCode::PageUp => app.ordinance_list_page_up(page_size),
+        KeyCode::Enter => app.open_selected_ordinance(),
+        KeyCode::Char('/') => app.start_search(),
+        KeyCode::Char('c') => app.open_ordinance_type_filter(),
+        KeyCode::Char('d') => app.open_ordinance_region_filter(),
+        KeyCode::Char('S') => app.toggle_ordinance_sort(),
+        KeyCode::Char('t') => app.next_theme(),
+        KeyCode::Char('o') => app.open_agent_picker(),
+        KeyCode::Tab => app.next_tab(),
+        KeyCode::BackTab => app.prev_tab(),
+        KeyCode::Char('?') => app.popup = Popup::Help,
+        KeyCode::Esc => {
+            if app.ordinance_search_query.is_empty() {
+                app.go_back();
+            } else {
+                app.clear_search();
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_ordinance_detail_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
+    let page_size = terminal_height.saturating_sub(2);
+
+    match key.code {
+        KeyCode::Char('q') | KeyCode::Esc => app.go_back(),
+        KeyCode::Char('j') | KeyCode::Down => app.ordinance_detail_scroll_down(1),
+        KeyCode::Char('k') | KeyCode::Up => app.ordinance_detail_scroll_up(1),
+        KeyCode::Char('g') | KeyCode::Home => app.ordinance_detail_top(),
+        KeyCode::Char('G') | KeyCode::End => app.ordinance_detail_bottom(),
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.ordinance_detail_scroll_down(page_size);
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.ordinance_detail_scroll_up(page_size);
+        }
+        KeyCode::PageDown => app.ordinance_detail_scroll_down(page_size),
+        KeyCode::PageUp => app.ordinance_detail_scroll_up(page_size),
+        KeyCode::Char('E') => app.export_ordinance(),
+        KeyCode::Char('t') => app.next_theme(),
+        KeyCode::Char('o') => app.open_agent_picker(),
+        KeyCode::Char('?') => app.popup = Popup::Help,
+        _ => {}
+    }
+}
+
 fn handle_search_key(app: &mut App, key: KeyEvent) {
     match key.code {
         // Esc/Enter preserve the buffer (Korean IMEs commit the trailing
@@ -503,34 +627,30 @@ fn handle_search_key(app: &mut App, key: KeyEvent) {
         KeyCode::Esc | KeyCode::Enter => app.finish_search(),
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => app.clear_search(),
         KeyCode::Backspace => app.search_pop_char(),
-        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if app.view == View::PrecedentList {
-                app.precedent_list_move_down();
-            } else {
-                app.list_move_down();
-            }
-        }
-        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if app.view == View::PrecedentList {
-                app.precedent_list_move_up();
-            } else {
-                app.list_move_up();
-            }
-        }
-        KeyCode::Down => {
-            if app.view == View::PrecedentList {
-                app.precedent_list_move_down();
-            } else {
-                app.list_move_down();
-            }
-        }
-        KeyCode::Up => {
-            if app.view == View::PrecedentList {
-                app.precedent_list_move_up();
-            } else {
-                app.list_move_up();
-            }
-        }
+        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => match app.view {
+            View::PrecedentList => app.precedent_list_move_down(),
+            View::AdmruleList => app.admrule_list_move_down(),
+            View::OrdinanceList => app.ordinance_list_move_down(),
+            _ => app.list_move_down(),
+        },
+        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => match app.view {
+            View::PrecedentList => app.precedent_list_move_up(),
+            View::AdmruleList => app.admrule_list_move_up(),
+            View::OrdinanceList => app.ordinance_list_move_up(),
+            _ => app.list_move_up(),
+        },
+        KeyCode::Down => match app.view {
+            View::PrecedentList => app.precedent_list_move_down(),
+            View::AdmruleList => app.admrule_list_move_down(),
+            View::OrdinanceList => app.ordinance_list_move_down(),
+            _ => app.list_move_down(),
+        },
+        KeyCode::Up => match app.view {
+            View::PrecedentList => app.precedent_list_move_up(),
+            View::AdmruleList => app.admrule_list_move_up(),
+            View::OrdinanceList => app.ordinance_list_move_up(),
+            _ => app.list_move_up(),
+        },
         KeyCode::Char(c) => app.search_push_char(c),
         _ => {}
     }

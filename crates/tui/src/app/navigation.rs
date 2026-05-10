@@ -193,6 +193,43 @@ impl App {
         }
     }
 
+    // ── Tab cycling ────────────────────────────────────────────
+
+    /// Cycle forward: List → PrecedentList → AdmruleList → OrdinanceList → List
+    pub fn next_tab(&mut self) {
+        let tabs = self.available_tabs();
+        if tabs.len() <= 1 {
+            return;
+        }
+        let current = tabs.iter().position(|v| *v == self.view).unwrap_or(0);
+        self.view = tabs[(current + 1) % tabs.len()].clone();
+    }
+
+    /// Cycle backward: List ← PrecedentList ← AdmruleList ← OrdinanceList ← List
+    pub fn prev_tab(&mut self) {
+        let tabs = self.available_tabs();
+        if tabs.len() <= 1 {
+            return;
+        }
+        let current = tabs.iter().position(|v| *v == self.view).unwrap_or(0);
+        self.view = tabs[(current + tabs.len() - 1) % tabs.len()].clone();
+    }
+
+    /// Build the ordered list of available list-level tabs.
+    fn available_tabs(&self) -> Vec<View> {
+        let mut tabs = vec![View::List];
+        if self.precedents_loaded {
+            tabs.push(View::PrecedentList);
+        }
+        if self.admrules_loaded {
+            tabs.push(View::AdmruleList);
+        }
+        if self.ordinances_loaded {
+            tabs.push(View::OrdinanceList);
+        }
+        tabs
+    }
+
     // ── Back navigation ───────────────────────────────────────
 
     pub fn go_back(&mut self) {
@@ -214,9 +251,138 @@ impl App {
             View::PrecedentList => {
                 self.view = View::List;
             }
+            View::AdmruleDetail => {
+                self.view = View::AdmruleList;
+                self.admrule_detail = None;
+                self.admrule_detail_scroll = 0;
+                self.admrule_detail_rendered_lines.clear();
+            }
+            View::AdmruleList => {
+                self.view = View::List;
+            }
+            View::OrdinanceDetail => {
+                self.view = View::OrdinanceList;
+                self.ordinance_detail = None;
+                self.ordinance_detail_scroll = 0;
+                self.ordinance_detail_rendered_lines.clear();
+            }
+            View::OrdinanceList => {
+                self.view = View::List;
+            }
             View::List | View::Loading => {
                 self.should_quit = true;
             }
         }
+    }
+
+    // ── Admrule list navigation ───────────────────────────────
+
+    pub fn admrule_list_move_down(&mut self) {
+        if !self.admrule_filtered_indices.is_empty()
+            && self.admrule_list_selected < self.admrule_filtered_indices.len().saturating_sub(1)
+        {
+            self.admrule_list_selected += 1;
+        }
+    }
+
+    pub fn admrule_list_move_up(&mut self) {
+        self.admrule_list_selected = self.admrule_list_selected.saturating_sub(1);
+    }
+
+    pub fn admrule_list_page_down(&mut self, page_size: usize) {
+        if self.admrule_filtered_indices.is_empty() {
+            return;
+        }
+        self.admrule_list_selected = (self.admrule_list_selected + page_size)
+            .min(self.admrule_filtered_indices.len().saturating_sub(1));
+    }
+
+    pub fn admrule_list_page_up(&mut self, page_size: usize) {
+        self.admrule_list_selected = self.admrule_list_selected.saturating_sub(page_size);
+    }
+
+    pub fn admrule_list_top(&mut self) {
+        self.admrule_list_selected = 0;
+    }
+
+    pub fn admrule_list_bottom(&mut self) {
+        if !self.admrule_filtered_indices.is_empty() {
+            self.admrule_list_selected = self.admrule_filtered_indices.len().saturating_sub(1);
+        }
+    }
+
+    // ── Admrule detail navigation ─────────────────────────────
+
+    pub fn admrule_detail_scroll_down(&mut self, amount: usize) {
+        self.admrule_detail_scroll = (self.admrule_detail_scroll + amount)
+            .min(self.admrule_detail_lines_count.saturating_sub(1));
+    }
+
+    pub fn admrule_detail_scroll_up(&mut self, amount: usize) {
+        self.admrule_detail_scroll = self.admrule_detail_scroll.saturating_sub(amount);
+    }
+
+    pub fn admrule_detail_top(&mut self) {
+        self.admrule_detail_scroll = 0;
+    }
+
+    pub fn admrule_detail_bottom(&mut self) {
+        self.admrule_detail_scroll = self.admrule_detail_lines_count.saturating_sub(1);
+    }
+
+    // ── Ordinance list navigation ─────────────────────────────
+
+    pub fn ordinance_list_move_down(&mut self) {
+        if !self.ordinance_filtered_indices.is_empty()
+            && self.ordinance_list_selected
+                < self.ordinance_filtered_indices.len().saturating_sub(1)
+        {
+            self.ordinance_list_selected += 1;
+        }
+    }
+
+    pub fn ordinance_list_move_up(&mut self) {
+        self.ordinance_list_selected = self.ordinance_list_selected.saturating_sub(1);
+    }
+
+    pub fn ordinance_list_page_down(&mut self, page_size: usize) {
+        if self.ordinance_filtered_indices.is_empty() {
+            return;
+        }
+        self.ordinance_list_selected = (self.ordinance_list_selected + page_size)
+            .min(self.ordinance_filtered_indices.len().saturating_sub(1));
+    }
+
+    pub fn ordinance_list_page_up(&mut self, page_size: usize) {
+        self.ordinance_list_selected = self.ordinance_list_selected.saturating_sub(page_size);
+    }
+
+    pub fn ordinance_list_top(&mut self) {
+        self.ordinance_list_selected = 0;
+    }
+
+    pub fn ordinance_list_bottom(&mut self) {
+        if !self.ordinance_filtered_indices.is_empty() {
+            self.ordinance_list_selected = self.ordinance_filtered_indices.len().saturating_sub(1);
+        }
+    }
+
+    // ── Ordinance detail navigation ───────────────────────────
+
+    pub fn ordinance_detail_scroll_down(&mut self, amount: usize) {
+        self.ordinance_detail_scroll = (self.ordinance_detail_scroll + amount)
+            .min(self.ordinance_detail_lines_count.saturating_sub(1));
+    }
+
+    pub fn ordinance_detail_scroll_up(&mut self, amount: usize) {
+        self.ordinance_detail_scroll = self.ordinance_detail_scroll.saturating_sub(amount);
+    }
+
+    pub fn ordinance_detail_top(&mut self) {
+        self.ordinance_detail_scroll = 0;
+    }
+
+    pub fn ordinance_detail_bottom(&mut self) {
+        self.ordinance_detail_scroll = self.ordinance_detail_lines_count.saturating_sub(1);
     }
 }

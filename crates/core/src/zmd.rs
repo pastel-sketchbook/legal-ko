@@ -18,9 +18,13 @@
 //!   repos/
 //!     legalize-kr/    ← shallow clone of the laws repo
 //!     precedent-kr/   ← shallow clone of the precedents repo
+//!     admrule-kr/     ← shallow clone of the administrative rules repo
+//!     ordinance-kr/   ← shallow clone of the ordinances repo
 //!   stage/
 //!     laws/           ← hardlinks to legalize-kr .md files (registered with zmd)
 //!     precedents/     ← hardlinks to precedent-kr .md files (registered with zmd)
+//!     admrules/       ← hardlinks to admrule-kr 본문.md files (registered with zmd)
+//!     ordinances/     ← hardlinks to ordinance-kr 본문.md files (registered with zmd)
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -57,6 +61,8 @@ fn spinner(msg: &str) -> ProgressBar {
 
 const LAWS_REPO: &str = "https://github.com/legalize-kr/legalize-kr.git";
 const PRECEDENT_REPO: &str = "https://github.com/legalize-kr/precedent-kr.git";
+const ADMRULE_REPO: &str = "https://github.com/legalize-kr/admrule-kr.git";
+const ORDINANCE_REPO: &str = "https://github.com/legalize-kr/ordinance-kr.git";
 
 /// Default case types to index for precedents.
 const DEFAULT_CASE_TYPES: &[&str] = &["민사", "형사"];
@@ -116,7 +122,10 @@ impl ZmdConfig {
                 .iter()
                 .map(|s| (*s).to_string())
                 .collect(),
-            court_levels: DEFAULT_COURT_LEVELS.iter().map(|s| (*s).to_string()).collect(),
+            court_levels: DEFAULT_COURT_LEVELS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
             batch_size,
             skip_pull: false,
         })
@@ -150,6 +159,26 @@ impl ZmdConfig {
 
     fn precedent_stage(&self) -> PathBuf {
         self.stage_dir().join("precedents")
+    }
+
+    /// Path to the cloned admrule repo.
+    #[must_use]
+    pub fn admrule_clone(&self) -> PathBuf {
+        self.repos_dir().join("admrule-kr")
+    }
+
+    /// Path to the cloned ordinance repo.
+    #[must_use]
+    pub fn ordinance_clone(&self) -> PathBuf {
+        self.repos_dir().join("ordinance-kr")
+    }
+
+    fn admrule_stage(&self) -> PathBuf {
+        self.stage_dir().join("admrules")
+    }
+
+    fn ordinance_stage(&self) -> PathBuf {
+        self.stage_dir().join("ordinances")
     }
 }
 
@@ -206,12 +235,20 @@ pub struct ZmdStatus {
     pub laws_repo: Option<String>,
     /// Precedent repo state.
     pub precedent_repo: Option<String>,
+    /// Admrule repo state.
+    pub admrule_repo: Option<String>,
+    /// Ordinance repo state.
+    pub ordinance_repo: Option<String>,
     /// Staged law file count.
     pub laws_staged: usize,
-    /// Staged precedent file count by `case_type/court`.
+    /// Staged precedent file count by `case_type/court_level`.
     pub precedent_staged: Vec<(String, usize)>,
     /// Precedent total staged.
     pub precedent_total: usize,
+    /// Staged admrule file count.
+    pub admrules_staged: usize,
+    /// Staged ordinance file count.
+    pub ordinances_staged: usize,
     /// Raw `zmd collection list` output.
     pub collections: String,
     /// Raw `zmd status` output.
@@ -349,7 +386,10 @@ fn collect_md_files(src_root: &Path, pattern: &FilePattern<'_>) -> Vec<PathBuf> 
                 }
             }
         }
-        FilePattern::Precedents { case_type, court_level } => {
+        FilePattern::Precedents {
+            case_type,
+            court_level,
+        } => {
             let dir = src_root.join(case_type).join(court_level);
             if dir.is_dir()
                 && let Ok(entries) = std::fs::read_dir(&dir)
@@ -365,6 +405,25 @@ fn collect_md_files(src_root: &Path, pattern: &FilePattern<'_>) -> Vec<PathBuf> 
                 }
             }
         }
+        FilePattern::RecursiveLeaf { leaf } => {
+            // Walk the entire tree looking for files named `leaf` (e.g. "본문.md").
+            // Skip .git directory. Uses a manual stack to avoid external deps.
+            let mut stack = vec![src_root.to_path_buf()];
+            while let Some(dir) = stack.pop() {
+                if let Ok(entries) = std::fs::read_dir(&dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
+                            if path.file_name().is_some_and(|n| n != ".git") {
+                                stack.push(path);
+                            }
+                        } else if path.file_name().is_some_and(|n| n == leaf) {
+                            files.push(path);
+                        }
+                    }
+                }
+            }
+        }
     }
     files.sort();
     files
@@ -373,7 +432,14 @@ fn collect_md_files(src_root: &Path, pattern: &FilePattern<'_>) -> Vec<PathBuf> 
 /// File-finding patterns.
 enum FilePattern<'a> {
     Laws,
-    Precedents { case_type: &'a str, court_level: &'a str },
+    Precedents {
+        case_type: &'a str,
+        court_level: &'a str,
+    },
+    /// Recursively find all files named `leaf` under `src_root`.
+    RecursiveLeaf {
+        leaf: &'a str,
+    },
 }
 
 // ── Batched stage + index ────────────────────────────────────
@@ -850,7 +916,10 @@ where
         for court_level in &cfg.court_levels {
             let files = collect_md_files(
                 &cfg.precedent_clone(),
-                &FilePattern::Precedents { case_type, court_level },
+                &FilePattern::Precedents {
+                    case_type,
+                    court_level,
+                },
             );
 
             if files.is_empty() {
@@ -904,13 +973,85 @@ where
     })
 }
 
+/// Index administrative rule files (행정규칙) into zmd.
+///
+/// Clones/pulls `admrule-kr`, recursively finds all `본문.md` files,
+/// and stages them in batches.
+///
+/// # Errors
+///
+/// Returns an error if zmd is not installed, git operations fail, or
+/// staging/indexing encounters an I/O error.
+pub fn index_admrules<F>(cfg: &ZmdConfig, on_batch: F) -> Result<IndexResult>
+where
+    F: FnMut(&BatchProgress),
+{
+    clone_or_pull(
+        ADMRULE_REPO,
+        &cfg.admrule_clone(),
+        "admrule-kr (행정규칙)",
+        cfg.skip_pull,
+    )?;
+
+    let files = collect_md_files(
+        &cfg.admrule_clone(),
+        &FilePattern::RecursiveLeaf { leaf: "본문.md" },
+    );
+    info!(count = files.len(), "Found 행정규칙 본문.md files");
+
+    stage_and_index_batched(
+        &files,
+        &cfg.admrule_clone(),
+        &cfg.admrule_stage(),
+        "admrules",
+        cfg.batch_size,
+        on_batch,
+    )
+}
+
+/// Index local ordinance files (자치법규) into zmd.
+///
+/// Clones/pulls `ordinance-kr`, recursively finds all `본문.md` files,
+/// and stages them in batches.
+///
+/// # Errors
+///
+/// Returns an error if zmd is not installed, git operations fail, or
+/// staging/indexing encounters an I/O error.
+pub fn index_ordinances<F>(cfg: &ZmdConfig, on_batch: F) -> Result<IndexResult>
+where
+    F: FnMut(&BatchProgress),
+{
+    clone_or_pull(
+        ORDINANCE_REPO,
+        &cfg.ordinance_clone(),
+        "ordinance-kr (자치법규)",
+        cfg.skip_pull,
+    )?;
+
+    let files = collect_md_files(
+        &cfg.ordinance_clone(),
+        &FilePattern::RecursiveLeaf { leaf: "본문.md" },
+    );
+    info!(count = files.len(), "Found 자치법규 본문.md files");
+
+    stage_and_index_batched(
+        &files,
+        &cfg.ordinance_clone(),
+        &cfg.ordinance_stage(),
+        "ordinances",
+        cfg.batch_size,
+        on_batch,
+    )
+}
+
 /// Run both laws and precedents indexing.
 ///
 /// # Errors
 ///
 /// Returns an error if git operations fail or any indexing phase fails.
 pub fn index_all(cfg: &ZmdConfig) -> Result<()> {
-    info!("Phase 1/2: Laws (법률 only)");
+    info!("Phase 1/4: Laws (법률)");
     let law_result = index_laws(cfg, |bp| {
         if bp.batch_num > 0 {
             info!(
@@ -930,7 +1071,7 @@ pub fn index_all(cfg: &ZmdConfig) -> Result<()> {
         "Laws done",
     );
 
-    info!("Phase 2/2: Precedents");
+    info!("Phase 2/4: Precedents (판례)");
     let prec_result = index_precedents(
         cfg,
         |ct, court, count| {
@@ -950,15 +1091,49 @@ pub fn index_all(cfg: &ZmdConfig) -> Result<()> {
             }
         },
     )?;
-
-    let total_new = prec_result.summary.newly_staged;
-    let total_files = prec_result.summary.total_files;
-    let total_secs = prec_result.summary.total_update_secs;
     info!(
-        total_files,
-        total_new,
-        secs = format!("{total_secs:.0}"),
+        total_files = prec_result.summary.total_files,
+        total_new = prec_result.summary.newly_staged,
+        secs = format!("{:.0}", prec_result.summary.total_update_secs),
         "Precedents done",
+    );
+
+    info!("Phase 3/4: Administrative rules (행정규칙)");
+    let admrule_result = index_admrules(cfg, |bp| {
+        if bp.batch_num > 0 {
+            info!(
+                batch = bp.batch_num,
+                new = bp.batch_new,
+                staged = bp.total_staged,
+                secs = format!("{:.0}", bp.update_secs),
+                "admrules batch complete",
+            );
+        }
+    })?;
+    info!(
+        total = admrule_result.total_files,
+        new = admrule_result.newly_staged,
+        secs = format!("{:.0}", admrule_result.total_update_secs),
+        "Administrative rules done",
+    );
+
+    info!("Phase 4/4: Ordinances (자치법규)");
+    let ordinance_result = index_ordinances(cfg, |bp| {
+        if bp.batch_num > 0 {
+            info!(
+                batch = bp.batch_num,
+                new = bp.batch_new,
+                staged = bp.total_staged,
+                secs = format!("{:.0}", bp.update_secs),
+                "ordinances batch complete",
+            );
+        }
+    })?;
+    info!(
+        total = ordinance_result.total_files,
+        new = ordinance_result.newly_staged,
+        secs = format!("{:.0}", ordinance_result.total_update_secs),
+        "Ordinances done",
     );
 
     Ok(())
@@ -1016,6 +1191,44 @@ pub fn sync(cfg: &ZmdConfig) -> Result<()> {
         );
     }
 
+    if cfg.admrule_clone().join(".git").is_dir() {
+        info!("Syncing admrules...");
+        let result = index_admrules(cfg, |bp| {
+            if bp.batch_new > 0 {
+                info!(
+                    batch = bp.batch_num,
+                    new = bp.batch_new,
+                    secs = format!("{:.0}", bp.update_secs),
+                    "sync admrules batch",
+                );
+            }
+        })?;
+        info!(
+            new = result.newly_staged,
+            secs = format!("{:.0}", result.total_update_secs),
+            "Admrules sync complete",
+        );
+    }
+
+    if cfg.ordinance_clone().join(".git").is_dir() {
+        info!("Syncing ordinances...");
+        let result = index_ordinances(cfg, |bp| {
+            if bp.batch_new > 0 {
+                info!(
+                    batch = bp.batch_num,
+                    new = bp.batch_new,
+                    secs = format!("{:.0}", bp.update_secs),
+                    "sync ordinances batch",
+                );
+            }
+        })?;
+        info!(
+            new = result.newly_staged,
+            secs = format!("{:.0}", result.total_update_secs),
+            "Ordinances sync complete",
+        );
+    }
+
     Ok(())
 }
 
@@ -1042,9 +1255,13 @@ pub fn status(cfg: &ZmdConfig) -> Result<ZmdStatus> {
     Ok(ZmdStatus {
         laws_repo: repo_commit_summary(&cfg.laws_clone()),
         precedent_repo: repo_commit_summary(&cfg.precedent_clone()),
+        admrule_repo: repo_commit_summary(&cfg.admrule_clone()),
+        ordinance_repo: repo_commit_summary(&cfg.ordinance_clone()),
         laws_staged: count_md_files(&cfg.laws_stage()),
         precedent_staged,
         precedent_total,
+        admrules_staged: count_md_files(&cfg.admrule_stage()),
+        ordinances_staged: count_md_files(&cfg.ordinance_stage()),
         collections: run_zmd_collection_list().unwrap_or_else(|_| "No collections".to_string()),
         zmd_status: run_zmd_status().unwrap_or_else(|_| "Database not initialized".to_string()),
     })
@@ -1063,6 +1280,8 @@ pub fn reset(cfg: &ZmdConfig) -> Result<()> {
     let collection_list = run_zmd_collection_list().unwrap_or_default();
     remove_collection("laws", &collection_list)?;
     remove_collection("precedents", &collection_list)?;
+    remove_collection("admrules", &collection_list)?;
+    remove_collection("ordinances", &collection_list)?;
 
     let stage = cfg.stage_dir();
     if stage.is_dir() {
@@ -1097,6 +1316,15 @@ mod tests {
                 case_type: "민사",
                 court_level: "대법원",
             },
+        );
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn test_file_pattern_recursive_leaf() {
+        let files = collect_md_files(
+            Path::new("/nonexistent"),
+            &FilePattern::RecursiveLeaf { leaf: "본문.md" },
         );
         assert!(files.is_empty());
     }

@@ -192,7 +192,7 @@ tasks:
   # ── zmd collection management ──────────────────────────────
 
   zmd:
-    desc: Run all zmd phases (laws + precedents)
+    desc: Run all zmd phases (laws + precedents + admrules + ordinances)
     deps: [install]
     cmds:
       - $CLI_NAME zmd all
@@ -208,6 +208,18 @@ tasks:
     deps: [install]
     cmds:
       - $CLI_NAME zmd precedents
+
+  zmd:admrules:
+    desc: Clone admrule-kr and index 행정규칙 (~21K files)
+    deps: [install]
+    cmds:
+      - $CLI_NAME zmd admrules
+
+  zmd:ordinances:
+    desc: Clone ordinance-kr and index 자치법규 (~160K files)
+    deps: [install]
+    cmds:
+      - $CLI_NAME zmd ordinances
 
   zmd:precedents:all:
     desc: Index ALL precedent case types and courts (~123K files)
