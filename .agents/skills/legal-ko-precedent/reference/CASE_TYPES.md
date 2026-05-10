@@ -33,6 +33,23 @@
 | 행정처분, 인허가 | 일반행정 | `처분취소`, `재량`, `인허가` |
 | 특허, 상표 | 특허 | `특허`, `침해`, `무효` |
 
+## Court Levels (법원등급)
+
+| Directory | Description |
+|-----------|-------------|
+| `대법원` | Supreme Court |
+| `하급심` | Lower courts (고등법원, 지방법원 등) |
+| `미분류` | Unclassified (missing court type code) |
+
+## Path Pattern
+
+New format: `{case-type}/{court-level}/{court-name}_{decision-date}_{case-number}.md`
+- Example: `민사/대법원/대법원_2002-09-27_2000다10048.md`
+- Example: `가사/대법원/대법원_2003-11-14_2000므1257_본소_1264_반소.md`
+- Collision suffix: `_{판례일련번호}` when composite key clashes
+
+Filename parsing: first `_` separates court name, second `_` separates date (YYYY-MM-DD fixed format), remainder is case number.
+
 ## Case Number Prefix → Directory
 
 | Prefix | Case Type | Directory |

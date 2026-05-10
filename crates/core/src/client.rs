@@ -8,7 +8,6 @@ use tracing::{debug, info, warn};
 use crate::cache;
 use crate::models::{
     GitTreeResponse, MetadataEntry, MetadataIndex, PrecedentMetadataEntry, PrecedentMetadataIndex,
-    RawPrecedentMetadataIndex,
 };
 use crate::parser;
 
@@ -252,18 +251,17 @@ const PRECEDENT_BASE_URL: &str = "https://raw.githubusercontent.com/legalize-kr/
 
 /// URL for the pre-built metadata.json in the precedent-kr repo.
 ///
-/// This ~35 MB file (< 3 MB gzip) contains all 123K+ precedent entries with
-/// fully populated fields (case name, case number, date, court, case type),
-/// which is much faster and richer than the GitHub Trees API approach.
+/// NOTE: This file was removed from the upstream repository in 2026.
+/// Kept as a constant for reference; remote fetch now always fails.
+#[allow(dead_code)]
 const PRECEDENT_METADATA_URL: &str =
     "https://raw.githubusercontent.com/legalize-kr/precedent-kr/main/metadata.json";
 
 /// Fetch the precedent metadata index.
 ///
-/// Tries three sources in order:
+/// Tries two sources in order:
 /// 1. Cached local metadata (`~/.cache/legal-ko/precedent_metadata.json`)
-/// 2. Remote `metadata.json` from GitHub (may 404 if upstream removed it)
-/// 3. Build from local zmd clone by scanning `.md` frontmatter (Rayon parallel)
+/// 2. Build from local zmd clone by scanning `.md` frontmatter (Rayon parallel)
 ///
 /// The result is always cached to disk for fast subsequent loads.
 ///
@@ -271,6 +269,9 @@ const PRECEDENT_METADATA_URL: &str =
 ///
 /// Returns an error if all sources fail.
 pub async fn fetch_precedent_metadata(client: &reqwest::Client) -> Result<PrecedentMetadataIndex> {
+    // Suppress unused-variable warning; client is kept in the signature for API stability.
+    let _ = client;
+
     // 1. Try cached local metadata
     let cache_path = local_metadata_cache_path()?;
     if let Some(index) = load_cached_metadata(&cache_path) {
@@ -278,23 +279,12 @@ pub async fn fetch_precedent_metadata(client: &reqwest::Client) -> Result<Preced
         return Ok(index);
     }
 
-    // 2. Try remote metadata.json
-    match fetch_remote_precedent_metadata(client).await {
-        Ok(index) => {
-            save_metadata_cache(&cache_path, &index);
-            return Ok(index);
-        }
-        Err(e) => {
-            warn!(error = %e, "Remote metadata.json unavailable, falling back to local clone");
-        }
-    }
-
-    // 3. Build from local zmd clone
+    // 2. Build from local zmd clone
     let clone_dir = zmd_precedent_clone_dir()?;
     if !clone_dir.join(".git").is_dir() {
         anyhow::bail!(
-            "No precedent metadata available: remote metadata.json is gone and \
-             local clone not found at {}. Run `legal-ko-cli zmd precedents` first.",
+            "No precedent metadata available: local clone not found at {}. \
+             Run `legal-ko-cli zmd precedents` first.",
             clone_dir.display()
         );
     }
@@ -355,64 +345,6 @@ fn save_metadata_cache(path: &Path, index: &PrecedentMetadataIndex) {
     }
 }
 
-/// Try fetching metadata.json from the remote GitHub repo.
-async fn fetch_remote_precedent_metadata(
-    client: &reqwest::Client,
-) -> Result<PrecedentMetadataIndex> {
-    info!("Fetching precedent metadata.json from GitHub");
-
-    let mut retries = 1;
-    let resp = loop {
-        match client.get(PRECEDENT_METADATA_URL).send().await {
-            Ok(r) => break r,
-            Err(e) if retries > 0 => {
-                warn!(error = %e, "Precedent metadata fetch failed, retrying in 2s");
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                retries -= 1;
-            }
-            Err(e) => return Err(e).context("Failed to fetch precedent metadata.json"),
-        }
-    };
-
-    let status = resp.status();
-    if !status.is_success() {
-        anyhow::bail!("Precedent metadata.json returned HTTP {status}");
-    }
-
-    let raw: RawPrecedentMetadataIndex = resp
-        .json()
-        .await
-        .context("Failed to parse precedent metadata.json")?;
-
-    let mut index = PrecedentMetadataIndex::with_capacity(raw.len());
-    for (_serial, meta) in raw {
-        let id = meta
-            .path
-            .strip_suffix(".md")
-            .unwrap_or(&meta.path)
-            .to_string();
-
-        index.insert(
-            id,
-            PrecedentMetadataEntry {
-                path: meta.path,
-                case_name: sanitize_case_name(&meta.case_name),
-                case_number: meta.case_number,
-                ruling_date: meta.ruling_date,
-                court_name: meta.court_name.trim().to_string(),
-                case_type: meta.case_type,
-                ruling_type: meta.ruling_type,
-            },
-        );
-    }
-
-    info!(
-        count = index.len(),
-        "Built precedent metadata index from metadata.json"
-    );
-    Ok(index)
-}
-
 /// Build a `PrecedentMetadataIndex` by scanning all `.md` files in the local
 /// clone of `precedent-kr` and parsing their YAML frontmatter.
 ///
@@ -450,6 +382,9 @@ fn build_precedent_metadata_from_clone(repo_dir: &Path) -> Result<PrecedentMetad
             let court_name = fm
                 .get("법원명")
                 .map_or(String::new(), |v| v.as_str().trim().to_string());
+            let court_level = fm
+                .get("법원등급")
+                .map_or(String::new(), |v| v.as_str().trim().to_string());
             let case_type = fm
                 .get("사건종류")
                 .map_or(String::new(), |v| v.as_str().to_string());
@@ -465,6 +400,7 @@ fn build_precedent_metadata_from_clone(repo_dir: &Path) -> Result<PrecedentMetad
                     case_number,
                     ruling_date,
                     court_name,
+                    court_level,
                     case_type,
                     ruling_type,
                 },

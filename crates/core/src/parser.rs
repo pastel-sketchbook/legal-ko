@@ -315,6 +315,7 @@ pub fn extract_full_text(raw: &str) -> String {
 /// - `법원명` → `court_name`
 /// - `사건종류` → `case_type`
 /// - `판결유형` → `ruling_type`
+/// - `법원등급` → `court_level`
 pub fn enrich_precedent_from_frontmatter(entry: &mut crate::models::PrecedentEntry, raw: &str) {
     let fm = parse_frontmatter(raw);
 
@@ -340,6 +341,12 @@ pub fn enrich_precedent_from_frontmatter(entry: &mut crate::models::PrecedentEnt
         let s = v.as_str().trim();
         if !s.is_empty() {
             entry.court_name = s.to_string();
+        }
+    }
+    if let Some(v) = fm.get("법원등급") {
+        let s = v.as_str().trim();
+        if !s.is_empty() {
+            entry.court_level = s.to_string();
         }
     }
     if let Some(v) = fm.get("사건종류") {
@@ -770,20 +777,22 @@ mod tests {
     #[test]
     fn test_enrich_precedent_from_frontmatter() {
         let mut entry = crate::models::PrecedentEntry {
-            id: "민사/대법원/2000다10048".to_string(),
+            id: "민사/대법원/대법원_2002-09-27_2000다10048".to_string(),
             case_name: String::new(),
             case_number: "2000다10048".to_string(),
             ruling_date: String::new(),
             court_name: "대법원".to_string(),
+            court_level: String::new(),
             case_type: "민사".to_string(),
             ruling_type: String::new(),
-            path: "민사/대법원/2000다10048.md".to_string(),
+            path: "민사/대법원/대법원_2002-09-27_2000다10048.md".to_string(),
         };
         let raw = "---\n판례일련번호: '81927'\n사건번호: 2000다10048\n사건명: 소유권이전등기등\n법원명: 대법원\n법원등급: 대법원\n사건종류: 민사\n선고일자: '2002-09-27'\n---\n# 소유권이전등기등";
         enrich_precedent_from_frontmatter(&mut entry, raw);
         assert_eq!(entry.case_name, "소유권이전등기등");
         assert_eq!(entry.ruling_date, "2002-09-27");
         assert_eq!(entry.court_name, "대법원");
+        assert_eq!(entry.court_level, "대법원");
         assert_eq!(entry.case_type, "민사");
     }
 

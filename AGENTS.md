@@ -53,7 +53,7 @@ crates/
   core/src/
     lib.rs          — re-exports all modules, AiAgent struct + AGENTS constant
     models.rs       — LawEntry, LawDetail, ArticleRef, MetadataIndex, MetadataEntry, PrecedentEntry, PrecedentMetadataEntry, PrecedentSortOrder, PersonRole, PersonRef
-    client.rs       — HTTP client (fetch metadata.json, fetch law/precedent markdown files)
+    client.rs       — HTTP client (fetch metadata.json, fetch law/precedent markdown files; precedent metadata built from local clone)
     parser.rs       — YAML frontmatter stripping, article extraction, precedent section extraction, 법조인 extraction (no ratatui dep)
     crossref.rs     — 4-approach cross-reference: statute refs, case refs, fuzzy law-name matching, case-type affinity
     cache.rs        — Disk cache at ~/.cache/legal-ko/ (SHA256 keyed)
@@ -111,7 +111,8 @@ crates/
 
 ## Key Design Decisions
 
-- **Data source**: Fetches from raw.githubusercontent.com (legalize-kr repo), not a local clone.
+- **Data source**: Laws fetched from raw.githubusercontent.com (legalize-kr repo). Precedent metadata built from local clone of precedent-kr (no remote `metadata.json`).
+- **Precedent path structure**: `{case_type}/{court_level}/{court_name}_{date}_{case_number}.md` (3-level). `court_level` (법원등급) is one of 대법원/하급심/미분류; `court_name` (법원명) is the specific court.
 - **Async pattern**: `#[tokio::main]`, background tasks for HTTP, `mpsc` channel for messages.
 - **Caching**: Individual law files cached to disk; metadata fetched fresh on startup. Person index cached to `~/.cache/legal-ko/person_index.json` (7-day TTL, rebuilt if precedent count grows >5%).
 - **Person search**: Uses `futures::stream::buffer_unordered(50)` for concurrent document fetching during index build. First run scans all 123K+ precedents (~3 min); subsequent searches are instant (HashMap lookup from cached index).

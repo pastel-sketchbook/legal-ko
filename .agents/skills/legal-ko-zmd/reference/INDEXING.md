@@ -58,7 +58,7 @@ Re-runs with no changes: <2 seconds. Safe to interrupt and resume.
 ## Collection Paths
 
 - Laws: `laws/kr/{법령명}/법률.md` (e.g., `laws/kr/민법/법률.md`)
-- Precedents: `precedents/{사건종류}/{법원명}/{사건번호}.md` (e.g., `precedents/민사/대법원/2000다10048.md`)
+- Precedents: `precedents/{사건종류}/{법원등급}/{법원명}_{선고일자}_{사건번호}.md` (e.g., `precedents/민사/대법원/대법원_2002-09-27_2000다10048.md`)
 
 ## Topic → Search Terms
 

@@ -8,7 +8,7 @@ description: >-
 license: MIT
 metadata:
   author: legal-ko contributors
-  version: "3.0.0"
+  version: "4.0.0"
 ---
 
 # Korean Law & Precedent Search via zmd
@@ -34,6 +34,16 @@ Scope: `--collection laws` or `--collection precedents`.
 3. Read full docs: `zmd get` or `legal-ko-cli show --json`
 4. Cross-ref: `legal-ko-cli precedent-laws` / `law-precedents`
 5. Present: summary, docs table, excerpts, disclaimer
+
+## Data Sources
+
+Legalize-KR provides four public datasets:
+- Laws: `legalize-kr/legalize-kr`
+- Court precedents: `legalize-kr/precedent-kr`
+- Administrative rules: `legalize-kr/admrule-kr`
+- Local ordinances: `legalize-kr/ordinance-kr`
+
+Currently indexed by zmd: laws and precedents.
 
 ## Index Management
 

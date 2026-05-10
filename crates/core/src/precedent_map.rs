@@ -178,16 +178,20 @@ pub fn entries_from_db(db_path: &Path) -> Result<Vec<crate::models::PrecedentEnt
         .filter_map(std::result::Result::ok)
         .map(|(path, case_name, fm_snippet)| {
             let id = path.strip_suffix(".md").unwrap_or(&path).to_string();
-            // Parse path: "민사/대법원/2000다10048.md"
+            // Parse path: "민사/대법원/대법원_2002-09-27_2000다10048.md"
             let parts: Vec<&str> = id.split('/').collect();
-            let (case_type, court_name, case_number) = if parts.len() == 3 {
+            let (case_type, court_level, court_name, case_number) = if parts.len() == 3 {
+                // Extract court_name from filename prefix (before first '_')
+                let filename = parts[2];
+                let court_name = filename.split('_').next().unwrap_or("").to_string();
                 (
                     parts[0].to_string(),
                     parts[1].to_string(),
-                    parts[2].to_string(),
+                    court_name,
+                    filename.to_string(),
                 )
             } else {
-                (String::new(), String::new(), id.clone())
+                (String::new(), String::new(), String::new(), id.clone())
             };
             // Extract 선고일자 from the YAML frontmatter snippet
             let ruling_date = extract_frontmatter_value(&fm_snippet, "선고일자");
@@ -198,6 +202,7 @@ pub fn entries_from_db(db_path: &Path) -> Result<Vec<crate::models::PrecedentEnt
                 case_number,
                 ruling_date,
                 court_name,
+                court_level,
                 case_type,
                 ruling_type,
                 path,

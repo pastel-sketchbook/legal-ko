@@ -8,7 +8,7 @@ description: >-
 license: MIT
 metadata:
   author: legal-ko contributors
-  version: "2.0.0"
+  version: "2.1.0"
 ---
 
 # Korean Law Search
@@ -36,6 +36,16 @@ metadata:
 | `context --json` | Read TUI state |
 
 ID format: `kr/{법령명}/{유형}` — e.g., `kr/민법/법률`
+
+## Data Sources
+
+Legalize-KR provides four public datasets:
+- Laws: `legalize-kr/legalize-kr`
+- Court precedents: `legalize-kr/precedent-kr`
+- Administrative rules: `legalize-kr/admrule-kr`
+- Local ordinances: `legalize-kr/ordinance-kr`
+
+This skill searches laws only. Use `legal-ko-precedent` for precedents.
 
 ## TUI Context
 

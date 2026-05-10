@@ -177,36 +177,14 @@ impl PrecedentSortOrder {
     }
 }
 
-/// Raw JSON shape from `precedent-kr/metadata.json` (Korean field names).
-#[derive(Debug, Clone, Deserialize)]
-pub struct RawPrecedentMeta {
-    pub path: String,
-    #[serde(rename = "사건명", default)]
-    pub case_name: String,
-    #[serde(rename = "사건번호", default)]
-    pub case_number: String,
-    #[serde(rename = "선고일자", default)]
-    pub ruling_date: String,
-    #[serde(rename = "법원명", default)]
-    pub court_name: String,
-    #[serde(rename = "사건종류", default)]
-    pub case_type: String,
-    #[serde(rename = "판결유형", default)]
-    pub ruling_type: String,
-}
-
-/// Raw metadata index from `precedent-kr/metadata.json`.
-///
-/// Keys are serial numbers (판례일련번호); values are `RawPrecedentMeta`.
-pub type RawPrecedentMetadataIndex = HashMap<String, RawPrecedentMeta>;
-
 /// Metadata entry for a single precedent file.
 ///
-/// Constructed from `metadata.json` in the precedent-kr repository.
+/// Constructed from YAML frontmatter in local clone (since `metadata.json`
+/// was removed from the upstream repository).
 /// All fields are populated at load time — no lazy frontmatter fetching needed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrecedentMetadataEntry {
-    /// Raw file path in the repo (e.g. "민사/대법원/2000다10048.md")
+    /// Raw file path in the repo (e.g. "민사/대법원/대법원_2002-09-27_2000다10048.md")
     pub path: String,
     /// Case name (사건명)
     pub case_name: String,
@@ -214,8 +192,10 @@ pub struct PrecedentMetadataEntry {
     pub case_number: String,
     /// Ruling date (선고일자, e.g. "2003-11-14")
     pub ruling_date: String,
-    /// Court name (법원명, e.g. "대법원")
+    /// Court name (법원명, e.g. "대법원", "서울고등법원")
     pub court_name: String,
+    /// Court level (법원등급, e.g. "대법원", "하급심", "미분류")
+    pub court_level: String,
     /// Case type (사건종류, e.g. "민사", "형사")
     pub case_type: String,
     /// Ruling type (판결유형)
@@ -224,13 +204,13 @@ pub struct PrecedentMetadataEntry {
 
 /// Metadata index for precedents: stable ID → `PrecedentMetadataEntry`.
 ///
-/// The ID is derived from the path, e.g. `민사/대법원/2000다10048`.
+/// The ID is derived from the path, e.g. `민사/대법원/대법원_2002-09-27_2000다10048`.
 pub type PrecedentMetadataIndex = HashMap<String, PrecedentMetadataEntry>;
 
 /// A single precedent entry for display in list views.
 #[derive(Debug, Clone, Serialize)]
 pub struct PrecedentEntry {
-    /// Path-derived ID (e.g. "민사/대법원/2000다10048")
+    /// Path-derived ID (e.g. "민사/대법원/대법원_2002-09-27_2000다10048")
     pub id: String,
     /// Case name (사건명)
     pub case_name: String,
@@ -240,6 +220,8 @@ pub struct PrecedentEntry {
     pub ruling_date: String,
     /// Court name (법원명)
     pub court_name: String,
+    /// Court level (법원등급, e.g. "대법원", "하급심", "미분류")
+    pub court_level: String,
     /// Case type (사건종류)
     pub case_type: String,
     /// Ruling type (판결유형)
@@ -314,6 +296,7 @@ pub fn precedent_entries_from_index(index: PrecedentMetadataIndex) -> Vec<Preced
             case_number: meta.case_number,
             ruling_date: meta.ruling_date,
             court_name: meta.court_name,
+            court_level: meta.court_level,
             case_type: meta.case_type,
             ruling_type: meta.ruling_type,
             path: meta.path,
@@ -458,25 +441,27 @@ mod tests {
     fn test_precedent_entries_from_index_sorted() {
         let mut index = PrecedentMetadataIndex::new();
         index.insert(
-            "형사/대법원/2020도1234".to_string(),
+            "형사/대법원/대법원_2021-03-15_2020도1234".to_string(),
             PrecedentMetadataEntry {
-                path: "형사/대법원/2020도1234.md".to_string(),
+                path: "형사/대법원/대법원_2021-03-15_2020도1234.md".to_string(),
                 case_name: "사기".to_string(),
                 case_number: "2020도1234".to_string(),
                 ruling_date: "2021-03-15".to_string(),
                 court_name: "대법원".to_string(),
+                court_level: "대법원".to_string(),
                 case_type: "형사".to_string(),
                 ruling_type: String::new(),
             },
         );
         index.insert(
-            "민사/대법원/2000다10048".to_string(),
+            "민사/대법원/대법원_2002-09-27_2000다10048".to_string(),
             PrecedentMetadataEntry {
-                path: "민사/대법원/2000다10048.md".to_string(),
+                path: "민사/대법원/대법원_2002-09-27_2000다10048.md".to_string(),
                 case_name: "소유권이전등기등".to_string(),
                 case_number: "2000다10048".to_string(),
                 ruling_date: "2002-09-27".to_string(),
                 court_name: "대법원".to_string(),
+                court_level: "대법원".to_string(),
                 case_type: "민사".to_string(),
                 ruling_type: String::new(),
             },
@@ -493,24 +478,26 @@ mod tests {
     fn test_sort_precedent_entries_by_date() {
         let mut entries = vec![
             PrecedentEntry {
-                id: "민사/대법원/2000다10048".to_string(),
+                id: "민사/대법원/대법원_2002-09-27_2000다10048".to_string(),
                 case_name: "소유권이전등기등".to_string(),
                 case_number: "2000다10048".to_string(),
                 ruling_date: "2002-09-27".to_string(),
                 court_name: "대법원".to_string(),
+                court_level: "대법원".to_string(),
                 case_type: "민사".to_string(),
                 ruling_type: String::new(),
-                path: "민사/대법원/2000다10048.md".to_string(),
+                path: "민사/대법원/대법원_2002-09-27_2000다10048.md".to_string(),
             },
             PrecedentEntry {
-                id: "형사/대법원/2020도1234".to_string(),
+                id: "형사/대법원/대법원_2021-03-15_2020도1234".to_string(),
                 case_name: "사기".to_string(),
                 case_number: "2020도1234".to_string(),
                 ruling_date: "2021-03-15".to_string(),
                 court_name: "대법원".to_string(),
+                court_level: "대법원".to_string(),
                 case_type: "형사".to_string(),
                 ruling_type: String::new(),
-                path: "형사/대법원/2020도1234.md".to_string(),
+                path: "형사/대법원/대법원_2021-03-15_2020도1234.md".to_string(),
             },
         ];
         sort_precedent_entries(&mut entries, PrecedentSortOrder::RulingDate);

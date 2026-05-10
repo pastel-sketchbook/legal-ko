@@ -62,7 +62,7 @@ const PRECEDENT_REPO: &str = "https://github.com/legalize-kr/precedent-kr.git";
 const DEFAULT_CASE_TYPES: &[&str] = &["민사", "형사"];
 
 /// Default court levels to index for precedents.
-const DEFAULT_COURTS: &[&str] = &["대법원"];
+const DEFAULT_COURT_LEVELS: &[&str] = &["대법원"];
 
 /// Default batch size: number of files to stage before each `zmd update` call.
 ///
@@ -80,8 +80,8 @@ pub struct ZmdConfig {
     pub cache_dir: PathBuf,
     /// Case types to index for precedents.
     pub case_types: Vec<String>,
-    /// Court levels to index for precedents.
-    pub courts: Vec<String>,
+    /// Court levels to index for precedents (대법원, 하급심, 미분류).
+    pub court_levels: Vec<String>,
     /// Files to stage per `zmd update` call.
     pub batch_size: usize,
     /// Skip `git pull` when the repo already exists (avoids network round-trip).
@@ -116,7 +116,7 @@ impl ZmdConfig {
                 .iter()
                 .map(|s| (*s).to_string())
                 .collect(),
-            courts: DEFAULT_COURTS.iter().map(|s| (*s).to_string()).collect(),
+            court_levels: DEFAULT_COURT_LEVELS.iter().map(|s| (*s).to_string()).collect(),
             batch_size,
             skip_pull: false,
         })
@@ -349,8 +349,8 @@ fn collect_md_files(src_root: &Path, pattern: &FilePattern<'_>) -> Vec<PathBuf> 
                 }
             }
         }
-        FilePattern::Precedents { case_type, court } => {
-            let dir = src_root.join(case_type).join(court);
+        FilePattern::Precedents { case_type, court_level } => {
+            let dir = src_root.join(case_type).join(court_level);
             if dir.is_dir()
                 && let Ok(entries) = std::fs::read_dir(&dir)
             {
@@ -373,7 +373,7 @@ fn collect_md_files(src_root: &Path, pattern: &FilePattern<'_>) -> Vec<PathBuf> 
 /// File-finding patterns.
 enum FilePattern<'a> {
     Laws,
-    Precedents { case_type: &'a str, court: &'a str },
+    Precedents { case_type: &'a str, court_level: &'a str },
 }
 
 // ── Batched stage + index ────────────────────────────────────
@@ -847,19 +847,19 @@ where
     let mut court_counts: Vec<(String, String, usize)> = Vec::new();
 
     for case_type in &cfg.case_types {
-        for court in &cfg.courts {
+        for court_level in &cfg.court_levels {
             let files = collect_md_files(
                 &cfg.precedent_clone(),
-                &FilePattern::Precedents { case_type, court },
+                &FilePattern::Precedents { case_type, court_level },
             );
 
             if files.is_empty() {
-                warn!(%case_type, %court, "No files found — skipping");
+                warn!(%case_type, %court_level, "No files found — skipping");
                 continue;
             }
 
-            on_court(case_type, court, files.len());
-            court_counts.push((case_type.clone(), court.clone(), files.len()));
+            on_court(case_type, court_level, files.len());
+            court_counts.push((case_type.clone(), court_level.clone(), files.len()));
             all_files.extend(files);
         }
     }
@@ -1029,11 +1029,11 @@ pub fn status(cfg: &ZmdConfig) -> Result<ZmdStatus> {
     let mut precedent_total = 0usize;
 
     for case_type in &cfg.case_types {
-        for court in &cfg.courts {
-            let dir = cfg.precedent_stage().join(case_type).join(court);
+        for court_level in &cfg.court_levels {
+            let dir = cfg.precedent_stage().join(case_type).join(court_level);
             let count = count_md_files(&dir);
             if count > 0 {
-                precedent_staged.push((format!("{case_type}/{court}"), count));
+                precedent_staged.push((format!("{case_type}/{court_level}"), count));
                 precedent_total += count;
             }
         }
@@ -1095,7 +1095,7 @@ mod tests {
             Path::new("/nonexistent"),
             &FilePattern::Precedents {
                 case_type: "민사",
-                court: "대법원",
+                court_level: "대법원",
             },
         );
         assert!(files.is_empty());

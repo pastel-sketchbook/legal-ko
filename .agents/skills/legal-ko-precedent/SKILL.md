@@ -9,7 +9,7 @@ description: >-
 license: MIT
 metadata:
   author: legal-ko contributors
-  version: "2.0.0"
+  version: "3.0.0"
 ---
 
 # Korean Precedent Search
@@ -37,7 +37,18 @@ metadata:
 | `precedent-search-person <name> --role` | Search by 법조인 |
 | `precedent-persons <id>` | Extract persons |
 
-ID format: `{사건종류}/{법원명}/{사건번호}` — e.g., `민사/대법원/2000다10048`
+ID format: `{사건종류}/{법원등급}/{법원명}_{선고일자}_{사건번호}` — e.g., `민사/대법원/대법원_2002-09-27_2000다10048`
+
+Path pattern: `{case-type}/{court-level}/{court-name}_{decision-date}_{case-number}.md`
+- Court levels: `대법원`, `하급심`, `미분류`
+- Filename collisions add `_{판례일련번호}` suffix
+
+## Data Sources
+
+The precedent data comes from `legalize-kr/precedent-kr`. Related datasets:
+- Laws: `legalize-kr/legalize-kr`
+- Administrative rules: `legalize-kr/admrule-kr`
+- Local ordinances: `legalize-kr/ordinance-kr`
 
 ## Disclaimer
 

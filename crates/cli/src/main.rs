@@ -856,6 +856,7 @@ async fn cmd_precedent_show(client: &reqwest::Client, id: &str, as_json: bool) -
             case_number: String::new(),
             ruling_date: String::new(),
             court_name: String::new(),
+            court_level: String::new(),
             case_type: String::new(),
             ruling_type: String::new(),
             path,
@@ -871,6 +872,7 @@ async fn cmd_precedent_show(client: &reqwest::Client, id: &str, as_json: bool) -
             "case_number": entry.case_number,
             "ruling_date": entry.ruling_date,
             "court_name": entry.court_name,
+            "court_level": entry.court_level,
             "case_type": entry.case_type,
             "ruling_type": entry.ruling_type,
             "sections": section_labels,
@@ -896,6 +898,7 @@ async fn cmd_precedent_sections(client: &reqwest::Client, id: &str, as_json: boo
             case_number: String::new(),
             ruling_date: String::new(),
             court_name: String::new(),
+            court_level: String::new(),
             case_type: String::new(),
             ruling_type: String::new(),
             path,
@@ -1131,6 +1134,7 @@ async fn cmd_precedent_persons(client: &reqwest::Client, id: &str, as_json: bool
             case_number: String::new(),
             ruling_date: String::new(),
             court_name: String::new(),
+            court_level: String::new(),
             case_type: String::new(),
             ruling_type: String::new(),
             path,
@@ -1687,7 +1691,7 @@ fn cmd_zmd_precedents(
         cfg.case_types = case_types;
     }
     if !courts.is_empty() {
-        cfg.courts = courts;
+        cfg.court_levels = courts;
     }
 
     let result = zmd::index_precedents(
