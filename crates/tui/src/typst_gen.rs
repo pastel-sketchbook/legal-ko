@@ -121,6 +121,12 @@ fn markdown_to_typst(md: &str) -> String {
         } else if trimmed.is_empty() {
             out.push('\n');
         } else {
+            // Force paragraph break before circled-number paragraphs (①②③…)
+            // so they render on separate lines in Typst.
+            if starts_with_circled_number(trimmed) && !out.ends_with("\n\n") {
+                out.push('\n');
+            }
+
             // Body line: escape special chars, then convert bold
             let escaped = escape_typst(line);
             let converted = convert_bold(&escaped);
@@ -130,6 +136,15 @@ fn markdown_to_typst(md: &str) -> String {
     }
 
     out
+}
+
+/// Check if a line starts with a circled number (①-⑳, ㉑-㉟, ㊱-㊿).
+/// These are used as paragraph/clause markers in Korean legal texts.
+fn starts_with_circled_number(s: &str) -> bool {
+    let Some(ch) = s.chars().next() else {
+        return false;
+    };
+    matches!(ch, '①'..='⑳' | '㉑'..='㉟' | '㊱'..='㊿')
 }
 
 /// Escape Typst-special characters in body text.
@@ -228,5 +243,33 @@ mod tests {
         let input = "Line one\n\nLine two";
         let output = markdown_to_typst(input);
         assert!(output.contains("\n\n"));
+    }
+
+    #[test]
+    fn circled_numbers_get_paragraph_breaks() {
+        let input =
+            "① 시장은 필요한 조치를 한다.\n  ② 시장은 계획을 수립한다.\n  ③ 시장은 시행한다.";
+        let output = markdown_to_typst(input);
+        // Each ① ② ③ should be preceded by a blank line (paragraph break)
+        assert!(
+            output.contains("\n\n"),
+            "expected paragraph break before ②: {output}"
+        );
+        // Count paragraph breaks — should have 2 (before ② and ③)
+        let breaks = output.matches("\n\n").count();
+        assert_eq!(
+            breaks, 2,
+            "expected 2 paragraph breaks, got {breaks}: {output}"
+        );
+    }
+
+    #[test]
+    fn circled_number_detection() {
+        assert!(starts_with_circled_number("① 내용"));
+        assert!(starts_with_circled_number("⑳ 내용"));
+        assert!(starts_with_circled_number("㉑ 내용"));
+        assert!(!starts_with_circled_number("1. 내용"));
+        assert!(!starts_with_circled_number("내용"));
+        assert!(!starts_with_circled_number(""));
     }
 }

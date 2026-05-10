@@ -647,7 +647,7 @@ pub fn build_ordinance_entries_from_clone() -> Result<Vec<crate::models::Ordinan
                 .get("지자체기관명")
                 .map_or(String::new(), |v| v.as_str().to_string());
             let region = fm
-                .get("지자체구분.광역")
+                .get("광역")
                 .map_or(String::new(), |v| v.as_str().to_string());
             let date = fm
                 .get("공포일자")

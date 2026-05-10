@@ -947,4 +947,16 @@ mod tests {
         );
         assert_eq!(split_name_qualifier("윤재식"), ("윤재식", None));
     }
+
+    #[test]
+    fn test_parse_frontmatter_nested_yaml() {
+        // Ordinance frontmatter has nested `지자체구분:` with indented children.
+        // The parser flattens nested keys, so `광역` and `기초` become top-level.
+        let raw = "---\n자치법규명: '테스트 조례'\n지자체구분:\n  광역: '서울특별시'\n  기초: '강남구'\n공포일자: 2024-01-01\n---\n본문";
+        let fm = parse_frontmatter(raw);
+        assert_eq!(fm.get("자치법규명").unwrap().as_str(), "테스트 조례");
+        assert_eq!(fm.get("광역").unwrap().as_str(), "서울특별시");
+        assert_eq!(fm.get("기초").unwrap().as_str(), "강남구");
+        assert_eq!(fm.get("공포일자").unwrap().as_str(), "2024-01-01");
+    }
 }
