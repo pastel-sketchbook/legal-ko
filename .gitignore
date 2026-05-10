@@ -2,3 +2,4 @@
 /legal-ko_enhancements.md
 .env*
 .qmd/
+*.pdf
