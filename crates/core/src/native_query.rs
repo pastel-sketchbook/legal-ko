@@ -81,7 +81,7 @@ pub fn build_fts5_query(input: &str) -> String {
     let mut first = true;
 
     // Treat commas as term separators (split on whitespace and commas)
-    for raw in input.split(|c: char| c == ' ' || c == ',') {
+    for raw in input.split([' ', ',']) {
         if raw.is_empty() {
             continue;
         }
