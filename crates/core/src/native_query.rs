@@ -111,9 +111,22 @@ pub fn build_fts5_query(input: &str) -> String {
             out.push('-');
         }
 
-        if token.contains('-') {
+        // FTS5 special chars that require quoting the token
+        let needs_quote = token.contains('-')
+            || token.contains(',')
+            || token.contains('(')
+            || token.contains(')')
+            || token.contains('"')
+            || token.contains(':')
+            || token.contains('+')
+            || token.contains('^')
+            || token.contains('{')
+            || token.contains('}');
+
+        if needs_quote {
             out.push('"');
-            out.push_str(token);
+            // Double any internal double-quotes per FTS5 escaping rules
+            out.push_str(&token.replace('"', "\"\""));
             out.push('"');
         } else {
             out.push_str(token);
@@ -508,6 +521,21 @@ mod tests {
     #[test]
     fn fts5_empty() {
         assert_eq!(build_fts5_query("   "), "");
+    }
+
+    #[test]
+    fn fts5_comma() {
+        assert_eq!(build_fts5_query("제1조,제2조"), "\"제1조,제2조\"");
+    }
+
+    #[test]
+    fn fts5_parentheses() {
+        assert_eq!(build_fts5_query("민법(제750조)"), "\"민법(제750조)\"");
+    }
+
+    #[test]
+    fn fts5_embedded_quotes() {
+        assert_eq!(build_fts5_query("\"hello\""), "\"\"\"hello\"\"\"");
     }
 
     #[test]
