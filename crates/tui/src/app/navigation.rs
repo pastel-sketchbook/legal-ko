@@ -202,7 +202,7 @@ impl App {
             return;
         }
         let current = tabs.iter().position(|v| *v == self.view).unwrap_or(0);
-        self.view = tabs[(current + 1) % tabs.len()].clone();
+        self.view = tabs[(current + 1) % tabs.len()];
     }
 
     /// Cycle backward: `List` ← `PrecedentList` ← `AdmruleList` ← `OrdinanceList` ← `List`
@@ -212,7 +212,7 @@ impl App {
             return;
         }
         let current = tabs.iter().position(|v| *v == self.view).unwrap_or(0);
-        self.view = tabs[(current + tabs.len() - 1) % tabs.len()].clone();
+        self.view = tabs[(current + tabs.len() - 1) % tabs.len()];
     }
 
     /// Build the ordered list of available list-level tabs.
@@ -265,6 +265,9 @@ impl App {
             }
             View::List | View::Loading => {
                 self.should_quit = true;
+            }
+            View::ZmdSearch => {
+                self.zmd_search_back();
             }
         }
     }

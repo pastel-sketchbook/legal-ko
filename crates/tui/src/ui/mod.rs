@@ -8,6 +8,7 @@ pub mod ordinance_list;
 pub mod precedent_detail;
 pub mod precedent_list;
 pub mod styles;
+pub mod zmd_search;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -71,6 +72,7 @@ fn render_view(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         View::AdmruleDetail => admrule_detail::render_admrule_detail(f, app, theme, area),
         View::OrdinanceList => ordinance_list::render_ordinance_list(f, app, theme, area),
         View::OrdinanceDetail => ordinance_detail::render_ordinance_detail(f, app, theme, area),
+        View::ZmdSearch => zmd_search::render_zmd_search(f, app, theme, area),
     }
 }
 

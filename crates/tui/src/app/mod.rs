@@ -46,7 +46,7 @@ const PERSON_SEARCH_BROWSE_THRESHOLD: usize = 20;
 
 // ── View / Mode enums ─────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
     Loading,
     List,
@@ -57,6 +57,7 @@ pub enum View {
     AdmruleDetail,
     OrdinanceList,
     OrdinanceDetail,
+    ZmdSearch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,6 +188,11 @@ pub enum Message {
     OrdinanceContentError {
         id: String,
         error: String,
+    },
+    /// Zmd FTS search results arrived.
+    ZmdSearchResults {
+        seq: u64,
+        hits: Vec<legal_ko_core::native_query::QueryHit>,
     },
 }
 
@@ -408,6 +414,15 @@ pub struct App {
     pub pending_ordinance_id: Option<String>,
     pub ordinance_detail_rendered_lines: Vec<Line<'static>>,
     pub ordinances_loaded: bool,
+
+    // ── Zmd full-text search ──────────────────────────────────
+    pub zmd_search_query: String,
+    pub zmd_search_seq: u64,
+    pub zmd_search_results: Vec<legal_ko_core::native_query::QueryHit>,
+    pub zmd_search_selected: usize,
+    pub zmd_search_offset: usize,
+    /// The view to return to when leaving zmd search.
+    pub zmd_search_prev_view: Option<View>,
 }
 
 impl App {
@@ -561,6 +576,14 @@ impl App {
             pending_ordinance_id: None,
             ordinance_detail_rendered_lines: Vec::new(),
             ordinances_loaded: false,
+
+            // Zmd search
+            zmd_search_query: String::new(),
+            zmd_search_seq: 0,
+            zmd_search_results: Vec::new(),
+            zmd_search_selected: 0,
+            zmd_search_offset: 0,
+            zmd_search_prev_view: None,
         }
     }
 
@@ -587,6 +610,7 @@ impl App {
             View::AdmruleDetail => "admrule_detail",
             View::OrdinanceList => "ordinance_list",
             View::OrdinanceDetail => "ordinance_detail",
+            View::ZmdSearch => "zmd_search",
         };
 
         let snap = Snapshot {
@@ -708,7 +732,8 @@ impl App {
             | View::AdmruleList
             | View::AdmruleDetail
             | View::OrdinanceList
-            | View::OrdinanceDetail => {
+            | View::OrdinanceDetail
+            | View::ZmdSearch => {
                 // Switch back to law list for navigate commands
                 self.view = View::List;
                 self.clear_filters_for_navigate();
@@ -1093,6 +1118,7 @@ impl App {
                 View::PrecedentList => self.precedent_list_move_down(),
                 View::AdmruleList => self.admrule_list_move_down(),
                 View::OrdinanceList => self.ordinance_list_move_down(),
+                View::ZmdSearch => self.zmd_search_move_down(),
                 View::Loading => {}
             },
             MouseEventKind::ScrollUp => match self.view {
@@ -1105,6 +1131,7 @@ impl App {
                 View::PrecedentList => self.precedent_list_move_up(),
                 View::AdmruleList => self.admrule_list_move_up(),
                 View::OrdinanceList => self.ordinance_list_move_up(),
+                View::ZmdSearch => self.zmd_search_move_up(),
                 View::Loading => {}
             },
             _ => {}
@@ -1573,6 +1600,13 @@ end tell"#
                 self.ordinance_detail_loading = false;
                 self.status_message = Some(format!("Error loading {id}: {error}"));
                 error!(id, error, "Failed to load ordinance");
+            }
+            Message::ZmdSearchResults { seq, hits } => {
+                if seq == self.zmd_search_seq {
+                    self.zmd_search_results = hits;
+                    self.zmd_search_selected = 0;
+                    self.zmd_search_offset = 0;
+                }
             }
         }
     }

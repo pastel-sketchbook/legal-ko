@@ -192,7 +192,8 @@ impl App {
             | View::AdmruleList
             | View::AdmruleDetail
             | View::OrdinanceList
-            | View::OrdinanceDetail => None,
+            | View::OrdinanceDetail
+            | View::ZmdSearch => None,
         };
 
         if let Some(id) = id {
@@ -663,5 +664,226 @@ impl App {
         } else if self.ordinance_list_selected >= self.ordinance_filtered_indices.len() {
             self.ordinance_list_selected = self.ordinance_filtered_indices.len().saturating_sub(1);
         }
+    }
+
+    // ── Zmd full-text search ──────────────────────────────────
+
+    /// Enter zmd search mode from any list view.
+    pub fn start_zmd_search(&mut self) {
+        self.zmd_search_prev_view = Some(self.view);
+        self.view = View::ZmdSearch;
+        self.input_mode = InputMode::Search;
+        self.zmd_search_query.clear();
+        self.zmd_search_results.clear();
+        self.zmd_search_selected = 0;
+        self.zmd_search_offset = 0;
+    }
+
+    /// Push a char into the zmd search query and dispatch background FTS.
+    pub fn zmd_search_push_char(&mut self, c: char) {
+        self.zmd_search_query.push(c);
+        self.dispatch_zmd_search();
+    }
+
+    /// Pop a char from the zmd search query (hangul-aware).
+    pub fn zmd_search_pop_char(&mut self) {
+        hangul::pop_jamo(&mut self.zmd_search_query);
+        self.dispatch_zmd_search();
+    }
+
+    /// Clear zmd search and return to previous view.
+    pub fn zmd_search_clear(&mut self) {
+        self.zmd_search_query.clear();
+        self.zmd_search_results.clear();
+        self.input_mode = InputMode::Normal;
+        if let Some(prev) = self.zmd_search_prev_view.take() {
+            self.view = prev;
+        } else {
+            self.view = View::List;
+        }
+    }
+
+    /// Finish zmd search input (keep results visible for navigation).
+    pub fn zmd_search_finish_input(&mut self) {
+        self.input_mode = InputMode::Normal;
+    }
+
+    /// Leave zmd search view entirely.
+    pub fn zmd_search_back(&mut self) {
+        if let Some(prev) = self.zmd_search_prev_view.take() {
+            self.view = prev;
+        } else {
+            self.view = View::List;
+        }
+        self.input_mode = InputMode::Normal;
+    }
+
+    /// Dispatch a background FTS search against the native zmd database.
+    fn dispatch_zmd_search(&mut self) {
+        // Try 영타→한타 conversion (same as / search does)
+        let query = self.zmd_search_query.clone();
+        let final_query = hangul::eng_to_hangul(&query).unwrap_or(query);
+
+        if final_query.trim().is_empty() {
+            self.zmd_search_results.clear();
+            self.zmd_search_selected = 0;
+            self.zmd_search_offset = 0;
+            return;
+        }
+
+        self.zmd_search_seq += 1;
+        let seq = self.zmd_search_seq;
+        let tx = self.msg_tx.clone();
+
+        // Run FTS in a blocking task (SQLite is sync)
+        tokio::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                let db_path = legal_ko_core::native_indexer::default_db_path();
+                let db = legal_ko_core::native_indexer::ZmdDb::open(&db_path).ok()?;
+                legal_ko_core::native_query::fts_search(&db, &final_query, None).ok()
+            })
+            .await;
+
+            if let Ok(Some(hits)) = result {
+                let _ = tx.send(super::Message::ZmdSearchResults { seq, hits });
+            }
+        });
+    }
+
+    // ── Zmd search list navigation ───────────────────────────
+
+    pub fn zmd_search_move_down(&mut self) {
+        if !self.zmd_search_results.is_empty() {
+            self.zmd_search_selected =
+                (self.zmd_search_selected + 1).min(self.zmd_search_results.len() - 1);
+        }
+    }
+
+    pub fn zmd_search_move_up(&mut self) {
+        self.zmd_search_selected = self.zmd_search_selected.saturating_sub(1);
+    }
+
+    /// Open the selected zmd search result in the appropriate detail view.
+    pub fn open_selected_zmd_result(&mut self) {
+        let Some(hit) = self
+            .zmd_search_results
+            .get(self.zmd_search_selected)
+            .cloned()
+        else {
+            return;
+        };
+
+        // Read content from the database and display in detail view.
+        let tx = self.msg_tx.clone();
+        let collection = hit.collection.clone();
+        let path = hit.path.clone();
+        let hash = hit.hash.clone();
+
+        match collection.as_str() {
+            "laws" => {
+                // Find the law in all_laws by path match
+                if let Some(idx) = self.all_laws.iter().position(|e| {
+                    // zmd path is like "kr/민법/법률.md", entry.path is same
+                    e.path == format!("kr/{path}")
+                }) {
+                    self.list_selected = self
+                        .filtered_indices
+                        .iter()
+                        .position(|&i| i == idx)
+                        .unwrap_or(0);
+                    self.view = View::List;
+                    self.input_mode = InputMode::Normal;
+                    self.open_selected();
+                    return;
+                }
+                // Fallback: load directly from db
+                self.load_zmd_content_as_detail(&hit.title, &hash, &tx);
+            }
+            "precedents" => {
+                // Find precedent by path
+                if let Some(idx) = self.all_precedents.iter().position(|e| e.path == path) {
+                    self.precedent_list_selected = self
+                        .precedent_filtered_indices
+                        .iter()
+                        .position(|&i| i == idx)
+                        .unwrap_or(0);
+                    self.view = View::PrecedentList;
+                    self.input_mode = InputMode::Normal;
+                    self.open_selected_precedent();
+                    return;
+                }
+                self.load_zmd_content_as_detail(&hit.title, &hash, &tx);
+            }
+            "admrules" => {
+                if let Some(idx) = self.all_admrules.iter().position(|e| e.path == path) {
+                    self.admrule_list_selected = self
+                        .admrule_filtered_indices
+                        .iter()
+                        .position(|&i| i == idx)
+                        .unwrap_or(0);
+                    self.view = View::AdmruleList;
+                    self.input_mode = InputMode::Normal;
+                    self.open_selected_admrule();
+                    return;
+                }
+                self.load_zmd_content_as_detail(&hit.title, &hash, &tx);
+            }
+            "ordinances" => {
+                if let Some(idx) = self.all_ordinances.iter().position(|e| e.path == path) {
+                    self.ordinance_list_selected = self
+                        .ordinance_filtered_indices
+                        .iter()
+                        .position(|&i| i == idx)
+                        .unwrap_or(0);
+                    self.view = View::OrdinanceList;
+                    self.input_mode = InputMode::Normal;
+                    self.open_selected_ordinance();
+                    return;
+                }
+                self.load_zmd_content_as_detail(&hit.title, &hash, &tx);
+            }
+            _ => {
+                self.load_zmd_content_as_detail(&hit.title, &hash, &tx);
+            }
+        }
+    }
+
+    /// Load content from zmd database by hash and display as a law detail.
+    fn load_zmd_content_as_detail(
+        &mut self,
+        title: &str,
+        hash: &str,
+        tx: &tokio::sync::mpsc::UnboundedSender<super::Message>,
+    ) {
+        let id = format!("zmd:{hash}");
+        self.detail_loading = true;
+        self.detail_scroll = 0;
+        self.pending_detail_id = Some(id.clone());
+        self.status_message = Some(format!("Loading {title}..."));
+        self.view = View::Detail;
+        self.input_mode = InputMode::Normal;
+
+        let hash_owned = hash.to_string();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                let db_path = legal_ko_core::native_indexer::default_db_path();
+                let db = legal_ko_core::native_indexer::ZmdDb::open(&db_path).ok()?;
+                db.read_content(&hash_owned).ok()
+            })
+            .await;
+
+            match result {
+                Ok(Some(content)) => {
+                    let _ = tx.send(super::Message::LawContentLoaded { id, content });
+                }
+                _ => {
+                    let _ = tx.send(super::Message::LawContentError {
+                        id,
+                        error: "Failed to read from zmd database".to_string(),
+                    });
+                }
+            }
+        });
     }
 }

@@ -313,6 +313,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent, terminal_height: usize) {
         View::AdmruleDetail => handle_admrule_detail_key(app, key, terminal_height),
         View::OrdinanceList => handle_ordinance_list_key(app, key, terminal_height),
         View::OrdinanceDetail => handle_ordinance_detail_key(app, key, terminal_height),
+        View::ZmdSearch => handle_zmd_search_key(app, key, terminal_height),
     }
     app.sync_context();
 }
@@ -359,6 +360,7 @@ fn handle_list_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         }
         KeyCode::Tab => app.next_tab(),
         KeyCode::BackTab => app.prev_tab(),
+        KeyCode::Char('Z') => app.start_zmd_search(),
         KeyCode::Char('?') => app.popup = Popup::Help,
         KeyCode::Char('v') => app.toggle_split_view(),
         KeyCode::Esc => {
@@ -455,6 +457,7 @@ fn handle_precedent_list_key(app: &mut App, key: KeyEvent, terminal_height: usiz
         KeyCode::Char('o') => app.open_agent_picker(),
         KeyCode::Tab => app.next_tab(),
         KeyCode::BackTab => app.prev_tab(),
+        KeyCode::Char('Z') => app.start_zmd_search(),
         KeyCode::Char('?') => app.popup = Popup::Help,
         KeyCode::Esc => {
             if app.precedent_search_query.is_empty() {
@@ -522,6 +525,7 @@ fn handle_admrule_list_key(app: &mut App, key: KeyEvent, terminal_height: usize)
         KeyCode::Char('o') => app.open_agent_picker(),
         KeyCode::Tab => app.next_tab(),
         KeyCode::BackTab => app.prev_tab(),
+        KeyCode::Char('Z') => app.start_zmd_search(),
         KeyCode::Char('?') => app.popup = Popup::Help,
         KeyCode::Esc => {
             if app.admrule_search_query.is_empty() {
@@ -585,6 +589,7 @@ fn handle_ordinance_list_key(app: &mut App, key: KeyEvent, terminal_height: usiz
         KeyCode::Char('o') => app.open_agent_picker(),
         KeyCode::Tab => app.next_tab(),
         KeyCode::BackTab => app.prev_tab(),
+        KeyCode::Char('Z') => app.start_zmd_search(),
         KeyCode::Char('?') => app.popup = Popup::Help,
         KeyCode::Esc => {
             if app.ordinance_search_query.is_empty() {
@@ -626,34 +631,105 @@ fn handle_search_key(app: &mut App, key: KeyEvent) {
     match key.code {
         // Esc/Enter preserve the buffer (Korean IMEs commit the trailing
         // syllable as a Char event right before sending Esc). Use Ctrl+U to wipe.
-        KeyCode::Esc | KeyCode::Enter => app.finish_search(),
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => app.clear_search(),
-        KeyCode::Backspace => app.search_pop_char(),
+        KeyCode::Esc | KeyCode::Enter => {
+            if app.view == View::ZmdSearch {
+                if key.code == KeyCode::Esc {
+                    app.zmd_search_clear();
+                } else {
+                    app.zmd_search_finish_input();
+                }
+            } else {
+                app.finish_search();
+            }
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if app.view == View::ZmdSearch {
+                app.zmd_search_clear();
+            } else {
+                app.clear_search();
+            }
+        }
+        KeyCode::Backspace => {
+            if app.view == View::ZmdSearch {
+                app.zmd_search_pop_char();
+            } else {
+                app.search_pop_char();
+            }
+        }
         KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => match app.view {
+            View::ZmdSearch => app.zmd_search_move_down(),
             View::PrecedentList => app.precedent_list_move_down(),
             View::AdmruleList => app.admrule_list_move_down(),
             View::OrdinanceList => app.ordinance_list_move_down(),
             _ => app.list_move_down(),
         },
         KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => match app.view {
+            View::ZmdSearch => app.zmd_search_move_up(),
             View::PrecedentList => app.precedent_list_move_up(),
             View::AdmruleList => app.admrule_list_move_up(),
             View::OrdinanceList => app.ordinance_list_move_up(),
             _ => app.list_move_up(),
         },
         KeyCode::Down => match app.view {
+            View::ZmdSearch => app.zmd_search_move_down(),
             View::PrecedentList => app.precedent_list_move_down(),
             View::AdmruleList => app.admrule_list_move_down(),
             View::OrdinanceList => app.ordinance_list_move_down(),
             _ => app.list_move_down(),
         },
         KeyCode::Up => match app.view {
+            View::ZmdSearch => app.zmd_search_move_up(),
             View::PrecedentList => app.precedent_list_move_up(),
             View::AdmruleList => app.admrule_list_move_up(),
             View::OrdinanceList => app.ordinance_list_move_up(),
             _ => app.list_move_up(),
         },
-        KeyCode::Char(c) => app.search_push_char(c),
+        KeyCode::Char(c) => {
+            if app.view == View::ZmdSearch {
+                app.zmd_search_push_char(c);
+            } else {
+                app.search_push_char(c);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_zmd_search_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
+    let page_size = terminal_height.saturating_sub(4);
+    match key.code {
+        KeyCode::Char('q') | KeyCode::Esc => app.zmd_search_back(),
+        KeyCode::Char('j') | KeyCode::Down => app.zmd_search_move_down(),
+        KeyCode::Char('k') | KeyCode::Up => app.zmd_search_move_up(),
+        KeyCode::Char('/') => app.input_mode = InputMode::Search,
+        KeyCode::Char('g') | KeyCode::Home => {
+            app.zmd_search_selected = 0;
+            app.zmd_search_offset = 0;
+        }
+        KeyCode::Char('G') | KeyCode::End => {
+            app.zmd_search_selected = app.zmd_search_results.len().saturating_sub(1);
+        }
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            for _ in 0..page_size {
+                app.zmd_search_move_down();
+            }
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            for _ in 0..page_size {
+                app.zmd_search_move_up();
+            }
+        }
+        KeyCode::PageDown => {
+            for _ in 0..page_size {
+                app.zmd_search_move_down();
+            }
+        }
+        KeyCode::PageUp => {
+            for _ in 0..page_size {
+                app.zmd_search_move_up();
+            }
+        }
+        KeyCode::Enter => app.open_selected_zmd_result(),
         _ => {}
     }
 }

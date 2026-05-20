@@ -244,6 +244,20 @@ impl ZmdDb {
         Ok(result)
     }
 
+    /// Read the raw document content for a given content hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails or the hash is not found.
+    pub fn read_content(&self, hash: &str) -> Result<String> {
+        let doc: String = self.conn.query_row(
+            "SELECT doc FROM content WHERE hash = ?1",
+            params![hash],
+            |row| row.get(0),
+        )?;
+        Ok(doc)
+    }
+
     // ── High-level batch pipeline ────────────────────────────────
 
     /// Default batch size for `index_collection`: process and commit this
