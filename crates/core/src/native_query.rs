@@ -80,7 +80,8 @@ pub fn build_fts5_query(input: &str) -> String {
     let mut out = String::new();
     let mut first = true;
 
-    for raw in input.split(' ') {
+    // Treat commas as term separators (split on whitespace and commas)
+    for raw in input.split(|c: char| c == ' ' || c == ',') {
         if raw.is_empty() {
             continue;
         }
@@ -113,7 +114,6 @@ pub fn build_fts5_query(input: &str) -> String {
 
         // FTS5 special chars that require quoting the token
         let needs_quote = token.contains('-')
-            || token.contains(',')
             || token.contains('(')
             || token.contains(')')
             || token.contains('"')
@@ -525,7 +525,7 @@ mod tests {
 
     #[test]
     fn fts5_comma() {
-        assert_eq!(build_fts5_query("제1조,제2조"), "\"제1조,제2조\"");
+        assert_eq!(build_fts5_query("제1조,제2조"), "제1조 제2조");
     }
 
     #[test]
