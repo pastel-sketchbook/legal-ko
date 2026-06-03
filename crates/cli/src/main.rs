@@ -9,7 +9,7 @@ use legal_ko_core::models::{
 use legal_ko_core::search::{self, Searcher};
 #[cfg(feature = "tts")]
 use legal_ko_core::tts;
-use legal_ko_core::{client, crossref, enrichment, parser, person_index, reqwest, zmd};
+use legal_ko_core::{client, crossref, enrichment, hangul, parser, person_index, reqwest, zmd};
 
 #[derive(Parser)]
 #[command(
@@ -849,18 +849,24 @@ async fn cmd_precedent_search(
 
     // No metadata matches — if the query looks like a Korean name, fall back
     // to 법조인 (legal professional) search across documents.
-    if !parser::is_korean_name(query) {
-        // Not a name-shaped query; just print empty results.
+    let search_name: std::borrow::Cow<'_, str> = if parser::is_korean_name(query) {
+        query.into()
+    } else if let Some(h) = hangul::eng_to_hangul(query)
+        && parser::is_korean_name(&h)
+    {
+        h.into()
+    } else {
+        // Not a name-shaped query (even after 영타→한타 conversion); just print empty results.
         print_precedent_entries(&results, as_json)?;
         return Ok(());
-    }
+    };
 
     let max_results = limit.unwrap_or(20);
     if !as_json {
         eprintln!("No metadata matches for \"{query}\". Trying 법조인 search…");
     }
 
-    search_persons_indexed(client, query, None, &entries, as_json, max_results).await
+    search_persons_indexed(client, &search_name, None, &entries, as_json, max_results).await
 }
 
 async fn cmd_precedent_show(client: &reqwest::Client, id: &str, as_json: bool) -> Result<()> {
@@ -1216,23 +1222,35 @@ async fn cmd_precedent_search_person(
         None => None,
     };
 
+    // Convert 영타→한타 if the input looks like English keyboard mapping.
+    let search_name = if parser::is_korean_name(name) {
+        name.to_string()
+    } else {
+        hangul::eng_to_hangul(name).unwrap_or_else(|| name.to_string())
+    };
+
     // Load metadata.
     let entries = load_precedent_entries(client).await?;
 
     if !as_json {
         eprintln!(
-            "Searching for \"{name}\" across {} precedent(s)…",
+            "Searching for \"{search_name}\" across {} precedent(s)…",
             entries.len()
         );
     }
 
-    let mut results =
-        person_index::search_persons(client, name, role.as_ref(), &entries, |scanned, total| {
+    let mut results = person_index::search_persons(
+        client,
+        &search_name,
+        role.as_ref(),
+        &entries,
+        |scanned, total| {
             if !as_json {
                 eprint!("\rBuilding person index: {scanned}/{total}");
             }
-        })
-        .await;
+        },
+    )
+    .await;
 
     if !as_json {
         eprint!("\r\x1b[K");

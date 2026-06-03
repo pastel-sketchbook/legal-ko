@@ -342,7 +342,13 @@ fn handle_list_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         }
         KeyCode::PageDown => app.list_page_down(page_size),
         KeyCode::PageUp => app.list_page_up(page_size),
-        KeyCode::Enter => app.open_selected(),
+        KeyCode::Enter => {
+            if app.in_person_search_mode() {
+                app.open_selected_precedent();
+            } else {
+                app.open_selected();
+            }
+        }
         KeyCode::Char('/') => app.start_search(),
         KeyCode::Char('c') => app.open_category_filter(),
         KeyCode::Char('d') => app.open_department_filter(),
@@ -516,7 +522,13 @@ fn handle_admrule_list_key(app: &mut App, key: KeyEvent, terminal_height: usize)
         }
         KeyCode::PageDown => app.admrule_list_page_down(page_size),
         KeyCode::PageUp => app.admrule_list_page_up(page_size),
-        KeyCode::Enter => app.open_selected_admrule(),
+        KeyCode::Enter => {
+            if app.in_person_search_mode() {
+                app.open_selected_precedent();
+            } else {
+                app.open_selected_admrule();
+            }
+        }
         KeyCode::Char('/') => app.start_search(),
         KeyCode::Char('c') => app.open_admrule_type_filter(),
         KeyCode::Char('d') => app.open_admrule_agency_filter(),
@@ -580,7 +592,13 @@ fn handle_ordinance_list_key(app: &mut App, key: KeyEvent, terminal_height: usiz
         }
         KeyCode::PageDown => app.ordinance_list_page_down(page_size),
         KeyCode::PageUp => app.ordinance_list_page_up(page_size),
-        KeyCode::Enter => app.open_selected_ordinance(),
+        KeyCode::Enter => {
+            if app.in_person_search_mode() {
+                app.open_selected_precedent();
+            } else {
+                app.open_selected_ordinance();
+            }
+        }
         KeyCode::Char('/') => app.start_search(),
         KeyCode::Char('c') => app.open_ordinance_type_filter(),
         KeyCode::Char('d') => app.open_ordinance_region_filter(),
@@ -729,7 +747,13 @@ fn handle_zmd_search_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
                 app.zmd_search_move_up();
             }
         }
-        KeyCode::Enter => app.open_selected_zmd_result(),
+        KeyCode::Enter => {
+            if app.in_person_search_mode() {
+                app.open_selected_precedent();
+            } else {
+                app.open_selected_zmd_result();
+            }
+        }
         _ => {}
     }
 }

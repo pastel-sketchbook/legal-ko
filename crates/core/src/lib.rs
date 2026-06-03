@@ -5,6 +5,7 @@ pub mod config;
 pub mod context;
 pub mod crossref;
 pub mod enrichment;
+pub mod hangul;
 pub mod models;
 pub mod native_indexer;
 pub mod native_query;

@@ -3,7 +3,7 @@ members = ["crates/core", "crates/tui", "crates/cli"]
 resolver = "3"
 
 [workspace.package]
-version = "0.6.1"
+version = "0.6.2"
 edition = "2024"
 
 [workspace.dependencies]
@@ -18,11 +18,11 @@ dirs = "6.0.0"
 libc = "0.2.186"
 meilisearch-sdk = "0.33.0"
 ratatui = "0.30.0"
-reqwest = { version = "0.13.3", features = ["json"] }
+reqwest = { version = "0.13.4", features = ["json"] }
 rodio = "0.22.2"
 rusqlite = { version = "0.39.0", features = ["bundled", "vtab"] }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
+serde_json = "1.0.150"
 sha2 = "0.11.0"
 tokio = { version = "1.52.3", features = ["full"] }
 tracing = "0.1.44"
@@ -33,7 +33,7 @@ vibe-rust = { path = "../../voice/vibe-rust" }
 
 # PDF (Typst-based generation)
 typst = "0.14.2"
-typst-as-lib = { version = "0.15.4", features = ["typst-kit-fonts", "typst-kit-embed-fonts"] }
+typst-as-lib = { version = "0.15.5", features = ["typst-kit-fonts", "typst-kit-embed-fonts"] }
 typst-pdf = "0.14.2"
 
 [profile.release]

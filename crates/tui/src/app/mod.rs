@@ -368,6 +368,11 @@ pub struct App {
     pub person_search_selected: usize,
     /// Scroll offset for person search results list.
     pub person_search_offset: usize,
+    /// The query that triggered the current person search (for status messages).
+    pub active_person_search_query: String,
+    /// When a person search result is opened from a non-precedent list view,
+    /// this stores the originating view so that `go_back()` returns there.
+    pub person_search_opened_from: Option<View>,
 
     // ── Split view (list + detail side-by-side) ───────────────
     /// True when the split view is active (list left, detail right).
@@ -537,6 +542,8 @@ impl App {
             person_search_results: Vec::new(),
             person_search_selected: 0,
             person_search_offset: 0,
+            active_person_search_query: String::new(),
+            person_search_opened_from: None,
             split_open: false,
             split_ratio: prefs.split_ratio.unwrap_or(0.4),
             dragging: false,
@@ -1527,22 +1534,13 @@ end tell"#
                 }
                 self.person_search_active = false;
                 let count = self.person_search_results.len();
+                let q = &self.active_person_search_query;
                 if count == 0 {
-                    self.status_message = Some(format!(
-                        "법조인 \"{}\" — 0 matches",
-                        self.precedent_search_query
-                    ));
+                    self.status_message = Some(format!("법조인 \"{q}\" — 0 matches"));
                 } else {
-                    self.status_message = Some(format!(
-                        "법조인 \"{}\" — {count} match(es)",
-                        self.precedent_search_query
-                    ));
+                    self.status_message = Some(format!("법조인 \"{q}\" — {count} match(es)"));
                 }
-                info!(
-                    query = %self.precedent_search_query,
-                    count,
-                    "Person search complete"
-                );
+                info!(query = %q, count, "Person search complete");
             }
             Message::PrecedentDbEntriesLoaded(entries) => {
                 if !self.precedents_loaded {
@@ -1954,6 +1952,34 @@ end tell"#
         self.person_search_active || !self.person_search_results.is_empty()
     }
 
+    // ── Law list person-search-aware helpers ───────────────────
+
+    pub fn law_visible_count(&self) -> usize {
+        if self.in_person_search_mode() {
+            self.person_search_results.len()
+        } else {
+            self.filtered_indices.len()
+        }
+    }
+
+    pub fn law_cursor(&self) -> usize {
+        if self.in_person_search_mode() {
+            self.person_search_selected
+        } else {
+            self.list_selected
+        }
+    }
+
+    pub fn set_law_cursor(&mut self, pos: usize) {
+        if self.in_person_search_mode() {
+            self.person_search_selected = pos;
+        } else {
+            self.list_selected = pos;
+        }
+    }
+
+    // ── Precedent list person-search-aware helpers ────────────
+
     /// Number of items in the currently visible precedent list (normal or person search).
     pub fn precedent_visible_count(&self) -> usize {
         if self.in_person_search_mode() {
@@ -1986,6 +2012,11 @@ end tell"#
         let Some(entry) = self.selected_precedent().cloned() else {
             return;
         };
+
+        // Store origin view when person search opens from a non-precedent list.
+        if self.in_person_search_mode() && self.view != View::PrecedentList {
+            self.person_search_opened_from = Some(self.view);
+        }
 
         self.precedent_detail_loading = true;
         self.precedent_detail_scroll = 0;
@@ -2220,6 +2251,58 @@ end tell"#
         self.admrule_agencies = agencies;
         self.admrules_loaded = true;
         self.apply_admrule_filters();
+    }
+
+    // ── Admrule list person-search-aware helpers ──────────────
+
+    pub fn admrule_visible_count(&self) -> usize {
+        if self.in_person_search_mode() {
+            self.person_search_results.len()
+        } else {
+            self.admrule_filtered_indices.len()
+        }
+    }
+
+    pub fn admrule_cursor(&self) -> usize {
+        if self.in_person_search_mode() {
+            self.person_search_selected
+        } else {
+            self.admrule_list_selected
+        }
+    }
+
+    pub fn set_admrule_cursor(&mut self, pos: usize) {
+        if self.in_person_search_mode() {
+            self.person_search_selected = pos;
+        } else {
+            self.admrule_list_selected = pos;
+        }
+    }
+
+    // ── Ordinance list person-search-aware helpers ────────────
+
+    pub fn ordinance_visible_count(&self) -> usize {
+        if self.in_person_search_mode() {
+            self.person_search_results.len()
+        } else {
+            self.ordinance_filtered_indices.len()
+        }
+    }
+
+    pub fn ordinance_cursor(&self) -> usize {
+        if self.in_person_search_mode() {
+            self.person_search_selected
+        } else {
+            self.ordinance_list_selected
+        }
+    }
+
+    pub fn set_ordinance_cursor(&mut self, pos: usize) {
+        if self.in_person_search_mode() {
+            self.person_search_selected = pos;
+        } else {
+            self.ordinance_list_selected = pos;
+        }
     }
 
     pub fn selected_admrule(&self) -> Option<&AdmruleEntry> {

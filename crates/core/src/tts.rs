@@ -65,11 +65,11 @@ impl fmt::Display for TtsProfile {
 
 /// Mono channel count for rodio.
 // SAFETY (const): `1` is non-zero, so `unwrap` will never panic.
-const CHANNELS: NonZero<u16> = NonZero::new(1).unwrap();
+const CHANNELS: NonZero<u16> = NonZero::new(1).expect("1 is non-zero");
 
 /// Sample rate for rodio (must match `OUTPUT_SR` = 24000).
 // SAFETY (const): `OUTPUT_SR` is 24000, which is non-zero, so `unwrap` will never panic.
-const SAMPLE_RATE: NonZero<u32> = NonZero::new(OUTPUT_SR).unwrap();
+const SAMPLE_RATE: NonZero<u32> = NonZero::new(OUTPUT_SR).expect("OUTPUT_SR is non-zero");
 
 // ── stdout/stderr suppression ───────────────────────────────
 

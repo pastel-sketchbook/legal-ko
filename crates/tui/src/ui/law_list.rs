@@ -43,7 +43,14 @@ fn render_title_bar(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         title_style.add_modifier(Modifier::BOLD),
     )];
 
-    if filtered == total {
+    if app.in_person_search_mode() {
+        let found = app.person_search_results.len();
+        let suffix = if app.person_search_active { "..." } else { "" };
+        parts.push(Span::styled(
+            format!(" [법조인 {found}{suffix}] "),
+            title_style,
+        ));
+    } else if filtered == total {
         parts.push(Span::styled(format!(" [{total}] "), title_style));
     } else {
         parts.push(Span::styled(format!(" [{filtered}/{total}] "), title_style));
@@ -109,6 +116,12 @@ fn render_search_bar(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
 }
 
 fn render_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
+    // ── Person (법조인) search mode ──────────────────────────
+    if app.person_search_active || !app.person_search_results.is_empty() {
+        super::render_person_search_results(f, app, theme, area);
+        return;
+    }
+
     if app.filtered_indices.is_empty() {
         let msg = if app.all_laws.is_empty() {
             "No laws loaded"
@@ -268,10 +281,11 @@ fn render_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let content = if let Some(ref msg) = app.status_message {
         styles::status_message_line(theme, msg, area.width)
     } else {
-        let prefix = if app.filtered_indices.is_empty() {
+        let visible = app.law_visible_count();
+        let prefix = if visible == 0 {
             String::new()
         } else {
-            format!(" {}/{} ", app.list_selected + 1, app.filtered_indices.len())
+            format!(" {}/{} ", app.law_cursor() + 1, visible)
         };
 
         let pairs: Vec<(&str, &str)> = vec![

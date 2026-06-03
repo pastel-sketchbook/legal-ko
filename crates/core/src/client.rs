@@ -274,7 +274,11 @@ pub async fn fetch_precedent_metadata(client: &reqwest::Client) -> Result<Preced
 
     // 1. Try cached local metadata
     let cache_path = local_metadata_cache_path()?;
-    if let Some(index) = load_cached_metadata(&cache_path) {
+    let load_path = cache_path.clone();
+    let cached = tokio::task::spawn_blocking(move || load_cached_metadata(&load_path))
+        .await
+        .context("Cache load task panicked")?;
+    if let Some(index) = cached {
         info!(count = index.len(), "Loaded precedent metadata from cache");
         return Ok(index);
     }
@@ -295,7 +299,14 @@ pub async fn fetch_precedent_metadata(client: &reqwest::Client) -> Result<Preced
             .await
             .context("Metadata build task panicked")??;
 
-    save_metadata_cache(&cache_path, &index);
+    // Save to cache in spawn_blocking to avoid blocking the async runtime
+    let save_path = cache_path;
+    let index = tokio::task::spawn_blocking(move || {
+        save_metadata_cache(&save_path, &index);
+        index
+    })
+    .await
+    .context("Cache save task panicked")?;
     Ok(index)
 }
 

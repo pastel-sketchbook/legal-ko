@@ -4,36 +4,40 @@ impl App {
     // ── List navigation ───────────────────────────────────────
 
     pub fn list_move_down(&mut self) {
-        if !self.filtered_indices.is_empty()
-            && self.list_selected < self.filtered_indices.len().saturating_sub(1)
-        {
-            self.list_selected += 1;
+        let count = self.law_visible_count();
+        let cursor = self.law_cursor();
+        if count > 0 && cursor < count.saturating_sub(1) {
+            self.set_law_cursor(cursor + 1);
         }
     }
 
     pub fn list_move_up(&mut self) {
-        self.list_selected = self.list_selected.saturating_sub(1);
+        let cursor = self.law_cursor();
+        self.set_law_cursor(cursor.saturating_sub(1));
     }
 
     pub fn list_page_down(&mut self, page_size: usize) {
-        if self.filtered_indices.is_empty() {
+        let count = self.law_visible_count();
+        if count == 0 {
             return;
         }
-        self.list_selected =
-            (self.list_selected + page_size).min(self.filtered_indices.len().saturating_sub(1));
+        let cursor = self.law_cursor();
+        self.set_law_cursor((cursor + page_size).min(count.saturating_sub(1)));
     }
 
     pub fn list_page_up(&mut self, page_size: usize) {
-        self.list_selected = self.list_selected.saturating_sub(page_size);
+        let cursor = self.law_cursor();
+        self.set_law_cursor(cursor.saturating_sub(page_size));
     }
 
     pub fn list_top(&mut self) {
-        self.list_selected = 0;
+        self.set_law_cursor(0);
     }
 
     pub fn list_bottom(&mut self) {
-        if !self.filtered_indices.is_empty() {
-            self.list_selected = self.filtered_indices.len().saturating_sub(1);
+        let count = self.law_visible_count();
+        if count > 0 {
+            self.set_law_cursor(count.saturating_sub(1));
         }
     }
 
@@ -243,7 +247,10 @@ impl App {
                 self.detail_rendered_lines.clear();
             }
             View::PrecedentDetail => {
-                self.view = View::PrecedentList;
+                self.view = self
+                    .person_search_opened_from
+                    .take()
+                    .unwrap_or(View::PrecedentList);
                 self.precedent_detail = None;
                 self.precedent_detail_scroll = 0;
                 self.precedent_detail_rendered_lines.clear();
@@ -275,36 +282,40 @@ impl App {
     // ── Admrule list navigation ───────────────────────────────
 
     pub fn admrule_list_move_down(&mut self) {
-        if !self.admrule_filtered_indices.is_empty()
-            && self.admrule_list_selected < self.admrule_filtered_indices.len().saturating_sub(1)
-        {
-            self.admrule_list_selected += 1;
+        let count = self.admrule_visible_count();
+        let cursor = self.admrule_cursor();
+        if count > 0 && cursor < count.saturating_sub(1) {
+            self.set_admrule_cursor(cursor + 1);
         }
     }
 
     pub fn admrule_list_move_up(&mut self) {
-        self.admrule_list_selected = self.admrule_list_selected.saturating_sub(1);
+        let cursor = self.admrule_cursor();
+        self.set_admrule_cursor(cursor.saturating_sub(1));
     }
 
     pub fn admrule_list_page_down(&mut self, page_size: usize) {
-        if self.admrule_filtered_indices.is_empty() {
+        let count = self.admrule_visible_count();
+        if count == 0 {
             return;
         }
-        self.admrule_list_selected = (self.admrule_list_selected + page_size)
-            .min(self.admrule_filtered_indices.len().saturating_sub(1));
+        let cursor = self.admrule_cursor();
+        self.set_admrule_cursor((cursor + page_size).min(count.saturating_sub(1)));
     }
 
     pub fn admrule_list_page_up(&mut self, page_size: usize) {
-        self.admrule_list_selected = self.admrule_list_selected.saturating_sub(page_size);
+        let cursor = self.admrule_cursor();
+        self.set_admrule_cursor(cursor.saturating_sub(page_size));
     }
 
     pub fn admrule_list_top(&mut self) {
-        self.admrule_list_selected = 0;
+        self.set_admrule_cursor(0);
     }
 
     pub fn admrule_list_bottom(&mut self) {
-        if !self.admrule_filtered_indices.is_empty() {
-            self.admrule_list_selected = self.admrule_filtered_indices.len().saturating_sub(1);
+        let count = self.admrule_visible_count();
+        if count > 0 {
+            self.set_admrule_cursor(count.saturating_sub(1));
         }
     }
 
@@ -330,37 +341,40 @@ impl App {
     // ── Ordinance list navigation ─────────────────────────────
 
     pub fn ordinance_list_move_down(&mut self) {
-        if !self.ordinance_filtered_indices.is_empty()
-            && self.ordinance_list_selected
-                < self.ordinance_filtered_indices.len().saturating_sub(1)
-        {
-            self.ordinance_list_selected += 1;
+        let count = self.ordinance_visible_count();
+        let cursor = self.ordinance_cursor();
+        if count > 0 && cursor < count.saturating_sub(1) {
+            self.set_ordinance_cursor(cursor + 1);
         }
     }
 
     pub fn ordinance_list_move_up(&mut self) {
-        self.ordinance_list_selected = self.ordinance_list_selected.saturating_sub(1);
+        let cursor = self.ordinance_cursor();
+        self.set_ordinance_cursor(cursor.saturating_sub(1));
     }
 
     pub fn ordinance_list_page_down(&mut self, page_size: usize) {
-        if self.ordinance_filtered_indices.is_empty() {
+        let count = self.ordinance_visible_count();
+        if count == 0 {
             return;
         }
-        self.ordinance_list_selected = (self.ordinance_list_selected + page_size)
-            .min(self.ordinance_filtered_indices.len().saturating_sub(1));
+        let cursor = self.ordinance_cursor();
+        self.set_ordinance_cursor((cursor + page_size).min(count.saturating_sub(1)));
     }
 
     pub fn ordinance_list_page_up(&mut self, page_size: usize) {
-        self.ordinance_list_selected = self.ordinance_list_selected.saturating_sub(page_size);
+        let cursor = self.ordinance_cursor();
+        self.set_ordinance_cursor(cursor.saturating_sub(page_size));
     }
 
     pub fn ordinance_list_top(&mut self) {
-        self.ordinance_list_selected = 0;
+        self.set_ordinance_cursor(0);
     }
 
     pub fn ordinance_list_bottom(&mut self) {
-        if !self.ordinance_filtered_indices.is_empty() {
-            self.ordinance_list_selected = self.ordinance_filtered_indices.len().saturating_sub(1);
+        let count = self.ordinance_visible_count();
+        if count > 0 {
+            self.set_ordinance_cursor(count.saturating_sub(1));
         }
     }
 

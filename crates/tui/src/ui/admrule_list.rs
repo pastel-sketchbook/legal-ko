@@ -42,11 +42,20 @@ fn render_title_bar(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         title_style.add_modifier(Modifier::BOLD),
     )];
 
-    let filtered = app.admrule_filtered_indices.len();
-    if filtered == total {
-        parts.push(Span::styled(format!(" [{total}] "), title_style));
+    if app.in_person_search_mode() {
+        let found = app.person_search_results.len();
+        let suffix = if app.person_search_active { "..." } else { "" };
+        parts.push(Span::styled(
+            format!(" [법조인 {found}{suffix}] "),
+            title_style,
+        ));
     } else {
-        parts.push(Span::styled(format!(" [{filtered}/{total}] "), title_style));
+        let filtered = app.admrule_filtered_indices.len();
+        if filtered == total {
+            parts.push(Span::styled(format!(" [{total}] "), title_style));
+        } else {
+            parts.push(Span::styled(format!(" [{filtered}/{total}] "), title_style));
+        }
     }
 
     // Active filters
@@ -119,6 +128,12 @@ fn render_search_bar(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
 }
 
 fn render_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
+    // ── Person (법조인) search mode ──────────────────────────
+    if app.person_search_active || !app.person_search_results.is_empty() {
+        super::render_person_search_results(f, app, theme, area);
+        return;
+    }
+
     if app.admrule_filtered_indices.is_empty() {
         let msg = if app.all_admrules.is_empty() {
             if app.admrules_loaded {
@@ -202,11 +217,11 @@ fn render_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let content = if let Some(ref msg) = app.status_message {
         styles::status_message_line(theme, msg, area.width)
     } else {
-        let filtered = app.admrule_filtered_indices.len();
-        let prefix = if filtered == 0 {
+        let visible = app.admrule_visible_count();
+        let prefix = if visible == 0 {
             String::new()
         } else {
-            format!(" {}/{filtered} ", app.admrule_list_selected + 1)
+            format!(" {}/{} ", app.admrule_cursor() + 1, visible)
         };
 
         let pairs: Vec<(&str, &str)> = vec![

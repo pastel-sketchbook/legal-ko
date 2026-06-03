@@ -32,13 +32,24 @@ pub fn render_zmd_search(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
 }
 
 fn render_title_bar(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
-    let count = app.zmd_search_results.len();
     let title_style = styles::title_bar(theme);
 
-    let parts = vec![
-        Span::styled(" zmd search ", title_style.add_modifier(Modifier::BOLD)),
-        Span::styled(format!(" [{count} results] "), title_style),
-    ];
+    let mut parts = vec![Span::styled(
+        " zmd search ",
+        title_style.add_modifier(Modifier::BOLD),
+    )];
+
+    if app.in_person_search_mode() {
+        let found = app.person_search_results.len();
+        let suffix = if app.person_search_active { "..." } else { "" };
+        parts.push(Span::styled(
+            format!(" [법조인 {found}{suffix}] "),
+            title_style,
+        ));
+    } else {
+        let count = app.zmd_search_results.len();
+        parts.push(Span::styled(format!(" [{count} results] "), title_style));
+    }
 
     let bar = Paragraph::new(Line::from(parts)).style(title_style);
     f.render_widget(bar, area);
@@ -62,13 +73,20 @@ fn render_search_input(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     if is_searching {
         // Place cursor after the query text
         let cursor_x = area.x
-            + prefix.len() as u16
-            + unicode_width::UnicodeWidthStr::width(query.as_str()) as u16;
+            + u16::try_from(prefix.len()).unwrap_or(u16::MAX)
+            + u16::try_from(unicode_width::UnicodeWidthStr::width(query.as_str()))
+                .unwrap_or(u16::MAX);
         f.set_cursor_position((cursor_x, area.y));
     }
 }
 
 fn render_results(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
+    // ── Person (법조인) search mode ──────────────────────────
+    if app.person_search_active || !app.person_search_results.is_empty() {
+        super::render_person_search_results(f, app, theme, area);
+        return;
+    }
+
     if app.zmd_search_results.is_empty() {
         let msg = if app.zmd_search_query.is_empty() {
             "Type to search across all indexed documents (laws, precedents, admrules, ordinances)"
