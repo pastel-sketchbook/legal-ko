@@ -85,8 +85,11 @@ impl App {
         }
 
         // If the query looks like a Korean name, trigger 법조인 search.
-        if !query.is_empty() && parser::is_korean_name(&query) {
-            self.start_person_search(&query);
+        // Also try 영타→한타 conversion for English keyboard input.
+        if !query.is_empty()
+            && let Some(name) = Self::resolve_person_name(&query)
+        {
+            self.start_person_search(&name);
         }
     }
 
@@ -147,16 +150,28 @@ impl App {
         // If the query looks like a Korean name, trigger 법조인 (legal
         // professional) search. This runs alongside the normal metadata filter
         // — results from both are available to the renderer.
-        if !query_norm.is_empty() && parser::is_korean_name(&self.precedent_search_query) {
-            let name = self.precedent_search_query.clone();
+        if !query_norm.is_empty()
+            && let Some(name) = Self::resolve_person_name(&self.precedent_search_query)
+        {
             self.start_person_search(&name);
         }
     }
 
-    /// Spawn a background task that searches for a 법조인 name using the
-    /// cached person index. If no index exists, builds one concurrently
-    /// first (sending progress messages to the UI).
-    fn start_person_search(&mut self, name: &str) {
+/// Resolve the name to search for: if the query is already Korean, use it
+/// directly; otherwise try 영타→한타 conversion and use that if it yields a
+/// valid Korean name.
+fn resolve_person_name(query: &str) -> Option<String> {
+    if parser::is_korean_name(query) {
+        Some(query.to_string())
+    } else {
+        hangul::eng_to_hangul(query).filter(|h| parser::is_korean_name(h))
+    }
+}
+
+/// Spawn a background task that searches for a 법조인 name using the
+/// cached person index. If no index exists, builds one concurrently
+/// first (sending progress messages to the UI).
+fn start_person_search(&mut self, name: &str) {
         self.person_search_seq = self.person_search_seq.wrapping_add(1);
         self.person_search_active = true;
         self.person_search_results.clear();
@@ -639,9 +654,8 @@ impl App {
 
         // If the query looks like a Korean name, trigger 법조인 search.
         if !self.admrule_search_query.is_empty()
-            && parser::is_korean_name(&self.admrule_search_query)
+            && let Some(name) = Self::resolve_person_name(&self.admrule_search_query)
         {
-            let name = self.admrule_search_query.clone();
             self.start_person_search(&name);
         }
     }
@@ -695,9 +709,8 @@ impl App {
 
         // If the query looks like a Korean name, trigger 법조인 search.
         if !self.ordinance_search_query.is_empty()
-            && parser::is_korean_name(&self.ordinance_search_query)
+            && let Some(name) = Self::resolve_person_name(&self.ordinance_search_query)
         {
-            let name = self.ordinance_search_query.clone();
             self.start_person_search(&name);
         }
     }
@@ -720,8 +733,9 @@ impl App {
         self.zmd_search_query.push(c);
         self.dispatch_zmd_search();
         // If the query looks like a Korean name, trigger 법조인 search.
-        if !self.zmd_search_query.is_empty() && parser::is_korean_name(&self.zmd_search_query) {
-            let name = self.zmd_search_query.clone();
+        if !self.zmd_search_query.is_empty()
+            && let Some(name) = Self::resolve_person_name(&self.zmd_search_query)
+        {
             self.start_person_search(&name);
         }
     }
@@ -733,8 +747,9 @@ impl App {
         // If the query still looks like a Korean name, restart person search.
         self.person_search_active = false;
         self.person_search_results.clear();
-        if !self.zmd_search_query.is_empty() && parser::is_korean_name(&self.zmd_search_query) {
-            let name = self.zmd_search_query.clone();
+        if !self.zmd_search_query.is_empty()
+            && let Some(name) = Self::resolve_person_name(&self.zmd_search_query)
+        {
             self.start_person_search(&name);
         }
     }
