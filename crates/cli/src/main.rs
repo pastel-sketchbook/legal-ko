@@ -145,7 +145,7 @@ enum Command {
         #[arg(long)]
         court: Option<String>,
 
-        /// Sort order: "name" (default) or "date" (ruling date, newest first)
+        /// Sort order: "name" (default), "date" (newest first), or "date-asc" (oldest first)
         #[arg(long, default_value = "name")]
         sort: String,
 
@@ -251,7 +251,7 @@ enum Command {
         #[arg(long)]
         court: Option<String>,
 
-        /// Sort order: "name" (default) or "date" (ruling date, newest first)
+        /// Sort order: "name" (default), "date" (newest first), or "date-asc" (oldest first)
         #[arg(long, default_value = "name")]
         sort: String,
 
@@ -803,6 +803,7 @@ async fn cmd_precedent_list(
 
     let order = match sort {
         "date" | "ruling" => PrecedentSortOrder::RulingDate,
+        "date-asc" | "ruling-asc" => PrecedentSortOrder::RulingDateAsc,
         _ => PrecedentSortOrder::CaseName,
     };
     models::sort_precedent_entries(&mut entries, order);
@@ -1285,6 +1286,7 @@ async fn cmd_precedent_search_person(
 
     let order = match sort {
         "date" | "ruling" => PrecedentSortOrder::RulingDate,
+        "date-asc" | "ruling-asc" => PrecedentSortOrder::RulingDateAsc,
         _ => PrecedentSortOrder::CaseName,
     };
     person_index::sort_person_results(&mut results, order);

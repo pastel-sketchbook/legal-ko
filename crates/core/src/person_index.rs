@@ -388,6 +388,22 @@ pub fn sort_person_results(results: &mut [PersonSearchResult], order: PrecedentS
                     .then_with(|| a.entry.case_name.cmp(&b.entry.case_name))
             });
         }
+        PrecedentSortOrder::RulingDateAsc => {
+            results.sort_by(|a, b| {
+                let da = if a.entry.ruling_date.is_empty() {
+                    ""
+                } else {
+                    &a.entry.ruling_date
+                };
+                let db = if b.entry.ruling_date.is_empty() {
+                    ""
+                } else {
+                    &b.entry.ruling_date
+                };
+                da.cmp(db)
+                    .then_with(|| a.entry.case_name.cmp(&b.entry.case_name))
+            });
+        }
     }
 }
 

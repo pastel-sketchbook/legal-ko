@@ -241,21 +241,14 @@ fn render_footer(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             format!(" {}/{visible} ", app.precedent_cursor() + 1)
         };
 
+        let sort_label = format!("정렬:{}", app.precedent_sort_order.label());
         let pairs: Vec<(&str, &str)> = vec![
             ("j/k", "이동"),
             ("Enter", "열기"),
             ("/", "검색"),
             ("c", "사건종류"),
             ("d", "법원"),
-            (
-                "S",
-                if app.precedent_sort_order == legal_ko_core::models::PrecedentSortOrder::RulingDate
-                {
-                    "정렬:판결일자"
-                } else {
-                    "정렬:사건명"
-                },
-            ),
+            ("S", &sort_label),
             ("Tab", "법률"),
             ("t", "테마"),
             ("o", "AI 에이전트"),

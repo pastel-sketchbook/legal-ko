@@ -153,8 +153,10 @@ pub enum PrecedentSortOrder {
     /// Sort by case name (사건명), then case number.
     #[default]
     CaseName,
-    /// Sort by ruling date (선고일자, newest first), then case name.
+    /// Sort by ruling date (선고일자, descending / newest first), then case name.
     RulingDate,
+    /// Sort by ruling date ascending (oldest first), then case name.
+    RulingDateAsc,
 }
 
 impl PrecedentSortOrder {
@@ -163,7 +165,8 @@ impl PrecedentSortOrder {
     pub fn next(self) -> Self {
         match self {
             PrecedentSortOrder::CaseName => PrecedentSortOrder::RulingDate,
-            PrecedentSortOrder::RulingDate => PrecedentSortOrder::CaseName,
+            PrecedentSortOrder::RulingDate => PrecedentSortOrder::RulingDateAsc,
+            PrecedentSortOrder::RulingDateAsc => PrecedentSortOrder::CaseName,
         }
     }
 
@@ -172,7 +175,8 @@ impl PrecedentSortOrder {
     pub fn label(self) -> &'static str {
         match self {
             PrecedentSortOrder::CaseName => "case name",
-            PrecedentSortOrder::RulingDate => "ruling date",
+            PrecedentSortOrder::RulingDate => "ruling date \u{2193}",
+            PrecedentSortOrder::RulingDateAsc => "ruling date \u{2191}",
         }
     }
 }
@@ -330,6 +334,22 @@ pub fn sort_precedent_entries(entries: &mut [PrecedentEntry], order: PrecedentSo
                     &b.ruling_date
                 };
                 db.cmp(da).then_with(|| a.case_name.cmp(&b.case_name))
+            });
+        }
+        PrecedentSortOrder::RulingDateAsc => {
+            entries.sort_by(|a, b| {
+                // Ascending date (oldest first); empty dates sort last.
+                let da = if a.ruling_date.is_empty() {
+                    ""
+                } else {
+                    &a.ruling_date
+                };
+                let db = if b.ruling_date.is_empty() {
+                    ""
+                } else {
+                    &b.ruling_date
+                };
+                da.cmp(db).then_with(|| a.case_name.cmp(&b.case_name))
             });
         }
     }
