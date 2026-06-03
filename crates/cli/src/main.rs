@@ -251,6 +251,10 @@ enum Command {
         #[arg(long)]
         court: Option<String>,
 
+        /// Sort order: "name" (default) or "date" (ruling date, newest first)
+        #[arg(long, default_value = "name")]
+        sort: String,
+
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -473,9 +477,13 @@ async fn main() -> Result<()> {
             role,
             case_type,
             court,
+            sort,
             json,
             limit,
-        } => cmd_precedent_search_person(&client, &name, role, case_type, court, json, limit).await,
+        } => {
+            cmd_precedent_search_person(&client, &name, role, case_type, court, &sort, json, limit)
+                .await
+        }
 
         // ── zmd collection management ──────────────────────
         Command::Zmd(zmd_cmd) => cmd_zmd(zmd_cmd),
@@ -1204,12 +1212,14 @@ async fn cmd_precedent_persons(client: &reqwest::Client, id: &str, as_json: bool
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_precedent_search_person(
     client: &reqwest::Client,
     name: &str,
     role_filter: Option<String>,
     case_type_filter: Option<String>,
     court_filter: Option<String>,
+    sort: &str,
     as_json: bool,
     limit: usize,
 ) -> Result<()> {
@@ -1272,6 +1282,12 @@ async fn cmd_precedent_search_person(
             true
         });
     }
+
+    let order = match sort {
+        "date" | "ruling" => PrecedentSortOrder::RulingDate,
+        _ => PrecedentSortOrder::CaseName,
+    };
+    person_index::sort_person_results(&mut results, order);
 
     print_person_results(name, role.as_ref(), &results, as_json, limit)
 }

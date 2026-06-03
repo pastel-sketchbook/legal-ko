@@ -355,7 +355,13 @@ fn handle_list_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
         KeyCode::Char('d') => app.open_department_filter(),
         KeyCode::Char('B') => app.toggle_bookmark(),
         KeyCode::Char('b') => app.toggle_bookmarks_only(),
-        KeyCode::Char('S') => app.toggle_sort(),
+        KeyCode::Char('S') => {
+            if app.in_person_search_mode() {
+                app.toggle_person_search_sort();
+            } else {
+                app.toggle_sort();
+            }
+        }
         KeyCode::Char('t') => app.next_theme(),
         #[cfg(feature = "tts")]
         KeyCode::Char('T') => app.toggle_tts_profile(),
@@ -459,7 +465,13 @@ fn handle_precedent_list_key(app: &mut App, key: KeyEvent, terminal_height: usiz
         KeyCode::Char('/') => app.start_search(),
         KeyCode::Char('c') => app.open_case_type_filter(),
         KeyCode::Char('d') => app.open_court_filter(),
-        KeyCode::Char('S') => app.toggle_precedent_sort(),
+        KeyCode::Char('S') => {
+            if app.in_person_search_mode() {
+                app.toggle_person_search_sort();
+            } else {
+                app.toggle_precedent_sort();
+            }
+        }
         KeyCode::Char('t') => app.next_theme(),
         KeyCode::Char('o') => app.open_agent_picker(),
         KeyCode::Tab => app.next_tab(),
@@ -533,7 +545,13 @@ fn handle_admrule_list_key(app: &mut App, key: KeyEvent, terminal_height: usize)
         KeyCode::Char('/') => app.start_search(),
         KeyCode::Char('c') => app.open_admrule_type_filter(),
         KeyCode::Char('d') => app.open_admrule_agency_filter(),
-        KeyCode::Char('S') => app.toggle_admrule_sort(),
+        KeyCode::Char('S') => {
+            if app.in_person_search_mode() {
+                app.toggle_person_search_sort();
+            } else {
+                app.toggle_admrule_sort();
+            }
+        }
         KeyCode::Char('t') => app.next_theme(),
         KeyCode::Char('o') => app.open_agent_picker(),
         KeyCode::Tab => app.next_tab(),
@@ -603,7 +621,13 @@ fn handle_ordinance_list_key(app: &mut App, key: KeyEvent, terminal_height: usiz
         KeyCode::Char('/') => app.start_search(),
         KeyCode::Char('c') => app.open_ordinance_type_filter(),
         KeyCode::Char('d') => app.open_ordinance_region_filter(),
-        KeyCode::Char('S') => app.toggle_ordinance_sort(),
+        KeyCode::Char('S') => {
+            if app.in_person_search_mode() {
+                app.toggle_person_search_sort();
+            } else {
+                app.toggle_ordinance_sort();
+            }
+        }
         KeyCode::Char('t') => app.next_theme(),
         KeyCode::Char('o') => app.open_agent_picker(),
         KeyCode::Tab => app.next_tab(),
@@ -747,6 +771,9 @@ fn handle_zmd_search_key(app: &mut App, key: KeyEvent, terminal_height: usize) {
             for _ in 0..page_size {
                 app.zmd_search_move_up();
             }
+        }
+        KeyCode::Char('S') if app.in_person_search_mode() => {
+            app.toggle_person_search_sort();
         }
         KeyCode::Enter => {
             if app.in_person_search_mode() {

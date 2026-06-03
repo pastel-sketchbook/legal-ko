@@ -321,21 +321,33 @@ pub fn render_person_search_results(f: &mut Frame, app: &App, theme: &Theme, are
     let name_w = total_width.saturating_sub(court_w + case_type_w + date_w + gaps);
 
     let mut start_row = 0u16;
-    if app.person_search_active {
-        let frames = ["..", "...", "....", ".....", "......"];
-        let frame = (app.tick / 3) % frames.len();
-        let header = Line::from(vec![
-            Span::styled(
-                format!(" 법조인 검색 중{} ", frames[frame]),
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::ITALIC),
-            ),
-            Span::styled(
-                format!("({} found) ", results.len()),
-                Style::default().fg(theme.muted),
-            ),
-        ]);
+    if !results.is_empty() {
+        let mut header_spans: Vec<Span> = if app.person_search_active {
+            let frames = ["..", "...", "....", ".....", "......"];
+            let frame = (app.tick / 3) % frames.len();
+            vec![
+                Span::styled(
+                    format!(" 법조인 검색 중{} ", frames[frame]),
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::ITALIC),
+                ),
+                Span::styled(
+                    format!("({} found) ", results.len()),
+                    Style::default().fg(theme.muted),
+                ),
+            ]
+        } else {
+            vec![Span::styled(
+                format!(" 법조인 ({}개) ", results.len()),
+                Style::default().fg(theme.accent),
+            )]
+        };
+        header_spans.push(Span::styled(
+            format!("정렬:{} ", app.person_search_sort_order.label()),
+            Style::default().fg(theme.tag),
+        ));
+        let header = Line::from(header_spans);
         let header_p = Paragraph::new(header);
         if area.height > 0 {
             f.render_widget(header_p, Rect { height: 1, ..area });

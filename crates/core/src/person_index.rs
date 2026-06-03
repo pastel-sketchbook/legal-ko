@@ -19,7 +19,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument, warn};
 
-use crate::models::{PersonRole, PrecedentEntry};
+use crate::models::{PersonRole, PrecedentEntry, PrecedentSortOrder};
 use crate::{client, parser};
 
 /// Maximum number of concurrent HTTP fetches during index building.
@@ -356,6 +356,39 @@ pub struct PersonSearchResult {
     pub entry: PrecedentEntry,
     pub role: PersonRole,
     pub qualifier: Option<String>,
+}
+
+/// Sort person search results by the given order.
+///
+/// - `CaseName`: sort by case name, then case number.
+/// - `RulingDate`: sort by ruling date descending (newest first), then case name.
+pub fn sort_person_results(results: &mut [PersonSearchResult], order: PrecedentSortOrder) {
+    match order {
+        PrecedentSortOrder::CaseName => {
+            results.sort_by(|a, b| {
+                a.entry
+                    .case_name
+                    .cmp(&b.entry.case_name)
+                    .then_with(|| a.entry.case_number.cmp(&b.entry.case_number))
+            });
+        }
+        PrecedentSortOrder::RulingDate => {
+            results.sort_by(|a, b| {
+                let da = if a.entry.ruling_date.is_empty() {
+                    ""
+                } else {
+                    &a.entry.ruling_date
+                };
+                let db = if b.entry.ruling_date.is_empty() {
+                    ""
+                } else {
+                    &b.entry.ruling_date
+                };
+                db.cmp(da)
+                    .then_with(|| a.entry.case_name.cmp(&b.entry.case_name))
+            });
+        }
+    }
 }
 
 /// Path to the zmd precedent-kr clone (same logic as client.rs).

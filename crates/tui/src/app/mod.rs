@@ -368,6 +368,8 @@ pub struct App {
     pub person_search_selected: usize,
     /// Scroll offset for person search results list.
     pub person_search_offset: usize,
+    /// Sort order for person search results.
+    pub person_search_sort_order: PrecedentSortOrder,
     /// The query that triggered the current person search (for status messages).
     pub active_person_search_query: String,
     /// When a person search result is opened from a non-precedent list view,
@@ -542,6 +544,7 @@ impl App {
             person_search_results: Vec::new(),
             person_search_selected: 0,
             person_search_offset: 0,
+            person_search_sort_order: PrecedentSortOrder::default(),
             active_person_search_query: String::new(),
             person_search_opened_from: None,
             split_open: false,

@@ -157,21 +157,21 @@ impl App {
         }
     }
 
-/// Resolve the name to search for: if the query is already Korean, use it
-/// directly; otherwise try 영타→한타 conversion and use that if it yields a
-/// valid Korean name.
-fn resolve_person_name(query: &str) -> Option<String> {
-    if parser::is_korean_name(query) {
-        Some(query.to_string())
-    } else {
-        hangul::eng_to_hangul(query).filter(|h| parser::is_korean_name(h))
+    /// Resolve the name to search for: if the query is already Korean, use it
+    /// directly; otherwise try 영타→한타 conversion and use that if it yields a
+    /// valid Korean name.
+    fn resolve_person_name(query: &str) -> Option<String> {
+        if parser::is_korean_name(query) {
+            Some(query.to_string())
+        } else {
+            hangul::eng_to_hangul(query).filter(|h| parser::is_korean_name(h))
+        }
     }
-}
 
-/// Spawn a background task that searches for a 법조인 name using the
-/// cached person index. If no index exists, builds one concurrently
-/// first (sending progress messages to the UI).
-fn start_person_search(&mut self, name: &str) {
+    /// Spawn a background task that searches for a 법조인 name using the
+    /// cached person index. If no index exists, builds one concurrently
+    /// first (sending progress messages to the UI).
+    fn start_person_search(&mut self, name: &str) {
         self.person_search_seq = self.person_search_seq.wrapping_add(1);
         self.person_search_active = true;
         self.person_search_results.clear();
@@ -570,6 +570,15 @@ fn start_person_search(&mut self, name: &str) {
         models::sort_precedent_entries(&mut self.all_precedents, self.precedent_sort_order);
         self.apply_precedent_filters();
         self.status_message = Some(format!("Sort: {}", self.precedent_sort_order.label()));
+    }
+
+    pub fn toggle_person_search_sort(&mut self) {
+        self.person_search_sort_order = self.person_search_sort_order.next();
+        models::sort_precedent_entries(
+            &mut self.person_search_results,
+            self.person_search_sort_order,
+        );
+        self.status_message = Some(format!("Sort: {}", self.person_search_sort_order.label()));
     }
 
     pub fn toggle_admrule_sort(&mut self) {
