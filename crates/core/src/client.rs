@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use rayon::prelude::*;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn};
 
 use crate::cache;
 use crate::models::{
@@ -64,6 +64,7 @@ pub fn http_client() -> Result<reqwest::Client> {
 /// # Errors
 ///
 /// Returns an error if the HTTP request fails or the response cannot be parsed.
+#[instrument(skip(client), err)]
 pub async fn fetch_metadata(client: &reqwest::Client) -> Result<MetadataIndex> {
     info!("Fetching repository tree from GitHub API");
 
@@ -154,6 +155,7 @@ pub async fn fetch_metadata(client: &reqwest::Client) -> Result<MetadataIndex> {
 /// # Errors
 ///
 /// Returns an error if the HTTP request fails or the response body cannot be read.
+#[instrument(skip(client), err)]
 pub async fn fetch_law_content(client: &reqwest::Client, path: &str) -> Result<String> {
     let url = format!("{BASE_URL}/{path}");
     debug!(url, "Fetching law content");
@@ -186,6 +188,7 @@ pub async fn fetch_law_content(client: &reqwest::Client, path: &str) -> Result<S
 /// # Errors
 ///
 /// Returns an error if the HTTP request fails or the response body cannot be read.
+#[instrument(skip(client), err)]
 pub async fn fetch_frontmatter(client: &reqwest::Client, path: &str) -> Result<String> {
     let url = format!("{BASE_URL}/{path}");
 
@@ -212,6 +215,7 @@ pub async fn fetch_frontmatter(client: &reqwest::Client, path: &str) -> Result<S
 /// # Errors
 ///
 /// Returns an error if both cache read and network fetch fail.
+#[instrument(skip(client), err)]
 pub async fn load_law_content(client: &reqwest::Client, path: &str) -> Result<String> {
     // Try cache first (blocking I/O — run off the async executor)
     let cache_path = path.to_string();
@@ -268,6 +272,7 @@ const PRECEDENT_METADATA_URL: &str =
 /// # Errors
 ///
 /// Returns an error if all sources fail.
+#[instrument(skip(client), err)]
 pub async fn fetch_precedent_metadata(client: &reqwest::Client) -> Result<PrecedentMetadataIndex> {
     // Suppress unused-variable warning; client is kept in the signature for API stability.
     let _ = client;
@@ -474,6 +479,7 @@ fn sanitize_case_name(raw: &str) -> String {
 /// # Errors
 ///
 /// Returns an error if the HTTP request fails or the response body cannot be read.
+#[instrument(skip(client), err)]
 pub async fn fetch_precedent_content(client: &reqwest::Client, path: &str) -> Result<String> {
     let url = format!("{PRECEDENT_BASE_URL}/{path}");
     debug!(url, "Fetching precedent content");
@@ -505,6 +511,7 @@ pub async fn fetch_precedent_content(client: &reqwest::Client, path: &str) -> Re
 /// # Errors
 ///
 /// Returns an error if both cache read and network fetch fail.
+#[instrument(skip(client), err)]
 pub async fn load_precedent_content(client: &reqwest::Client, path: &str) -> Result<String> {
     let cache_key = format!("precedent/{path}");
 

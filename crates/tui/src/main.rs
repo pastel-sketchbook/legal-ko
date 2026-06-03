@@ -20,7 +20,7 @@ use crossterm::terminal::{
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use tracing::info;
+use tracing::{info, instrument};
 
 use app::{App, InputMode, Popup, SuspendRequest, View};
 
@@ -153,6 +153,7 @@ async fn main() -> Result<()> {
 }
 
 #[allow(clippy::unused_async)]
+#[instrument(skip(terminal, fd_backup), err)]
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<TermWriter>>,
     fd_backup: (i32, i32),

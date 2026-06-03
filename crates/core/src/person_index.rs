@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use futures::stream::{self, StreamExt};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn};
 
 use crate::models::{PersonRole, PrecedentEntry};
 use crate::{client, parser};
@@ -317,6 +317,7 @@ where
 /// first, caches it, then searches.
 ///
 /// Returns matching `PrecedentEntry` values with their roles.
+#[instrument(skip(http, all_entries, on_progress))]
 pub async fn search_persons<F>(
     http: &reqwest::Client,
     name: &str,

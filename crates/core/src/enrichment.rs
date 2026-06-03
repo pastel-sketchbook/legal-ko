@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::Semaphore;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn};
 
 use crate::cache::{self, EnrichedMeta, EnrichmentCache};
 use crate::client;
@@ -73,6 +73,7 @@ pub struct EnrichedEntry {
 /// completes, allowing the caller to apply progressive updates.
 ///
 /// Returns the full set of enriched entries (for cache persistence).
+#[instrument(skip(client, entries, existing_cache, on_batch))]
 pub async fn fetch_and_enrich(
     client: &reqwest::Client,
     entries: &[LawEntry],
