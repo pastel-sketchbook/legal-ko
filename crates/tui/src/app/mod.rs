@@ -372,6 +372,8 @@ pub struct App {
     pub person_search_sort_order: PrecedentSortOrder,
     /// The query that triggered the current person search (for status messages).
     pub active_person_search_query: String,
+    /// When typing 영타, shows the converted 한글 name in the search bar corner.
+    pub search_hangul_hint: Option<String>,
     /// When a person search result is opened from a non-precedent list view,
     /// this stores the originating view so that `go_back()` returns there.
     pub person_search_opened_from: Option<View>,
@@ -546,6 +548,7 @@ impl App {
             person_search_offset: 0,
             person_search_sort_order: PrecedentSortOrder::default(),
             active_person_search_query: String::new(),
+            search_hangul_hint: None,
             person_search_opened_from: None,
             split_open: false,
             split_ratio: prefs.split_ratio.unwrap_or(0.4),

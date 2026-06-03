@@ -56,6 +56,8 @@ fn render_title_bar(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
 }
 
 fn render_search_input(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
+    let chunks = Layout::horizontal([Constraint::Min(1), Constraint::Length(16)]).split(area);
+
     let is_searching = app.input_mode == InputMode::Search;
     let prefix = if is_searching { "/ " } else { "  " };
     let query = &app.zmd_search_query;
@@ -68,7 +70,18 @@ fn render_search_input(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
 
     let text = format!("{prefix}{query}");
     let bar = Paragraph::new(text).style(style);
-    f.render_widget(bar, area);
+    f.render_widget(bar, chunks[0]);
+
+    if let Some(ref hint) = app.search_hangul_hint {
+        let hint_line = Line::from(vec![Span::styled(
+            format!("{hint}  "),
+            Style::default().fg(theme.tag),
+        )]);
+        let hint_p = Paragraph::new(hint_line)
+            .style(style)
+            .alignment(ratatui::layout::Alignment::Right);
+        f.render_widget(hint_p, chunks[1]);
+    }
 
     if is_searching {
         // Place cursor after the query text

@@ -96,6 +96,8 @@ fn render_title_bar(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
 }
 
 fn render_search_bar(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
+    let chunks = Layout::horizontal([Constraint::Min(1), Constraint::Length(16)]).split(area);
+
     let in_search = app.input_mode == InputMode::Search && app.view == View::AdmruleList;
     let content = if in_search {
         Line::from(vec![
@@ -124,7 +126,18 @@ fn render_search_bar(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     };
 
     let bar = Paragraph::new(content).style(Style::default().bg(theme.bg));
-    f.render_widget(bar, area);
+    f.render_widget(bar, chunks[0]);
+
+    if let Some(ref hint) = app.search_hangul_hint {
+        let hint_line = Line::from(vec![Span::styled(
+            format!("{hint}  "),
+            Style::default().fg(theme.tag),
+        )]);
+        let hint_p = Paragraph::new(hint_line)
+            .style(Style::default().bg(theme.bg))
+            .alignment(ratatui::layout::Alignment::Right);
+        f.render_widget(hint_p, chunks[1]);
+    }
 }
 
 fn render_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {

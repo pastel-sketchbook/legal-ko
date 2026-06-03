@@ -91,6 +91,7 @@ impl App {
         {
             self.start_person_search(&name);
         }
+        self.search_hangul_hint = Self::compute_hangul_hint(&query);
     }
 
     /// Apply search + case type + court filters for precedents.
@@ -155,6 +156,7 @@ impl App {
         {
             self.start_person_search(&name);
         }
+        self.search_hangul_hint = Self::compute_hangul_hint(&self.precedent_search_query);
     }
 
     /// Resolve the name to search for: if the query is already Korean, use it
@@ -163,6 +165,16 @@ impl App {
     fn resolve_person_name(query: &str) -> Option<String> {
         if parser::is_korean_name(query) {
             Some(query.to_string())
+        } else {
+            hangul::eng_to_hangul(query).filter(|h| parser::is_korean_name(h))
+        }
+    }
+
+    /// If the query is 영타 that converts to a valid 한글 name, return the
+    /// converted form for display as a hint in the search bar.
+    fn compute_hangul_hint(query: &str) -> Option<String> {
+        if parser::is_korean_name(query) {
+            None
         } else {
             hangul::eng_to_hangul(query).filter(|h| parser::is_korean_name(h))
         }
@@ -667,6 +679,7 @@ impl App {
         {
             self.start_person_search(&name);
         }
+        self.search_hangul_hint = Self::compute_hangul_hint(&self.admrule_search_query);
     }
 
     // ── Ordinance filters ─────────────────────────────────────
@@ -722,6 +735,7 @@ impl App {
         {
             self.start_person_search(&name);
         }
+        self.search_hangul_hint = Self::compute_hangul_hint(&self.ordinance_search_query);
     }
 
     // ── Zmd full-text search ──────────────────────────────────
@@ -747,6 +761,7 @@ impl App {
         {
             self.start_person_search(&name);
         }
+        self.search_hangul_hint = Self::compute_hangul_hint(&self.zmd_search_query);
     }
 
     /// Pop a char from the zmd search query (hangul-aware).
@@ -761,6 +776,7 @@ impl App {
         {
             self.start_person_search(&name);
         }
+        self.search_hangul_hint = Self::compute_hangul_hint(&self.zmd_search_query);
     }
 
     /// Clear zmd search and return to previous view.
