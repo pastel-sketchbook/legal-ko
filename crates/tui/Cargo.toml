@@ -9,7 +9,7 @@ path = "src/main.rs"
 
 [features]
 default = ["pdf"]
-pdf = ["dep:typst", "dep:typst-as-lib", "dep:typst-pdf"]
+pdf = ["dep:typst", "dep:typst-pdf", "dep:typst-layout", "dep:fontdb", "dep:time"]
 meilisearch = ["legal-ko-core/meilisearch"]
 tts = ["legal-ko-core/tts", "dep:rodio", "dep:libc"]
 
@@ -27,5 +27,7 @@ unicode-width.workspace = true
 libc = { workspace = true, optional = true }
 rodio = { workspace = true, optional = true }
 typst = { workspace = true, optional = true }
-typst-as-lib = { workspace = true, optional = true }
 typst-pdf = { workspace = true, optional = true }
+typst-layout = { workspace = true, optional = true }
+fontdb = { workspace = true, optional = true }
+time = { workspace = true, optional = true }

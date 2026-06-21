@@ -15,7 +15,7 @@ dirs.workspace = true
 futures.workspace = true
 indicatif.workspace = true
 # Direct dep so build.rs receives DEP_SQLITE3_INCLUDE for vendored sqlite-vec.
-libsqlite3-sys = { version = "0.37.0", features = ["bundled"] }
+libsqlite3-sys = { version = "0.38.1", features = ["bundled"] }
 rayon.workspace = true
 reqwest.workspace = true
 rusqlite.workspace = true
