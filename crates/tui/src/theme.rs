@@ -83,7 +83,7 @@ pub const THEMES: &[Theme] = &[
     // Default — dark, cyan accent, legal blues
     Theme {
         name: "Default",
-        bg: Color::Reset,
+        bg: Color::Rgb(18, 18, 24),
         fg: Color::White,
         accent: Color::Rgb(0, 217, 255),
         muted: Color::DarkGray,
