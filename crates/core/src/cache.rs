@@ -10,7 +10,7 @@ use tracing::debug;
 const CACHE_TTL: Duration = Duration::from_hours(24);
 
 /// Get the cache directory: ~/.cache/legal-ko/
-fn cache_dir() -> Result<PathBuf> {
+pub(crate) fn cache_dir() -> Result<PathBuf> {
     let dir = dirs::cache_dir()
         .context("Cannot determine cache directory")?
         .join("legal-ko");

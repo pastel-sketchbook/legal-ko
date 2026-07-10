@@ -19,6 +19,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument, warn};
 
+use crate::cache;
 use crate::models::{PersonRole, PrecedentEntry, PrecedentSortOrder};
 use crate::{client, parser};
 
@@ -93,15 +94,8 @@ impl Default for PersonIndex {
 
 // ── Cache I/O ─────────────────────────────────────────────────
 
-fn cache_dir() -> Result<PathBuf> {
-    let dir = dirs::cache_dir()
-        .context("Cannot determine cache directory")?
-        .join("legal-ko");
-    Ok(dir)
-}
-
 fn person_index_path() -> Result<PathBuf> {
-    Ok(cache_dir()?.join("person_index.json"))
+    Ok(cache::cache_dir()?.join("person_index.json"))
 }
 
 /// Read the person index from disk cache.
@@ -146,7 +140,7 @@ pub fn read_person_index() -> Result<Option<PersonIndex>> {
 /// Returns an error if the cache directory cannot be created or the file
 /// cannot be written.
 pub fn write_person_index(index: &PersonIndex) -> Result<()> {
-    let dir = cache_dir()?;
+    let dir = cache::cache_dir()?;
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Failed to create cache dir {}", dir.display()))?;
 
@@ -172,6 +166,21 @@ pub fn write_person_index(index: &PersonIndex) -> Result<()> {
 struct ScanResult {
     precedent_id: String,
     persons: Vec<crate::models::PersonRef>,
+}
+
+/// Insert persons from a scan result into the index.
+fn index_scan_result(index: &mut PersonIndex, result: &ScanResult) {
+    for person in &result.persons {
+        index
+            .entries
+            .entry(person.name.clone())
+            .or_default()
+            .push(PersonIndexEntry {
+                precedent_id: result.precedent_id.clone(),
+                role: person.role.clone(),
+                qualifier: person.qualifier.clone(),
+            });
+    }
 }
 
 /// Build a person index by reading precedent files from the local zmd clone.
@@ -210,17 +219,7 @@ where
     };
 
     for (i, result) in results.iter().enumerate() {
-        for person in &result.persons {
-            index
-                .entries
-                .entry(person.name.clone())
-                .or_default()
-                .push(PersonIndexEntry {
-                    precedent_id: result.precedent_id.clone(),
-                    role: person.role.clone(),
-                    qualifier: person.qualifier.clone(),
-                });
-        }
+        index_scan_result(&mut index, result);
         let progress_interval = (total / 100).max(1);
         if (i + 1).is_multiple_of(progress_interval) || i + 1 == total {
             on_progress(i + 1, total);
@@ -286,17 +285,7 @@ where
 
     while let Some(result) = stream.next().await {
         scanned += 1;
-        for person in &result.persons {
-            index
-                .entries
-                .entry(person.name.clone())
-                .or_default()
-                .push(PersonIndexEntry {
-                    precedent_id: result.precedent_id.clone(),
-                    role: person.role.clone(),
-                    qualifier: person.qualifier.clone(),
-                });
-        }
+        index_scan_result(&mut index, &result);
         if scanned.is_multiple_of(progress_interval) || scanned == total {
             on_progress(scanned, total);
         }
