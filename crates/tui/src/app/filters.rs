@@ -12,10 +12,6 @@ impl App {
     /// they are used for ordering and filtering. Otherwise falls back to naive
     /// substring matching on the title.
     pub fn apply_filters(&mut self) {
-        // Cancel any in-flight person search when filters change.
-        self.person_search_active = false;
-        self.person_search_results.clear();
-
         let query = self.search_query.clone();
         let use_meili = !query.is_empty()
             && self
@@ -86,20 +82,18 @@ impl App {
 
         // If the query looks like a Korean name, trigger 법조인 search.
         // Also try 영타→한타 conversion for English keyboard input.
-        if !query.is_empty()
-            && let Some(name) = Self::resolve_person_name(&query)
-        {
+        // Otherwise clear stale person search results.
+        if let Some(name) = Self::resolve_person_name(&query) {
             self.start_person_search(&name);
+        } else {
+            self.person_search_active = false;
+            self.person_search_results.clear();
         }
         self.search_hangul_hint = Self::compute_hangul_hint(&query);
     }
 
     /// Apply search + case type + court filters for precedents.
     pub fn apply_precedent_filters(&mut self) {
-        // Cancel any in-flight person search when filters change.
-        self.person_search_active = false;
-        self.person_search_results.clear();
-
         // NFC-normalize so NFD source data (e.g. Korean text from macOS
         // file systems) still matches an IME-produced NFC query.
         let query_norm = hangul::nfc(&self.precedent_search_query.to_lowercase());
@@ -151,10 +145,12 @@ impl App {
         // If the query looks like a Korean name, trigger 법조인 (legal
         // professional) search. This runs alongside the normal metadata filter
         // — results from both are available to the renderer.
-        if !query_norm.is_empty()
-            && let Some(name) = Self::resolve_person_name(&self.precedent_search_query)
-        {
+        // Otherwise clear stale person search results.
+        if let Some(name) = Self::resolve_person_name(&self.precedent_search_query) {
             self.start_person_search(&name);
+        } else {
+            self.person_search_active = false;
+            self.person_search_results.clear();
         }
         self.search_hangul_hint = Self::compute_hangul_hint(&self.precedent_search_query);
     }
@@ -184,6 +180,10 @@ impl App {
     /// cached person index. If no index exists, builds one concurrently
     /// first (sending progress messages to the UI).
     fn start_person_search(&mut self, name: &str) {
+        // Don't restart if the same name is already being searched.
+        if name == self.active_person_search_query && !self.person_search_results.is_empty() {
+            return;
+        }
         self.person_search_seq = self.person_search_seq.wrapping_add(1);
         self.person_search_active = true;
         self.person_search_results.clear();
@@ -265,6 +265,17 @@ impl App {
 
     pub fn start_search(&mut self) {
         self.input_mode = InputMode::Search;
+        // Clear the previous query and person search state so new keystrokes
+        // start fresh instead of appending to a stale buffer.
+        self.person_search_active = false;
+        self.person_search_results.clear();
+        self.active_person_search_query.clear();
+        match self.view {
+            View::PrecedentList => self.precedent_search_query.clear(),
+            View::AdmruleList => self.admrule_search_query.clear(),
+            View::OrdinanceList => self.ordinance_search_query.clear(),
+            _ => self.search_query.clear(),
+        }
     }
 
     pub fn search_push_char(&mut self, c: char) {
@@ -629,10 +640,6 @@ impl App {
     // ── Admrule filters ───────────────────────────────────────
 
     pub fn apply_admrule_filters(&mut self) {
-        // Cancel any in-flight person search when filters change.
-        self.person_search_active = false;
-        self.person_search_results.clear();
-
         let query_norm = hangul::nfc(&self.admrule_search_query.to_lowercase());
         let hangul_query = hangul::eng_to_hangul(&self.admrule_search_query)
             .map(|h| hangul::nfc(&h.to_lowercase()));
@@ -674,10 +681,11 @@ impl App {
         }
 
         // If the query looks like a Korean name, trigger 법조인 search.
-        if !self.admrule_search_query.is_empty()
-            && let Some(name) = Self::resolve_person_name(&self.admrule_search_query)
-        {
+        if let Some(name) = Self::resolve_person_name(&self.admrule_search_query) {
             self.start_person_search(&name);
+        } else {
+            self.person_search_active = false;
+            self.person_search_results.clear();
         }
         self.search_hangul_hint = Self::compute_hangul_hint(&self.admrule_search_query);
     }
@@ -685,10 +693,6 @@ impl App {
     // ── Ordinance filters ─────────────────────────────────────
 
     pub fn apply_ordinance_filters(&mut self) {
-        // Cancel any in-flight person search when filters change.
-        self.person_search_active = false;
-        self.person_search_results.clear();
-
         let query_norm = hangul::nfc(&self.ordinance_search_query.to_lowercase());
         let hangul_query = hangul::eng_to_hangul(&self.ordinance_search_query)
             .map(|h| hangul::nfc(&h.to_lowercase()));
@@ -730,10 +734,11 @@ impl App {
         }
 
         // If the query looks like a Korean name, trigger 법조인 search.
-        if !self.ordinance_search_query.is_empty()
-            && let Some(name) = Self::resolve_person_name(&self.ordinance_search_query)
-        {
+        if let Some(name) = Self::resolve_person_name(&self.ordinance_search_query) {
             self.start_person_search(&name);
+        } else {
+            self.person_search_active = false;
+            self.person_search_results.clear();
         }
         self.search_hangul_hint = Self::compute_hangul_hint(&self.ordinance_search_query);
     }
@@ -756,10 +761,11 @@ impl App {
         self.zmd_search_query.push(c);
         self.dispatch_zmd_search();
         // If the query looks like a Korean name, trigger 법조인 search.
-        if !self.zmd_search_query.is_empty()
-            && let Some(name) = Self::resolve_person_name(&self.zmd_search_query)
-        {
+        if let Some(name) = Self::resolve_person_name(&self.zmd_search_query) {
             self.start_person_search(&name);
+        } else {
+            self.person_search_active = false;
+            self.person_search_results.clear();
         }
         self.search_hangul_hint = Self::compute_hangul_hint(&self.zmd_search_query);
     }
@@ -769,12 +775,11 @@ impl App {
         hangul::pop_jamo(&mut self.zmd_search_query);
         self.dispatch_zmd_search();
         // If the query still looks like a Korean name, restart person search.
-        self.person_search_active = false;
-        self.person_search_results.clear();
-        if !self.zmd_search_query.is_empty()
-            && let Some(name) = Self::resolve_person_name(&self.zmd_search_query)
-        {
+        if let Some(name) = Self::resolve_person_name(&self.zmd_search_query) {
             self.start_person_search(&name);
+        } else {
+            self.person_search_active = false;
+            self.person_search_results.clear();
         }
         self.search_hangul_hint = Self::compute_hangul_hint(&self.zmd_search_query);
     }
