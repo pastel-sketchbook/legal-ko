@@ -92,6 +92,10 @@ pub struct ZmdConfig {
     pub batch_size: usize,
     /// Skip `git pull` when the repo already exists (avoids network round-trip).
     pub skip_pull: bool,
+    /// Defer the full-corpus index rebuild instead of running it per
+    /// collection.  Set by multi-collection drivers ([`index_all`], [`sync`])
+    /// so the rebuild happens exactly once at the end.
+    pub defer_rebuild: bool,
 }
 
 impl ZmdConfig {
@@ -128,6 +132,7 @@ impl ZmdConfig {
                 .collect(),
             batch_size,
             skip_pull: false,
+            defer_rebuild: false,
         })
     }
 
@@ -212,6 +217,9 @@ pub struct IndexResult {
     pub batches: usize,
     /// Total wall-clock time for all `zmd update` calls.
     pub total_update_secs: f64,
+    /// Whether this collection used the bulk ingest path and still needs a
+    /// full-corpus index rebuild (relevant when `defer_rebuild` is set).
+    pub needs_full_rebuild: bool,
 }
 
 /// One precedent source scope discovered during collection.
@@ -638,6 +646,7 @@ fn stage_and_index_batched<F>(
     stage_root: &Path,
     collection_name: &str,
     _batch_size: usize,
+    finalize: bool,
     mut on_batch: F,
 ) -> Result<IndexResult>
 where
@@ -699,6 +708,7 @@ where
             newly_staged,
             batches: 1,
             total_update_secs: 0.0,
+            needs_full_rebuild: false,
         });
     }
 
@@ -723,6 +733,14 @@ where
     })?;
 
     pb.finish_and_clear();
+
+    // Run the deferred full-corpus rebuild now for single-collection callers;
+    // multi-collection drivers defer it (see `index_all` / `sync`).
+    if finalize && stats.needs_full_rebuild {
+        info!(collection = collection_name, "rebuilding indexes");
+        db.rebuild_indexes()?;
+    }
+
     let elapsed = start.elapsed().as_secs_f64();
 
     let output = format!(
@@ -750,6 +768,7 @@ where
         newly_staged,
         batches: 1,
         total_update_secs: elapsed,
+        needs_full_rebuild: stats.needs_full_rebuild,
     })
 }
 
@@ -876,6 +895,7 @@ where
         &cfg.laws_stage(),
         "laws",
         cfg.batch_size,
+        !cfg.defer_rebuild,
         on_batch,
     )
 }
@@ -942,6 +962,7 @@ where
                 newly_staged: 0,
                 batches: 0,
                 total_update_secs: 0.0,
+                needs_full_rebuild: false,
             },
         });
     }
@@ -953,6 +974,7 @@ where
         &cfg.precedent_stage(),
         "precedents",
         cfg.batch_size,
+        !cfg.defer_rebuild,
         |bp| {
             // Report the batch to the first court (for backward compat).
             if let Some((ct, co, _)) = court_counts.first() {
@@ -1005,6 +1027,7 @@ where
         &cfg.admrule_stage(),
         "admrules",
         cfg.batch_size,
+        !cfg.defer_rebuild,
         on_batch,
     )
 }
@@ -1041,8 +1064,22 @@ where
         &cfg.ordinance_stage(),
         "ordinances",
         cfg.batch_size,
+        !cfg.defer_rebuild,
         on_batch,
     )
+}
+
+/// Open the zmd database and rebuild the FTS5 + vec0 indexes across all
+/// collections.  Run once after a deferred multi-collection ingest.
+///
+/// # Errors
+///
+/// Returns an error if the database cannot be opened or the rebuild fails.
+pub fn rebuild_indexes() -> Result<()> {
+    let db_path = crate::native_indexer::default_db_path();
+    let mut db = crate::native_indexer::ZmdDb::open(&db_path)
+        .context("Failed to open zmd database for index rebuild")?;
+    db.rebuild_indexes()
 }
 
 /// Run both laws and precedents indexing.
@@ -1051,6 +1088,12 @@ where
 ///
 /// Returns an error if git operations fail or any indexing phase fails.
 pub fn index_all(cfg: &ZmdConfig) -> Result<()> {
+    // Defer the full-corpus rebuild so it runs once at the end.
+    let mut cfg = cfg.clone();
+    cfg.defer_rebuild = true;
+    let cfg = &cfg;
+    let mut needs_rebuild = false;
+
     info!("Phase 1/4: Laws (법률)");
     let law_result = index_laws(cfg, |bp| {
         if bp.batch_num > 0 {
@@ -1063,6 +1106,7 @@ pub fn index_all(cfg: &ZmdConfig) -> Result<()> {
             );
         }
     })?;
+    needs_rebuild |= law_result.needs_full_rebuild;
     info!(
         total = law_result.total_files,
         new = law_result.newly_staged,
@@ -1091,6 +1135,7 @@ pub fn index_all(cfg: &ZmdConfig) -> Result<()> {
             }
         },
     )?;
+    needs_rebuild |= prec_result.summary.needs_full_rebuild;
     info!(
         total_files = prec_result.summary.total_files,
         total_new = prec_result.summary.newly_staged,
@@ -1110,6 +1155,7 @@ pub fn index_all(cfg: &ZmdConfig) -> Result<()> {
             );
         }
     })?;
+    needs_rebuild |= admrule_result.needs_full_rebuild;
     info!(
         total = admrule_result.total_files,
         new = admrule_result.newly_staged,
@@ -1129,12 +1175,19 @@ pub fn index_all(cfg: &ZmdConfig) -> Result<()> {
             );
         }
     })?;
+    needs_rebuild |= ordinance_result.needs_full_rebuild;
     info!(
         total = ordinance_result.total_files,
         new = ordinance_result.newly_staged,
         secs = format!("{:.0}", ordinance_result.total_update_secs),
         "Ordinances done",
     );
+
+    if needs_rebuild {
+        info!("Rebuilding indexes (full corpus, once)");
+        rebuild_indexes()?;
+        info!("Index rebuild complete");
+    }
 
     Ok(())
 }
@@ -1145,6 +1198,12 @@ pub fn index_all(cfg: &ZmdConfig) -> Result<()> {
 ///
 /// Returns an error if git operations fail or any indexing phase fails.
 pub fn sync(cfg: &ZmdConfig) -> Result<()> {
+    // Defer the full-corpus rebuild so it runs once at the end.
+    let mut cfg = cfg.clone();
+    cfg.defer_rebuild = true;
+    let cfg = &cfg;
+    let mut needs_rebuild = false;
+
     if cfg.laws_clone().join(".git").is_dir() {
         info!("Syncing laws...");
         let result = index_laws(cfg, |bp| {
@@ -1157,6 +1216,7 @@ pub fn sync(cfg: &ZmdConfig) -> Result<()> {
                 );
             }
         })?;
+        needs_rebuild |= result.needs_full_rebuild;
         info!(
             new = result.newly_staged,
             secs = format!("{:.0}", result.total_update_secs),
@@ -1182,6 +1242,7 @@ pub fn sync(cfg: &ZmdConfig) -> Result<()> {
                 }
             },
         )?;
+        needs_rebuild |= result.summary.needs_full_rebuild;
         let total_new = result.summary.newly_staged;
         let total_secs = result.summary.total_update_secs;
         info!(
@@ -1203,6 +1264,7 @@ pub fn sync(cfg: &ZmdConfig) -> Result<()> {
                 );
             }
         })?;
+        needs_rebuild |= result.needs_full_rebuild;
         info!(
             new = result.newly_staged,
             secs = format!("{:.0}", result.total_update_secs),
@@ -1222,11 +1284,18 @@ pub fn sync(cfg: &ZmdConfig) -> Result<()> {
                 );
             }
         })?;
+        needs_rebuild |= result.needs_full_rebuild;
         info!(
             new = result.newly_staged,
             secs = format!("{:.0}", result.total_update_secs),
             "Ordinances sync complete",
         );
+    }
+
+    if needs_rebuild {
+        info!("Rebuilding indexes (full corpus, once)");
+        rebuild_indexes()?;
+        info!("Index rebuild complete");
     }
 
     Ok(())

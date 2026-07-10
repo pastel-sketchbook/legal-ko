@@ -69,6 +69,7 @@ pub struct FileEntry {
 
 #[derive(Debug, Clone)]
 pub struct ExistingDoc {
+    pub id: i64,
     pub hash: String,
     pub source_size: Option<u64>,
     pub source_mtime_ns: Option<i64>,
@@ -101,6 +102,10 @@ pub struct IndexStats {
     pub skipped: usize,
     pub metadata_refreshed: usize,
     pub content_rehashed: usize,
+    /// Set when the ingest used the bulk path and the caller must run a
+    /// full-corpus index rebuild via [`ZmdDb::rebuild_indexes`] (deferred
+    /// so multi-collection runs rebuild once instead of once per collection).
+    pub needs_full_rebuild: bool,
 }
 
 // ── Database wrapper ─────────────────────────────────────────────
@@ -190,17 +195,18 @@ impl ZmdDb {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT path, hash, source_size, source_mtime_ns FROM documents WHERE collection = ?1 AND active = 1",
+                "SELECT id, path, hash, source_size, source_mtime_ns FROM documents WHERE collection = ?1 AND active = 1",
             )?;
         let rows = stmt.query_map(params![collection], |row| {
             Ok((
-                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
                 ExistingDoc {
-                    hash: row.get::<_, String>(1)?,
+                    id: row.get::<_, i64>(0)?,
+                    hash: row.get::<_, String>(2)?,
                     source_size: row
-                        .get::<_, Option<i64>>(2)?
+                        .get::<_, Option<i64>>(3)?
                         .and_then(|size| u64::try_from(size).ok()),
-                    source_mtime_ns: row.get::<_, Option<i64>>(3)?,
+                    source_mtime_ns: row.get::<_, Option<i64>>(4)?,
                 },
             ))
         })?;
@@ -265,6 +271,14 @@ impl ZmdDb {
     /// overhead while keeping memory bounded.
     const INDEX_BATCH_SIZE: usize = 2000;
 
+    /// When the number of candidate (changed) files is at or above this
+    /// threshold, ingest uses the *bulk* path: FTS/vec maintenance is
+    /// deferred to a single full-corpus rebuild ([`Self::rebuild_indexes`]),
+    /// which is faster than per-row maintenance for large deltas and initial
+    /// builds.  Below it, indexes are reconciled *incrementally* — cost is
+    /// proportional to the number of changed documents, not the corpus size.
+    const FULL_REBUILD_THRESHOLD: usize = 5000;
+
     /// Index a set of files into the given collection.
     ///
     /// For each file, computes a SHA-256 content hash, extracts a title,
@@ -272,9 +286,13 @@ impl ZmdDb {
     /// embeddings.  Unchanged documents (same path→hash mapping) are
     /// skipped entirely — no SQL writes.
     ///
-    /// FTS5 triggers and vec0 index maintenance are disabled during bulk
-    /// ingest — they are rebuilt once at the end for dramatically better
-    /// throughput on large collections.
+    /// FTS5 triggers are disabled during ingest for throughput.  Afterwards:
+    /// - For small deltas (`< FULL_REBUILD_THRESHOLD` candidate files) the FTS
+    ///   and vec0 indexes are reconciled **incrementally** — only the changed
+    ///   documents are patched, so cost is O(changed) not O(corpus).
+    /// - For large deltas / initial builds, `stats.needs_full_rebuild` is set
+    ///   and the caller must invoke [`Self::rebuild_indexes`] once (deferred so
+    ///   multi-collection runs rebuild the whole corpus a single time).
     ///
     /// The `progress_cb` callback is invoked after each document is
     /// processed with `(current_count, total_count)`.
@@ -328,8 +346,17 @@ impl ZmdDb {
               DROP TRIGGER IF EXISTS documents_au;",
         )?;
 
+        // Large deltas rebuild the whole corpus once (deferred); small deltas
+        // are patched incrementally below.
+        let bulk_mode = total >= Self::FULL_REBUILD_THRESHOLD;
+
         let mut stats = IndexStats::default();
         let mut global_idx = 0usize;
+
+        // Incremental-mode bookkeeping (unused in bulk mode).
+        let mut fts_delete_ids: Vec<i64> = Vec::new();
+        let mut fts_insert_ids: Vec<i64> = Vec::new();
+        let mut new_vec_hashes: Vec<String> = Vec::new();
 
         for batch in files.chunks(Self::INDEX_BATCH_SIZE) {
             // ── Parallel phase (CPU-bound, no DB access) ──────────
@@ -438,7 +465,7 @@ impl ZmdDb {
                     let doc_str = std::str::from_utf8(&p.content).unwrap_or("");
                     stmt_content.execute(params![&p.hash, doc_str, TIMESTAMP])?;
 
-                    // Insert document (no FTS trigger — rebuilt at end).
+                    // Insert document (FTS/vec maintenance deferred — see below).
                     #[allow(clippy::cast_possible_wrap)]
                     let source_size = p.source_size as i64;
                     stmt_doc.execute(params![
@@ -454,7 +481,18 @@ impl ZmdDb {
 
                     stats.indexed += 1;
 
-                    // Write embeddings (no vec0 idx — rebuilt at end).
+                    // Track ids/hashes so small deltas can be reconciled
+                    // incrementally instead of rebuilding the whole corpus.
+                    if !bulk_mode {
+                        // INSERT OR REPLACE assigns a fresh rowid; the old FTS
+                        // row (keyed by the previous id) must be removed.
+                        if let Some(old) = existing_docs.get(&p.path) {
+                            fts_delete_ids.push(old.id);
+                        }
+                        fts_insert_ids.push(tx.last_insert_rowid());
+                    }
+
+                    // Write embeddings (vec0 idx maintenance deferred).
                     if let (Some(chunks), Some(embeddings)) = (&p.chunks, &p.embeddings) {
                         debug_assert_eq!(chunks.len(), embeddings.len());
                         for (seq, emb) in embeddings.iter().enumerate() {
@@ -464,6 +502,9 @@ impl ZmdDb {
                             stmt_vec.execute(params![
                                 &p.hash, seq_i64, MODEL_NAME, &emb_json, TIMESTAMP,
                             ])?;
+                        }
+                        if !bulk_mode {
+                            new_vec_hashes.push(p.hash.clone());
                         }
                         stats.new += 1;
                     }
@@ -489,42 +530,27 @@ impl ZmdDb {
             );
         }
 
-        let needs_rebuild = stats.new > 0 || stats.content_rehashed > 0;
+        let content_changed = stats.new > 0 || stats.content_rehashed > 0;
 
-        if needs_rebuild {
-            // ── Rebuild FTS5 index from base tables ──────────────────
-            info!(collection, "rebuilding FTS5 index");
-            self.conn.execute_batch(
-                r"DELETE FROM documents_fts;
-                  INSERT INTO documents_fts(rowid, filepath, title, body)
-                  SELECT d.id,
-                         d.collection || '/' || d.path,
-                         d.title,
-                         c.doc
-                  FROM documents d
-                  JOIN content c ON c.hash = d.hash
-                  WHERE d.active = 1;",
-            )?;
-
-            // ── Rebuild vec0 index from content_vectors ──────────────
-            info!(collection, "rebuilding vector index");
-            self.conn.execute_batch(
-                r"DROP TABLE IF EXISTS content_vectors_idx;
-                  CREATE VIRTUAL TABLE content_vectors_idx USING vec0(
-                      embedding float[384],
-                      hash TEXT,
-                      model TEXT,
-                      +seq INTEGER,
-                      +pos INTEGER
-                  );
-                  INSERT INTO content_vectors_idx(embedding, hash, model, seq, pos)
-                  SELECT vec_f32(embedding), hash, model, seq, pos
-                  FROM content_vectors;",
-            )?;
+        if bulk_mode {
+            // Defer the expensive full-corpus rebuild to a single
+            // `rebuild_indexes` call (once per multi-collection run).
+            stats.needs_full_rebuild = content_changed;
+            if content_changed {
+                info!(collection, "deferring full index rebuild (bulk ingest)");
+            }
+        } else if content_changed {
+            // ── Incremental FTS/vec reconciliation — O(changed) ──────
+            info!(
+                collection,
+                changed = fts_insert_ids.len(),
+                "reconciling indexes incrementally"
+            );
+            self.reconcile_incremental(&fts_delete_ids, &fts_insert_ids, &new_vec_hashes)?;
         } else {
             info!(
                 collection,
-                "skipping FTS/vector rebuild (no content changes)"
+                "skipping FTS/vector maintenance (no content changes)"
             );
         }
 
@@ -574,6 +600,125 @@ impl ZmdDb {
             "native indexing complete"
         );
         Ok(stats)
+    }
+
+    /// Incrementally patch the FTS5 and vec0 indexes for a small set of
+    /// changed documents, avoiding a full-corpus rebuild.
+    ///
+    /// - `fts_delete_ids`: document ids whose stale FTS rows must be removed
+    ///   (previous rowids replaced by `INSERT OR REPLACE`).
+    /// - `fts_insert_ids`: current document ids to (re)insert into FTS.
+    /// - `new_vec_hashes`: content hashes whose embeddings must be added to
+    ///   the vec0 index (deduplicated internally).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any SQL statement fails.
+    fn reconcile_incremental(
+        &mut self,
+        fts_delete_ids: &[i64],
+        fts_insert_ids: &[i64],
+        new_vec_hashes: &[String],
+    ) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut fts_del = tx.prepare_cached("DELETE FROM documents_fts WHERE rowid = ?1")?;
+            for id in fts_delete_ids {
+                fts_del.execute(params![id])?;
+            }
+
+            let mut fts_ins = tx.prepare_cached(
+                r"INSERT OR REPLACE INTO documents_fts(rowid, filepath, title, body)
+                  SELECT d.id,
+                         d.collection || '/' || d.path,
+                         d.title,
+                         c.doc
+                  FROM documents d
+                  JOIN content c ON c.hash = d.hash
+                  WHERE d.id = ?1 AND d.active = 1",
+            )?;
+            for id in fts_insert_ids {
+                fts_ins.execute(params![id])?;
+            }
+
+            // Insert vectors for newly added content hashes only.  Hashes are
+            // new to `content` this run, so they cannot already be present in
+            // the vec0 index; dedup guards against identical content changing
+            // in multiple documents within the same run.
+            let mut seen = std::collections::HashSet::new();
+            let mut vec_ins = tx.prepare_cached(
+                r"INSERT INTO content_vectors_idx(embedding, hash, model, seq, pos)
+                  SELECT vec_f32(embedding), hash, model, seq, pos
+                  FROM content_vectors
+                  WHERE hash = ?1",
+            )?;
+            for hash in new_vec_hashes {
+                if seen.insert(hash.as_str()) {
+                    vec_ins.execute(params![hash])?;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Rebuild the FTS5 and vec0 indexes from the base tables across **all**
+    /// collections.
+    ///
+    /// Called once after bulk ingests (where per-row index maintenance was
+    /// deferred via `stats.needs_full_rebuild`).  Running it a single time for
+    /// a whole multi-collection sync is far cheaper than rebuilding once per
+    /// collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any SQL statement fails.
+    pub fn rebuild_indexes(&mut self) -> Result<()> {
+        // Bulk-load PRAGMAs for the duration of the rebuild.
+        self.conn.execute_batch(
+            "PRAGMA synchronous = NORMAL;\
+             PRAGMA temp_store = MEMORY;\
+             PRAGMA cache_size = -200000;\
+             PRAGMA mmap_size = 268435456;",
+        )?;
+
+        info!("rebuilding FTS5 index (full corpus)");
+        self.conn.execute_batch(
+            r"DELETE FROM documents_fts;
+              INSERT INTO documents_fts(rowid, filepath, title, body)
+              SELECT d.id,
+                     d.collection || '/' || d.path,
+                     d.title,
+                     c.doc
+              FROM documents d
+              JOIN content c ON c.hash = d.hash
+              WHERE d.active = 1;",
+        )?;
+
+        info!("rebuilding vector index (full corpus)");
+        self.conn.execute_batch(
+            r"DROP TABLE IF EXISTS content_vectors_idx;
+              CREATE VIRTUAL TABLE content_vectors_idx USING vec0(
+                  embedding float[384],
+                  hash TEXT,
+                  model TEXT,
+                  +seq INTEGER,
+                  +pos INTEGER
+              );
+              INSERT INTO content_vectors_idx(embedding, hash, model, seq, pos)
+              SELECT vec_f32(embedding), hash, model, seq, pos
+              FROM content_vectors;",
+        )?;
+
+        // Reset bulk-load PRAGMAs to conservative defaults.
+        self.conn.execute_batch(
+            "PRAGMA synchronous = FULL;\
+             PRAGMA temp_store = DEFAULT;\
+             PRAGMA cache_size = -2000;\
+             PRAGMA mmap_size = 0;",
+        )?;
+
+        Ok(())
     }
 }
 
@@ -1203,5 +1348,115 @@ mod tests {
         let cutoff = find_best_cutoff(content, 0, content.len());
         // The cutoff should land on a \n boundary.
         assert_eq!(content[cutoff], b'\n');
+    }
+
+    // ── Integration tests for the incremental indexing pipeline ──────
+
+    struct TempDir(PathBuf);
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let unique = format!(
+                "legal-ko-idx-test-{}-{}-{:?}",
+                std::process::id(),
+                tag,
+                std::time::SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            );
+            let dir = std::env::temp_dir().join(unique);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write_entry(dir: &Path, name: &str, body: &str) -> FileEntry {
+        let staged = dir.join(name);
+        std::fs::write(&staged, body).unwrap();
+        let meta = std::fs::metadata(&staged).unwrap();
+        FileEntry {
+            path: name.to_string(),
+            source_size: meta.len(),
+            source_mtime_ns: meta
+                .modified()
+                .map(system_time_to_unix_nanos)
+                .unwrap_or_default(),
+            staged_path: staged,
+        }
+    }
+
+    fn fts_matches(db: &ZmdDb, term: &str) -> i64 {
+        db.conn()
+            .query_row(
+                "SELECT count(*) FROM documents_fts WHERE documents_fts MATCH ?1",
+                params![term],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    fn vec_count(db: &ZmdDb) -> i64 {
+        db.conn()
+            .query_row("SELECT count(*) FROM content_vectors_idx", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn incremental_index_updates_fts_and_vectors() {
+        let tmp = TempDir::new("incr");
+        let staged = tmp.0.join("stage");
+        std::fs::create_dir_all(&staged).unwrap();
+        let mut db = ZmdDb::open(&tmp.0.join("data.db")).unwrap();
+        db.register_collection("laws", &staged).unwrap();
+
+        // Initial ingest (small delta → incremental path).
+        let e1 = write_entry(&staged, "alpha.md", "# Alpha\nzebra content here");
+        let e2 = write_entry(&staged, "beta.md", "# Beta\nmango content here");
+        let stats = db.index_collection("laws", &[e1, e2], |_, _| {}).unwrap();
+        assert!(!stats.needs_full_rebuild, "small delta must be incremental");
+        assert_eq!(db.document_count("laws").unwrap(), 2);
+        assert_eq!(fts_matches(&db, "zebra"), 1);
+        assert_eq!(fts_matches(&db, "mango"), 1);
+        assert_eq!(vec_count(&db), 2);
+
+        // Modify alpha.md → new content; re-index incrementally.
+        // Ensure a distinct mtime so the metadata pre-filter does not skip it.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let e1b = write_entry(&staged, "alpha.md", "# Alpha\ngiraffe content here");
+        let stats = db.index_collection("laws", &[e1b], |_, _| {}).unwrap();
+        assert!(!stats.needs_full_rebuild);
+        assert_eq!(db.document_count("laws").unwrap(), 2, "no duplicate rows");
+        // Old term gone, new term present, other doc untouched.
+        assert_eq!(fts_matches(&db, "zebra"), 0, "stale FTS row removed");
+        assert_eq!(fts_matches(&db, "giraffe"), 1, "new FTS row present");
+        assert_eq!(fts_matches(&db, "mango"), 1, "untouched doc preserved");
+    }
+
+    #[test]
+    fn full_rebuild_matches_incremental_state() {
+        let tmp = TempDir::new("rebuild");
+        let staged = tmp.0.join("stage");
+        std::fs::create_dir_all(&staged).unwrap();
+        let mut db = ZmdDb::open(&tmp.0.join("data.db")).unwrap();
+        db.register_collection("laws", &staged).unwrap();
+
+        let e1 = write_entry(&staged, "a.md", "# A\napple orange");
+        let e2 = write_entry(&staged, "b.md", "# B\nbanana grape");
+        db.index_collection("laws", &[e1, e2], |_, _| {}).unwrap();
+
+        let fts_before = fts_matches(&db, "apple");
+        let vec_before = vec_count(&db);
+
+        // A full rebuild must reproduce the same index state.
+        db.rebuild_indexes().unwrap();
+
+        assert_eq!(fts_matches(&db, "apple"), fts_before);
+        assert_eq!(fts_matches(&db, "banana"), 1);
+        assert_eq!(vec_count(&db), vec_before);
     }
 }

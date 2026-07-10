@@ -1865,10 +1865,20 @@ fn cmd_zmd_all(as_json: bool, skip_pull: bool) -> Result<()> {
     cfg.skip_pull = skip_pull;
 
     if as_json {
+        // Defer the full-corpus rebuild so it runs once for all collections.
+        cfg.defer_rebuild = true;
         let law_result = zmd::index_laws(&cfg, |_| {})?;
         let prec_result = zmd::index_precedents(&cfg, |_, _, _| {}, |_, _, _| {})?;
         let admrule_result = zmd::index_admrules(&cfg, |_| {})?;
         let ordinance_result = zmd::index_ordinances(&cfg, |_| {})?;
+
+        if law_result.needs_full_rebuild
+            || prec_result.summary.needs_full_rebuild
+            || admrule_result.needs_full_rebuild
+            || ordinance_result.needs_full_rebuild
+        {
+            zmd::rebuild_indexes()?;
+        }
 
         let obj = json!({
             "laws": {
@@ -1908,12 +1918,16 @@ fn cmd_zmd_all(as_json: bool, skip_pull: bool) -> Result<()> {
 }
 
 fn cmd_zmd_sync(as_json: bool) -> Result<()> {
-    let cfg = zmd::ZmdConfig::default_config()?;
+    let mut cfg = zmd::ZmdConfig::default_config()?;
 
     if as_json {
+        // Defer the full-corpus rebuild so it runs once for all collections.
+        cfg.defer_rebuild = true;
+        let mut needs_rebuild = false;
         let mut result = json!({});
         if cfg.laws_clone().join(".git").is_dir() {
             let r = zmd::index_laws(&cfg, |_| {})?;
+            needs_rebuild |= r.needs_full_rebuild;
             result["laws"] = json!({
                 "newly_staged": r.newly_staged,
                 "elapsed_secs": r.total_update_secs,
@@ -1921,6 +1935,7 @@ fn cmd_zmd_sync(as_json: bool) -> Result<()> {
         }
         if cfg.precedent_clone().join(".git").is_dir() {
             let prec_result = zmd::index_precedents(&cfg, |_, _, _| {}, |_, _, _| {})?;
+            needs_rebuild |= prec_result.summary.needs_full_rebuild;
             result["precedents"] = json!({
                 "total_new": prec_result.summary.newly_staged,
                 "already_staged": prec_result.summary.already_staged,
@@ -1930,6 +1945,7 @@ fn cmd_zmd_sync(as_json: bool) -> Result<()> {
         }
         if cfg.admrule_clone().join(".git").is_dir() {
             let r = zmd::index_admrules(&cfg, |_| {})?;
+            needs_rebuild |= r.needs_full_rebuild;
             result["admrules"] = json!({
                 "newly_staged": r.newly_staged,
                 "elapsed_secs": r.total_update_secs,
@@ -1937,10 +1953,14 @@ fn cmd_zmd_sync(as_json: bool) -> Result<()> {
         }
         if cfg.ordinance_clone().join(".git").is_dir() {
             let r = zmd::index_ordinances(&cfg, |_| {})?;
+            needs_rebuild |= r.needs_full_rebuild;
             result["ordinances"] = json!({
                 "newly_staged": r.newly_staged,
                 "elapsed_secs": r.total_update_secs,
             });
+        }
+        if needs_rebuild {
+            zmd::rebuild_indexes()?;
         }
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
