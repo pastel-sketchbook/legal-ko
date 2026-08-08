@@ -30,4 +30,4 @@ libc = { workspace = true, optional = true }
 vibe-rust = { workspace = true, optional = true }
 
 [build-dependencies]
-cc = "1.2"
+cc = "1.4"
