@@ -267,7 +267,10 @@ const PRECEDENT_METADATA_URL: &str =
 /// 1. Cached local metadata (`~/.cache/legal-ko/precedent_metadata.json`)
 /// 2. Build from local zmd clone by scanning `.md` frontmatter (Rayon parallel)
 ///
-/// The result is always cached to disk for fast subsequent loads.
+/// The result is always cached to disk for fast subsequent loads. Cache
+/// validity is tied to the git HEAD of the precedent-kr clone: the cache is
+/// reused for as long as the clone hasn't been pulled to a new commit, so a
+/// full rebuild only happens after `legal-ko-cli zmd precedents`/`zmd sync`.
 ///
 /// # Errors
 ///
@@ -277,18 +280,6 @@ pub async fn fetch_precedent_metadata(client: &reqwest::Client) -> Result<Preced
     // Suppress unused-variable warning; client is kept in the signature for API stability.
     let _ = client;
 
-    // 1. Try cached local metadata
-    let cache_path = local_metadata_cache_path()?;
-    let load_path = cache_path.clone();
-    let cached = tokio::task::spawn_blocking(move || load_cached_metadata(&load_path))
-        .await
-        .context("Cache load task panicked")?;
-    if let Some(index) = cached {
-        info!(count = index.len(), "Loaded precedent metadata from cache");
-        return Ok(index);
-    }
-
-    // 2. Build from local zmd clone
     let clone_dir = zmd_precedent_clone_dir()?;
     if !clone_dir.join(".git").is_dir() {
         anyhow::bail!(
@@ -298,6 +289,22 @@ pub async fn fetch_precedent_metadata(client: &reqwest::Client) -> Result<Preced
         );
     }
 
+    // 1. Try cached local metadata
+    let head = git_head(&clone_dir);
+    let cache_path = local_metadata_cache_path()?;
+    let load_path = cache_path.clone();
+    let head_for_load = head.clone();
+    let cached = tokio::task::spawn_blocking(move || {
+        load_cached_metadata(&load_path, head_for_load.as_deref())
+    })
+    .await
+    .context("Cache load task panicked")?;
+    if let Some(index) = cached {
+        info!(count = index.len(), "Loaded precedent metadata from cache");
+        return Ok(index);
+    }
+
+    // 2. Build from local zmd clone
     info!(path = %clone_dir.display(), "Building precedent metadata from local clone");
     let index =
         tokio::task::spawn_blocking(move || build_precedent_metadata_from_clone(&clone_dir))
@@ -306,13 +313,32 @@ pub async fn fetch_precedent_metadata(client: &reqwest::Client) -> Result<Preced
 
     // Save to cache in spawn_blocking to avoid blocking the async runtime
     let save_path = cache_path;
+    let head_for_save = head;
     let index = tokio::task::spawn_blocking(move || {
-        save_metadata_cache(&save_path, &index);
+        save_metadata_cache(&save_path, head_for_save.as_deref(), &index);
         index
     })
     .await
     .context("Cache save task panicked")?;
     Ok(index)
+}
+
+/// Current git HEAD commit of a repo, or `None` if git is unavailable.
+///
+/// Used to decide whether caches built from the local clone are still valid:
+/// as long as HEAD hasn't moved, the underlying data is unchanged.
+pub(crate) fn git_head(repo_dir: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo_dir)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let head = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if head.is_empty() { None } else { Some(head) }
 }
 
 /// Path to the cached precedent metadata file.
@@ -331,23 +357,60 @@ fn zmd_precedent_clone_dir() -> Result<std::path::PathBuf> {
     Ok(std::path::PathBuf::from(home).join(".cache/legal-ko/zmd/repos/precedent-kr"))
 }
 
-/// Load cached metadata from disk. Returns `None` if the file doesn't exist
-/// or is older than 7 days.
-fn load_cached_metadata(path: &Path) -> Option<PrecedentMetadataIndex> {
-    let meta = std::fs::metadata(path).ok()?;
-    let age = meta.modified().ok()?.elapsed().ok()?;
-    if age > Duration::from_hours(168) {
-        info!("Cached precedent metadata is older than 7 days, rebuilding");
-        return None;
-    }
+/// Fallback TTL for the precedent metadata cache, used only when the git HEAD
+/// of the clone cannot be determined (e.g. git is not installed).
+const METADATA_CACHE_FALLBACK_TTL: Duration = Duration::from_hours(168);
+
+/// Load cached metadata from disk.
+///
+/// Returns `None` if the file doesn't exist, if the repo HEAD recorded in the
+/// sidecar file differs from the clone's current HEAD, or (when no git is
+/// available) if the file is older than [`METADATA_CACHE_FALLBACK_TTL`].
+fn load_cached_metadata(
+    path: &Path,
+    expected_head: Option<&str>,
+) -> Option<PrecedentMetadataIndex> {
     let data = std::fs::read_to_string(path).ok()?;
+
+    match expected_head {
+        Some(head) => {
+            // Fresh only while the clone's HEAD matches the one recorded when
+            // the cache was written — the clone only changes on a `zmd` pull.
+            let recorded = std::fs::read_to_string(path.with_extension("head"))
+                .ok()
+                .map(|s| s.trim().to_string());
+            if recorded.as_deref() != Some(head) {
+                info!(
+                    recorded = recorded.as_deref().unwrap_or("<none>"),
+                    current = head,
+                    "Precedent metadata cache stale (repo HEAD changed), rebuilding"
+                );
+                return None;
+            }
+        }
+        None => {
+            // No git: fall back to a wall-clock TTL so we still refresh
+            // periodically.
+            let meta = std::fs::metadata(path).ok()?;
+            let age = meta.modified().ok()?.elapsed().ok()?;
+            if age > METADATA_CACHE_FALLBACK_TTL {
+                info!("Cached precedent metadata is older than fallback TTL, rebuilding");
+                return None;
+            }
+        }
+    }
+
     serde_json::from_str(&data).ok()
 }
 
-/// Save metadata index to disk cache (best-effort).
-fn save_metadata_cache(path: &Path, index: &PrecedentMetadataIndex) {
+/// Save metadata index to disk cache (best-effort), recording the git HEAD
+/// the index was built from in a sidecar file.
+fn save_metadata_cache(path: &Path, head: Option<&str>, index: &PrecedentMetadataIndex) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
+    }
+    if let Some(head) = head {
+        let _ = std::fs::write(path.with_extension("head"), format!("{head}\n"));
     }
     match serde_json::to_string(index) {
         Ok(json) => {

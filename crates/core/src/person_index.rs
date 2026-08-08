@@ -3,15 +3,16 @@
 //! On first search, we scan precedent documents concurrently (up to
 //! `CONCURRENT_FETCHES` at a time) and build an in-memory index mapping
 //! person names to the precedent IDs where they appear. The index is then
-//! persisted to `~/.cache/legal-ko/person_index.json` so subsequent searches
-//! are instant (~1ms for 123K entries).
+//! persisted to the legal-ko cache directory so subsequent searches are
+//! instant (~1ms for 123K entries).
 //!
-//! The index is rebuilt when the cache expires or when the number of known
-//! precedents has grown significantly since the last build.
+//! The index is rebuilt only when the precedent-kr clone is pulled to a new
+//! git commit (via `zmd precedents`/`zmd sync`); otherwise it is reused
+//! indefinitely. Without git available, the number of known precedents is
+//! used as a fallback staleness heuristic.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures::stream::{self, StreamExt};
@@ -25,9 +26,6 @@ use crate::{client, parser};
 
 /// Maximum number of concurrent HTTP fetches during index building.
 const CONCURRENT_FETCHES: usize = 50;
-
-/// TTL for the person index cache (7 days).
-const PERSON_INDEX_TTL: Duration = Duration::from_hours(168);
 
 /// A single person→precedent association stored in the index.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +44,10 @@ pub struct PersonIndexEntry {
 pub struct PersonIndex {
     /// Number of precedent documents that were scanned to build this index.
     pub scanned_count: usize,
+    /// Git HEAD of the precedent-kr clone this index was built from. Used to
+    /// detect staleness cheaply: the index stays valid while HEAD is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
     /// Name → associations.
     pub entries: HashMap<String, Vec<PersonIndexEntry>>,
 }
@@ -56,6 +58,7 @@ impl PersonIndex {
     pub fn new() -> Self {
         Self {
             scanned_count: 0,
+            head: None,
             entries: HashMap::new(),
         }
     }
@@ -100,7 +103,8 @@ fn person_index_path() -> Result<PathBuf> {
 
 /// Read the person index from disk cache.
 ///
-/// Returns `None` if the file doesn't exist or has expired.
+/// Returns `None` if the file doesn't exist or cannot be parsed. Validity
+/// (HEAD / staleness) is decided by the caller in [`get_or_build_index`].
 ///
 /// # Errors
 ///
@@ -109,15 +113,6 @@ pub fn read_person_index() -> Result<Option<PersonIndex>> {
     let path = person_index_path()?;
     if !path.exists() {
         debug!("Person index cache not found");
-        return Ok(None);
-    }
-
-    if let Ok(metadata) = path.metadata()
-        && let Ok(modified) = metadata.modified()
-        && let Ok(age) = modified.elapsed()
-        && age > PERSON_INDEX_TTL
-    {
-        debug!(age_secs = age.as_secs(), "Person index cache expired");
         return Ok(None);
     }
 
@@ -215,6 +210,7 @@ where
 
     let mut index = PersonIndex {
         scanned_count: 0,
+        head: None,
         entries: HashMap::new(),
     };
 
@@ -276,6 +272,7 @@ where
 
     let mut index = PersonIndex {
         scanned_count: 0,
+        head: None,
         entries: HashMap::new(),
     };
 
@@ -409,7 +406,23 @@ fn zmd_precedent_clone_dir() -> Option<PathBuf> {
     }
 }
 
+/// Whether a cached index is still fresh given the current clone state.
+///
+/// When the clone's git HEAD is known, freshness is decided solely by the HEAD
+/// match (the index was built from that exact repo state). Without git we fall
+/// back to the count-based staleness heuristic.
+fn index_is_fresh(index: &PersonIndex, current_head: Option<&str>, current_count: usize) -> bool {
+    match current_head {
+        Some(h) => index.head.as_deref() == Some(h),
+        None => !index.is_stale(current_count),
+    }
+}
+
 /// Load the cached person index, or build it if missing/stale.
+///
+/// Cache validity is tied to the git HEAD of the precedent-kr clone: the
+/// index is reused for as long as the clone hasn't been pulled to a new
+/// commit, so a full rebuild only happens after `zmd precedents`/`zmd sync`.
 async fn get_or_build_index<F>(
     http: &reqwest::Client,
     all_entries: &[PrecedentEntry],
@@ -424,7 +437,9 @@ where
         .unwrap_or_else(|_| Ok(None));
 
     if let Ok(Some(index)) = cached {
-        if !index.is_stale(all_entries.len()) {
+        let clone_dir = zmd_precedent_clone_dir();
+        let head = clone_dir.as_deref().and_then(client::git_head);
+        if index_is_fresh(&index, head.as_deref(), all_entries.len()) {
             info!(
                 scanned = index.scanned_count,
                 names = index.entries.len(),
@@ -442,8 +457,11 @@ where
     // Prefer building from local clone (Rayon, ~10s) over HTTP (~30 min)
     let index = if let Some(clone_dir) = zmd_precedent_clone_dir() {
         let entries = all_entries.to_vec();
+        let head = client::git_head(&clone_dir);
         tokio::task::spawn_blocking(move || {
-            build_person_index_from_clone(&clone_dir, &entries, |_, _| {})
+            let mut index = build_person_index_from_clone(&clone_dir, &entries, |_, _| {});
+            index.head = head;
+            index
         })
         .await
         .unwrap_or_else(|_| {
@@ -512,5 +530,28 @@ mod tests {
         assert!(!index.is_stale(100)); // same count → not stale
         assert!(!index.is_stale(104)); // < 5% growth → not stale
         assert!(index.is_stale(106)); // > 5% growth → stale
+    }
+
+    #[test]
+    fn test_index_freshness_with_head() {
+        let mut index = PersonIndex::new();
+        index.scanned_count = 100;
+        index.head = Some("abc123".to_string());
+
+        // Matching HEAD → fresh regardless of count growth or time.
+        assert!(index_is_fresh(&index, Some("abc123"), 100));
+        assert!(index_is_fresh(&index, Some("abc123"), 200));
+
+        // HEAD changed → stale, rebuild to pick up the new clone state.
+        assert!(!index_is_fresh(&index, Some("def456"), 100));
+
+        // No current HEAD (git unavailable) → count-based heuristic.
+        assert!(index_is_fresh(&index, None, 100));
+
+        // No HEAD available anywhere → count-based heuristic.
+        let mut no_head = PersonIndex::new();
+        no_head.scanned_count = 100;
+        assert!(index_is_fresh(&no_head, None, 104));
+        assert!(!index_is_fresh(&no_head, None, 106));
     }
 }

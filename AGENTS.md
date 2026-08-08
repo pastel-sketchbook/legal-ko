@@ -57,7 +57,7 @@ crates/
     parser.rs       — YAML frontmatter stripping, article extraction, precedent section extraction, 법조인 extraction (no ratatui dep)
     crossref.rs     — 4-approach cross-reference: statute refs, case refs, fuzzy law-name matching, case-type affinity
     cache.rs        — Disk cache at ~/.cache/legal-ko/ (SHA256 keyed)
-    person_index.rs — Persistent person (법조인) index: concurrent build via buffer_unordered(50), cached to ~/.cache/legal-ko/person_index.json, instant repeat lookups
+    person_index.rs — Persistent person (법조인) index: concurrent build via buffer_unordered(50), cached to legal-ko cache dir, instant repeat lookups
     bookmarks.rs    — Persist bookmarks to ~/.config/legal-ko/bookmarks.json
     context.rs      — TUI↔Agent context (TuiContext, TuiCommand, read/write/take)
     preferences.rs  — Theme & agent preference persistence to ~/.config/legal-ko/preferences.json
@@ -116,7 +116,7 @@ crates/
 - **Data source**: Laws fetched from raw.githubusercontent.com (legalize-kr repo). Precedent metadata built from local clone of precedent-kr (no remote `metadata.json`).
 - **Precedent path structure**: `{case_type}/{court_level}/{court_name}_{date}_{case_number}.md` (3-level). `court_level` (법원등급) is one of 대법원/하급심/미분류; `court_name` (법원명) is the specific court.
 - **Async pattern**: `#[tokio::main]`, background tasks for HTTP, `mpsc` channel for messages.
-- **Caching**: Individual law files cached to disk; metadata fetched fresh on startup. Person index cached to `~/.cache/legal-ko/person_index.json` (7-day TTL, rebuilt if precedent count grows >5%).
+- **Caching**: Individual law files cached to disk; metadata fetched fresh on startup. Person index cached to the legal-ko cache dir (`dirs::cache_dir()`, e.g. `~/Library/Caches/legal-ko/person_index.json`). Both the person index and precedent metadata caches are validated against the precedent-kr clone's git HEAD — they're reused indefinitely until `zmd precedents`/`zmd sync` pulls a new commit (rebuilds happen once, ~1.5–3.5 min, only when the repo changes).
 - **Person search**: Uses `futures::stream::buffer_unordered(50)` for concurrent document fetching during index build. First run scans all 123K+ precedents (~3 min); subsequent searches are instant (HashMap lookup from cached index).
 - **Vim keybindings**: j/k navigate, `/` search, Enter open, Esc back, n/p article nav, etc.
 - **Theme system**: 14 themes with persistence, `t` key cycles, semantic color fields.
