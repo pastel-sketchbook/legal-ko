@@ -396,17 +396,12 @@ fn parse_single_case_ref(s: &str, groups: &[u32]) -> Option<CaseRef> {
     }
 
     // Extract court name
-    let court;
-    let rest;
-    if let Some(stripped) = s.strip_prefix("대법원") {
-        court = "대법원".to_string();
-        rest = stripped.trim_start();
-    } else if let Some(stripped) = s.strip_prefix("헌법재판소") {
-        court = "헌법재판소".to_string();
-        rest = stripped.trim_start();
+    let (court, rest) = if let Some(stripped) = s.strip_prefix("대법원") {
+        ("대법원".to_string(), stripped.trim_start())
     } else {
-        return None;
-    }
+        let stripped = s.strip_prefix("헌법재판소")?;
+        ("헌법재판소".to_string(), stripped.trim_start())
+    };
 
     // Extract date: "2000. 11. 10." pattern
     let date = extract_date_from_citation(rest);

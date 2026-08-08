@@ -1,5 +1,5 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Margin, Rect};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
@@ -11,26 +11,16 @@ use super::VERSION;
 use super::styles;
 
 pub fn render_precedent_list(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
-    let chunks = Layout::vertical([
-        Constraint::Length(1), // title bar
-        Constraint::Length(1), // search / filter bar
-        Constraint::Min(1),    // list
-        Constraint::Length(1), // status / footer bar
-    ])
-    .split(area);
-
-    render_title_bar(f, app, theme, chunks[0]);
-    render_search_bar(f, app, theme, chunks[1]);
-    render_list(
+    super::render_list_shell(
         f,
         app,
         theme,
-        chunks[2].inner(Margin {
-            vertical: 0,
-            horizontal: 2,
-        }),
+        area,
+        render_title_bar,
+        render_search_bar,
+        render_list,
+        render_footer,
     );
-    render_footer(f, app, theme, chunks[3]);
 }
 
 fn render_title_bar(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {

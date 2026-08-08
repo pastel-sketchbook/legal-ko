@@ -196,7 +196,7 @@ fn compound_tail_first(tail: u32) -> Option<u32> {
 /// the standard Korean 2-set (두벌식) layout.
 ///
 /// Returns `None` if the input contains no mappable characters (i.e. it's
-/// not plausibly mis-typed Korean).
+/// not plausibly mistyped Korean).
 ///
 /// # Panics
 ///

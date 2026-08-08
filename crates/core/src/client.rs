@@ -372,31 +372,28 @@ fn load_cached_metadata(
 ) -> Option<PrecedentMetadataIndex> {
     let data = std::fs::read_to_string(path).ok()?;
 
-    match expected_head {
-        Some(head) => {
-            // Fresh only while the clone's HEAD matches the one recorded when
-            // the cache was written — the clone only changes on a `zmd` pull.
-            let recorded = std::fs::read_to_string(path.with_extension("head"))
-                .ok()
-                .map(|s| s.trim().to_string());
-            if recorded.as_deref() != Some(head) {
-                info!(
-                    recorded = recorded.as_deref().unwrap_or("<none>"),
-                    current = head,
-                    "Precedent metadata cache stale (repo HEAD changed), rebuilding"
-                );
-                return None;
-            }
+    if let Some(head) = expected_head {
+        // Fresh only while the clone's HEAD matches the one recorded when
+        // the cache was written — the clone only changes on a `zmd` pull.
+        let recorded = std::fs::read_to_string(path.with_extension("head"))
+            .ok()
+            .map(|s| s.trim().to_string());
+        if recorded.as_deref() != Some(head) {
+            info!(
+                recorded = recorded.as_deref().unwrap_or("<none>"),
+                current = head,
+                "Precedent metadata cache stale (repo HEAD changed), rebuilding"
+            );
+            return None;
         }
-        None => {
-            // No git: fall back to a wall-clock TTL so we still refresh
-            // periodically.
-            let meta = std::fs::metadata(path).ok()?;
-            let age = meta.modified().ok()?.elapsed().ok()?;
-            if age > METADATA_CACHE_FALLBACK_TTL {
-                info!("Cached precedent metadata is older than fallback TTL, rebuilding");
-                return None;
-            }
+    } else {
+        // No git: fall back to a wall-clock TTL so we still refresh
+        // periodically.
+        let meta = std::fs::metadata(path).ok()?;
+        let age = meta.modified().ok()?.elapsed().ok()?;
+        if age > METADATA_CACHE_FALLBACK_TTL {
+            info!("Cached precedent metadata is older than fallback TTL, rebuilding");
+            return None;
         }
     }
 

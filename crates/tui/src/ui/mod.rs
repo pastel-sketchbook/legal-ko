@@ -11,7 +11,7 @@ pub mod styles;
 pub mod zmd_search;
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
@@ -74,6 +74,76 @@ fn render_view(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         View::OrdinanceDetail => ordinance_detail::render_ordinance_detail(f, app, theme, area),
         View::ZmdSearch => zmd_search::render_zmd_search(f, app, theme, area),
     }
+}
+
+/// Shared 4-row list layout (title / search / list / footer).
+///
+/// The list views (law, precedent, admrule, ordinance, zmd search) all use the
+/// same vertical shell; only the four render callbacks differ.
+#[allow(clippy::too_many_arguments)] // one argument per render callback
+pub(crate) fn render_list_shell(
+    f: &mut Frame,
+    app: &App,
+    theme: &Theme,
+    area: Rect,
+    title: fn(&mut Frame, &App, &Theme, Rect),
+    search: fn(&mut Frame, &App, &Theme, Rect),
+    list: fn(&mut Frame, &App, &Theme, Rect),
+    footer: fn(&mut Frame, &App, &Theme, Rect),
+) {
+    let chunks = Layout::vertical([
+        Constraint::Length(1), // title bar
+        Constraint::Length(1), // search / filter bar
+        Constraint::Min(1),    // list
+        Constraint::Length(1), // status / footer bar
+    ])
+    .split(area);
+
+    title(f, app, theme, chunks[0]);
+    search(f, app, theme, chunks[1]);
+    list(
+        f,
+        app,
+        theme,
+        chunks[2].inner(Margin {
+            vertical: 0,
+            horizontal: 2,
+        }),
+    );
+    footer(f, app, theme, chunks[3]);
+}
+
+/// Shared 3-row detail layout (title / content / footer).
+///
+/// The detail views (law, precedent, admrule, ordinance) all use the same
+/// vertical shell; only the three render callbacks differ.
+pub(crate) fn render_detail_shell(
+    f: &mut Frame,
+    app: &App,
+    theme: &Theme,
+    area: Rect,
+    title: fn(&mut Frame, &App, &Theme, Rect),
+    content: fn(&mut Frame, &App, &Theme, Rect),
+    footer: fn(&mut Frame, &App, &Theme, Rect),
+) {
+    let chunks = Layout::vertical([
+        Constraint::Length(1), // title bar
+        Constraint::Min(1),    // content
+        Constraint::Length(1), // status / footer bar
+    ])
+    .split(area);
+
+    title(f, app, theme, chunks[0]);
+    content(
+        f,
+        app,
+        theme,
+        chunks[1].inner(Margin {
+            vertical: 0,
+            horizontal: 2,
+        }),
+    );
+    footer(f, app, theme, chunks[2]);
 }
 
 /// Render popup overlays on top of the main view.

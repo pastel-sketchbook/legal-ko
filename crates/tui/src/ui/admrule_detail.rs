@@ -1,5 +1,5 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Margin, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
@@ -11,24 +11,15 @@ use super::VERSION;
 use super::styles;
 
 pub fn render_admrule_detail(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {
-    let chunks = Layout::vertical([
-        Constraint::Length(1), // title bar
-        Constraint::Min(1),    // content
-        Constraint::Length(1), // status / footer bar
-    ])
-    .split(area);
-
-    render_detail_title(f, app, theme, chunks[0]);
-    render_detail_content(
+    super::render_detail_shell(
         f,
         app,
         theme,
-        chunks[1].inner(Margin {
-            vertical: 0,
-            horizontal: 2,
-        }),
+        area,
+        render_detail_title,
+        render_detail_content,
+        render_detail_footer,
     );
-    render_detail_footer(f, app, theme, chunks[2]);
 }
 
 fn render_detail_title(f: &mut Frame, app: &App, theme: &Theme, area: Rect) {

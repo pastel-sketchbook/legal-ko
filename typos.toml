@@ -1,0 +1,11 @@
+# typos configuration
+[files]
+# The sqlite-vec C sources are vendored upstream code (compiled via build.rs);
+# upstream typos are not fixed here, so exclude the directory.
+extend-exclude = ["crates/core/sqlite-vec/**"]
+
+[default.extend-words]
+# "als" is deliberate 두벌식 keyboard test input (hangul.rs eng_to_hangul tests).
+als = "als"
+# "ratatui" is the name of the UI framework.
+ratatui = "ratatui"

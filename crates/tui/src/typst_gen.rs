@@ -73,8 +73,8 @@ impl World for PdfWorld {
             .duration_since(std::time::UNIX_EPOCH)
             .ok()?;
 
-        let time_dur = time::Duration::seconds(now.as_secs() as i64)
-            + time::Duration::nanoseconds(now.subsec_nanos() as i64);
+        let time_dur = time::Duration::seconds(now.as_secs().cast_signed())
+            + time::Duration::nanoseconds(i64::from(now.subsec_nanos()));
 
         let total: time::Duration = if let Some(off) = offset {
             let off_dur: time::Duration = off.into();

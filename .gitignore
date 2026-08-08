@@ -3,3 +3,6 @@
 .env*
 .qmd/
 *.pdf
+
+# nose duplication-detection cache
+.nose-cache/
