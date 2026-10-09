@@ -52,6 +52,41 @@ Read with `legal-ko-cli context --json`.
 `legal-ko-cli navigate "<id>" --article "제N조"` — works from any view.
 Article matching uses prefix: `"제3조"` matches `"제3조 (대항력 등)"`.
 
+### Single-Instance Rule
+
+The TUI runs as a **single instance**, typically sharing a split tmux
+window with the agent. When asked to open a law in the TUI, **do not
+launch a new TUI** (no `legal-ko`, no `task run`) — the running instance
+consumes the command file (`~/.cache/legal-ko/command.json`) within ~50 ms.
+
+### Auto-Open Behavior
+
+- **List view**: selects the law AND auto-opens its detail view.
+- **Detail view, same law**: jumps to the article (prefix match).
+- **Detail view, different law**: returns to list, selects, auto-opens.
+
+### Verification
+
+After auto-open, `context.json` may briefly report `"view": "list"`.
+For ground truth, capture the TUI pane directly:
+
+```sh
+# Find the pane running the TUI
+tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_id} #{pane_current_command}'
+
+# Capture its visible content (replace %9 with the actual pane id)
+tmux capture-pane -p -t %9 | head -8
+```
+
+Success looks like the law title followed by article lines:
+
+```
+주택임대차보호법277판 · 법무부 · 2025-10-01
+주택임대차보호법
+제1조 (목적)
+...
+```
+
 ## Debugging
 
 ```bash

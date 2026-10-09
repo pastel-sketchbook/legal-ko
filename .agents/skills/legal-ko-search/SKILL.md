@@ -8,7 +8,7 @@ description: >-
 license: MIT
 metadata:
   author: legal-ko contributors
-  version: "2.1.0"
+  version: "2.2.0"
 ---
 
 # Korean Law Search
@@ -51,6 +51,15 @@ This skill searches laws only. Use `legal-ko-precedent` for precedents.
 
 `legal-ko-cli context --json` reads what the user is viewing.
 See `reference/TUI.md` for JSON structure and navigate usage.
+
+**Opening a law for the user** — the TUI is a **single instance** sharing
+split tmux panes with the agent. **Never launch a new TUI**; send a command:
+
+```sh
+legal-ko-cli navigate "kr/주택임대차보호법/법률"   # auto-opens in running TUI
+```
+
+Verify on screen with `tmux capture-pane` (see `reference/TUI.md`).
 
 ## Disclaimer
 

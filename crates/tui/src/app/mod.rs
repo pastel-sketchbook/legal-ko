@@ -1153,6 +1153,21 @@ impl App {
 
     /// Open an AI agent — either in a split pane or via suspend-and-resume.
     ///
+    /// Width given to the agent pane when splitting inside tmux.
+    ///
+    /// Sessions named `rio` split 5:5 with the TUI; all other tmux
+    /// sessions keep the historical 4:6 (agent gets 60%). Falls back to
+    /// 60% when the session name cannot be queried.
+    fn tmux_agent_pane_width() -> String {
+        let is_rio = std::process::Command::new("tmux")
+            .args(["display-message", "-p", "#{session_name}"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .is_some_and(|name| name.trim().eq_ignore_ascii_case("rio"));
+        if is_rio { "50%" } else { "60%" }.to_string()
+    }
+
     /// Detects the running terminal (tmux, `WezTerm`, Zellij, Ghostty) and
     /// spawns a right-side split with the given agent binary.  When no
     /// supported terminal is detected, sets `suspend_agent` so the event
@@ -1202,9 +1217,11 @@ impl App {
         }
 
         let result = if std::env::var("TMUX").is_ok() {
-            // -l 60%: new pane (agent) gets 60% width, TUI keeps 40%
+            // -l N%: new pane (agent) gets N% width, TUI keeps the rest.
+            // Rio tmux sessions split 5:5; other sessions keep 4:6 (agent 60%).
+            let agent_width = Self::tmux_agent_pane_width();
             Command::new("tmux")
-                .args(["split-window", "-h", "-l", "60%", &agent_bin])
+                .args(["split-window", "-h", "-l", &agent_width, &agent_bin])
                 .spawn()
         } else if std::env::var("WEZTERM_PANE").is_ok()
             || std::env::var("WEZTERM_EXECUTABLE").is_ok()
