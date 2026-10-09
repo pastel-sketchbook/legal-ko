@@ -166,8 +166,16 @@ async fn run_app(
         terminal.draw(|f| ui::render(f, &app))?;
 
         // Check for background messages (non-blocking)
+        let mut handled_message = false;
         while let Ok(msg) = app.msg_rx.try_recv() {
             app.handle_message(msg);
+            handled_message = true;
+        }
+        // Messages can switch views (e.g. law/precedent content finishing
+        // an async load after a navigate command) — keep context.json in
+        // sync for external readers.
+        if handled_message {
+            app.sync_context();
         }
 
         // Check for TTS playback finished

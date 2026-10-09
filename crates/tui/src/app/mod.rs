@@ -692,6 +692,13 @@ impl App {
             "handle_navigate start"
         );
 
+        // Precedent IDs (e.g. "민사/대법원/대법원_1988-06-14_87다카3093") don't
+        // start with "kr/" — route them to the precedent views instead.
+        if !law_id.starts_with("kr/") {
+            self.handle_navigate_precedent(law_id);
+            return;
+        }
+
         match self.view {
             View::Detail => {
                 let same_law = self.detail.as_ref().is_some_and(|d| d.entry.id == law_id);
@@ -755,6 +762,56 @@ impl App {
                 self.open_selected();
             }
         }
+    }
+
+    /// Navigate to a precedent by ID from any view.
+    ///
+    /// Mirrors the law navigate behaviour for precedents: clears precedent
+    /// filters and person-search results so the target is always selectable,
+    /// switches to the precedent list with the target highlighted, and
+    /// auto-opens its detail view.
+    fn handle_navigate_precedent(&mut self, precedent_id: &str) {
+        if !self.precedents_loaded {
+            warn!(
+                precedent_id,
+                "Precedent navigate ignored — metadata still loading"
+            );
+            self.status_message = Some("Precedents still loading — navigate ignored".to_string());
+            return;
+        }
+
+        let Some(pos) = self
+            .all_precedents
+            .iter()
+            .position(|e| e.id == precedent_id)
+        else {
+            warn!(precedent_id, "Precedent not found in all_precedents");
+            self.status_message = Some(format!("Precedent not found: {precedent_id}"));
+            return;
+        };
+
+        // Leave person-search mode and clear precedent filters so the
+        // target precedent is present in the filtered list.
+        self.person_search_results.clear();
+        self.person_search_active = false;
+        self.precedent_search_query.clear();
+        self.precedent_case_type_filter = None;
+        self.precedent_court_filter = None;
+        self.apply_precedent_filters();
+
+        // With filters cleared, filtered indices map 1:1 to master entries,
+        // so the master position is also the filtered position.
+        self.precedent_list_selected = pos;
+        self.precedent_list_offset = pos.saturating_sub(3);
+        self.view = View::PrecedentList;
+        self.status_message = Some(format!("→ {}", self.all_precedents[pos].case_name));
+        info!(
+            precedent_id,
+            pos,
+            case_name = %self.all_precedents[pos].case_name,
+            "Precedent navigate → open_selected_precedent"
+        );
+        self.open_selected_precedent();
     }
 
     /// Clear all active filters so that the full law list is available.

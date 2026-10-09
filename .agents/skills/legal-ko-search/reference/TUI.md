@@ -52,6 +52,13 @@ Read with `legal-ko-cli context --json`.
 `legal-ko-cli navigate "<id>" --article "제N조"` — works from any view.
 Article matching uses prefix: `"제3조"` matches `"제3조 (대항력 등)"`.
 
+IDs without a `kr/` prefix are treated as **precedent IDs** and open the
+precedent detail view instead (see the `legal-ko-precedent` skill):
+
+```sh
+legal-ko-cli navigate "민사/대법원/대법원_1988-06-14_87다카3093"
+```
+
 ### Single-Instance Rule
 
 The TUI runs as a **single instance**, typically sharing a split tmux

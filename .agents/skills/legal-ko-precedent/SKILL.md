@@ -14,7 +14,7 @@ metadata:
 
 # Korean Precedent Search
 
-**UTILITY SKILL** — INVOKES: `legal-ko-cli precedent-search|precedent-show|precedent-laws|law-precedents|precedent-search-person`
+**UTILITY SKILL** — INVOKES: `legal-ko-cli precedent-search|precedent-show|precedent-laws|law-precedents|precedent-search-person|navigate`
 
 ## Workflow
 
@@ -49,6 +49,22 @@ The precedent data comes from `legalize-kr/precedent-kr`. Related datasets:
 - Laws: `legalize-kr/legalize-kr`
 - Administrative rules: `legalize-kr/admrule-kr`
 - Local ordinances: `legalize-kr/ordinance-kr`
+
+## TUI Navigation
+
+**Opening a precedent for the user** — the TUI is a **single instance** sharing
+split tmux panes with the agent. **Never launch a new TUI**; send a command
+with the precedent ID (no `kr/` prefix):
+
+```sh
+legal-ko-cli navigate "민사/대법원/대법원_1988-06-14_87다카3093"
+```
+
+The TUI clears precedent filters, highlights the case, and auto-opens its
+detail view. Requires precedent metadata to be loaded (instant from disk
+cache; if the TUI just started, it reports "Precedents still loading").
+Verify with `legal-ko-cli context --json` (`"view": "precedent_detail"`)
+or `tmux capture-pane`.
 
 ## Disclaimer
 

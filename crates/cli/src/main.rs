@@ -96,8 +96,10 @@ enum Command {
     ///
     /// On list view the TUI scrolls to the law. On detail view it jumps
     /// to the specified article within the currently viewed law.
+    /// Precedent IDs (no "kr/" prefix) open the precedent detail view.
     Navigate {
-        /// Law ID (e.g. "kr/민법/법률")
+        /// Law ID (e.g. "kr/민법/법률") or precedent ID
+        /// (e.g. "민사/대법원/대법원_1988-06-14_87다카3093")
         id: String,
 
         /// Article label to jump to in detail view (e.g. "제3조")

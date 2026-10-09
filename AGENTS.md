@@ -89,7 +89,7 @@ crates/
 - `legal-ko-cli articles <id> [--json]`
 - `legal-ko-cli bookmarks [--json]`
 - `legal-ko-cli context [--json]`
-- `legal-ko-cli navigate <id> [--article X] [--json]`
+- `legal-ko-cli navigate <id> [--article X] [--json]` — law ID (`kr/민법/법률`) or precedent ID (`민사/대법원/대법원_1988-06-14_87다카3093`); precedent IDs (no `kr/` prefix) open the precedent detail view in the TUI
 - `legal-ko-cli speak <id> [--article N] [--voice X] [--json]`
 - `legal-ko-cli precedent-list [--case-type X] [--court X] [--sort name|date] [--json] [--limit N]`
 - `legal-ko-cli precedent-search <query> [--json] [--limit N]` — search by case name/number; auto-falls back to 법조인 search if query looks like a Korean name and no metadata matches

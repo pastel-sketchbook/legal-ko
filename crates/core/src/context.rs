@@ -225,11 +225,16 @@ pub fn read_context() -> Result<TuiContext> {
 /// - **List view**: scrolls to and highlights the law matching `law_id`.
 /// - **Detail view (same law)**: jumps to the article matching `article` (if set).
 /// - **Detail view (different law)**: returns to list and highlights `law_id`.
+///
+/// IDs that don't start with `"kr/"` are treated as precedent IDs
+/// (e.g. `"민사/대법원/대법원_1988-06-14_87다카3093"`) and open the
+/// precedent detail view instead.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TuiCommand {
     /// The action to perform: `"navigate"`.
     pub action: String,
-    /// Target law ID (e.g. `"kr/민법/법률"`).
+    /// Target law ID (e.g. `"kr/민법/법률"`) or precedent ID
+    /// (e.g. `"민사/대법원/대법원_1988-06-14_87다카3093"`).
     pub law_id: String,
     /// Optional article label to jump to when in detail view
     /// (e.g. `"제3조"` or `"제3조 (대항력 등)"`).
