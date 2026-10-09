@@ -39,12 +39,16 @@ pub const AGENTS: &[AiAgent] = &[
         binary: "opencode",
     },
     AiAgent {
-        name: "Gemini CLI",
-        binary: "gemini",
+        name: "Antigravity CLI",
+        binary: "agy",
     },
     AiAgent {
         name: "GitHub Copilot CLI",
         binary: "copilot",
+    },
+    AiAgent {
+        name: "Pig",
+        binary: "pig",
     },
     AiAgent {
         name: "Amp",

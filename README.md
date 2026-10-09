@@ -221,8 +221,9 @@ AI-assisted law browsing. Supported agents:
 | Agent | Binary |
 |-------|--------|
 | [OpenCode](https://opencode.ai) | `opencode` |
-| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `gemini` |
+| [Antigravity CLI](https://antigravity.google/docs/cli/install/) | `agy` |
 | [GitHub Copilot CLI](https://docs.github.com/en/copilot) | `copilot` |
+| [Pig](https://github.com/MichaelKinsy/PiG) | `pig` |
 | [Amp](https://amp.dev) | `amp` |
 
 **Open a split:** Press `o` in the TUI to open the agent picker popup. Only
